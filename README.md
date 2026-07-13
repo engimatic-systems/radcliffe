@@ -57,8 +57,11 @@ For the physical M1 gate:
    internal-token, database, and source-root settings.
 3. Start the Pi sidecar with the same internal token, Tool Gateway URL, model
    selection, and provider credential.
-4. Configure the media worker with its outbound room token and provider-backed
-   STT/TTS adapters; the checked-in deterministic providers remain the CI path.
+4. Configure `RADCLIFFE_LIVEKIT_URL`, `RADCLIFFE_LIVEKIT_TOKEN`,
+   `RADCLIFFE_SESSION_ID`, `RADCLIFFE_OPENAI_API_KEY`, and the optional sidecar
+   and database settings, then run
+   `uv run python -m radcliffe_media.production`. OpenAI's mini transcribe and
+   TTS models are the selected M1 speech pair; deterministic fakes remain CI.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
    token, grant microphone access, then tap Start.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
