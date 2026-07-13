@@ -16,3 +16,4 @@ runtime/
 # Generated LiveKit configuration and local deployment secrets
 infra/livekit/livekit.yaml
 infra/livekit/certs/
+artifacts/

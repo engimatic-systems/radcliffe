@@ -1,4 +1,4 @@
-.PHONY: bootstrap check check-python check-node check-android generate-protocol test-python test-node
+.PHONY: bootstrap check check-python check-node check-android demo generate-protocol test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
@@ -6,6 +6,9 @@ bootstrap:
 
 generate-protocol:
 	./scripts/generate-protocol.sh
+
+demo:
+	uv run python scripts/foundation-demo.py
 
 check: check-python check-node check-android
 

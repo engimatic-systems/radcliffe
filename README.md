@@ -3,7 +3,7 @@
 Radcliffe is a local-first Android voice interface for tool-using frontier
 models with deterministic, provenance-preserving source reading.
 
-The first milestone is being developed on `epic/radcliffe-foundation`. Its
+The first milestone is implemented on `epic/radcliffe-foundation`. Its
 acceptance demo is defined in [the product and technical specification](docs/radcliffe-spec.md#milestone-1-verifiable-foundation-demo).
 
 ## Repository layout
@@ -37,3 +37,34 @@ make check-android
 
 Secrets are configured through environment files copied from committed
 `.env.example` templates. Never commit populated `.env` files.
+
+## Foundation demo
+
+Run the credential-free contract demo first:
+
+```sh
+make demo
+```
+
+It writes `artifacts/foundation-demo/report.json` and a byte-exact fake TTS
+artifact. The report is deliberately labeled as a simulation; it does not
+pretend that fake PCM was heard on a phone.
+
+For the physical M1 gate:
+
+1. Deploy and diagnose the pinned media edge using `infra/livekit/README.md`.
+2. Start the control plane with production `RADCLIFFE_LIVEKIT_*`, bootstrap,
+   internal-token, database, and source-root settings.
+3. Start the Pi sidecar with the same internal token, Tool Gateway URL, model
+   selection, and provider credential.
+4. Configure the media worker with its outbound room token and provider-backed
+   STT/TTS adapters; the checked-in deterministic providers remain the CI path.
+5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
+   token, grant microphone access, then tap Start.
+6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
+   candidate report. The LiveKit and Android tickets remain open until direct
+   UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.
+
+The local simulation is the fast reviewer entry point. The external deployment
+and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
+foreground-service behavior.
