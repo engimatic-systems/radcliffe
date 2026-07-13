@@ -23,3 +23,7 @@ The Android app uses Kotlin, Compose, and the LiveKit Android SDK; VoiceSessionS
 **2026-07-13T03:02:56Z**
 
 Implementation is committed and Android test/lint pass: permission-gated foreground MediaSessionService, LiveKit microphone/audio, Protocol v2 controls/events, reconnect state, provenance UI, and notification actions. Remaining acceptance evidence is the target Pixel speaker, hardware/lock-screen, and speech-barge run.
+
+**2026-07-13T04:10:14Z**
+
+Fixed physical Pixel bootstrap failure found during demo: Build.MODEL included spaces (Pixel 8 Pro), violating the control-plane participant identity contract. Android now sanitizes identities to pixel-Pixel-8-Pro with bounded length and fallback coverage; debug APK bumped to 0.1.1 (versionCode 2).

@@ -11,6 +11,15 @@ data class SessionCredentials(
 )
 
 object SessionApi {
+    internal fun participantIdentity(model: String): String {
+        val sanitized = model
+            .replace(Regex("[^A-Za-z0-9_.:-]+"), "-")
+            .trim('-', '_', '.', ':')
+            .take(90)
+            .ifBlank { "android" }
+        return "pixel-$sanitized"
+    }
+
     fun create(baseUrl: String, bootstrapToken: String, sessionId: String): SessionCredentials {
         val connection = URL("${baseUrl.trimEnd('/')}/v1/sessions").openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -21,7 +30,7 @@ object SessionApi {
         connection.setRequestProperty("Content-Type", "application/json")
         val request = JSONObject()
             .put("session_id", sessionId)
-            .put("participant_identity", "pixel-${android.os.Build.MODEL}")
+            .put("participant_identity", participantIdentity(android.os.Build.MODEL))
             .put("role", "client")
         connection.outputStream.use { it.write(request.toString().toByteArray()) }
         val code = connection.responseCode
