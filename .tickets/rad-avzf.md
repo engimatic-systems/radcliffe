@@ -1,6 +1,6 @@
 ---
 id: rad-avzf
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-07-13T01:37:25Z
