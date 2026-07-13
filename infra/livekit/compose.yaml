@@ -1,0 +1,19 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.3
+    command: ["--config", "/etc/livekit/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./livekit.yaml:/etc/livekit/livekit.yaml:ro
+      - ./certs:/etc/livekit/certs:ro
+    profiles: ["production"]
+
+  livekit-local:
+    image: livekit/livekit-server:v1.13.3
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    profiles: ["local"]

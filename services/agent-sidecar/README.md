@@ -16,6 +16,7 @@ Required production environment:
 - `RADCLIFFE_MODEL_PROVIDER` and `RADCLIFFE_MODEL_ID`
 - the provider credential expected by Pi (for example `OPENAI_API_KEY`)
 - `RADCLIFFE_TOOL_GATEWAY_URL`
+- `RADCLIFFE_INTERNAL_TOKEN`, shared only with the loopback Tool Gateway
 - optional `RADCLIFFE_SIDECAR_PORT` (default `8787`, loopback only)
 
 `PiAgentOrchestrator` is the replacement seam. Another loop can implement the

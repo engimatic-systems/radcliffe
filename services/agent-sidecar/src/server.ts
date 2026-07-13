@@ -14,6 +14,7 @@ const port = Number(process.env.RADCLIFFE_SIDECAR_PORT ?? "8787");
 const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "openai";
 const modelId = process.env.RADCLIFFE_MODEL_ID ?? "gpt-5.1";
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
+const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
 const models = builtinModels();
 const model = models.getModel(provider, modelId);
 if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
@@ -22,10 +23,15 @@ async function executeTool(
   request: ToolExecutionRequest,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult> {
-  if (!gatewayUrl) throw new Error("RADCLIFFE_TOOL_GATEWAY_URL is required for tools");
+  if (!gatewayUrl || !internalToken) {
+    throw new Error("RADCLIFFE_TOOL_GATEWAY_URL and RADCLIFFE_INTERNAL_TOKEN are required");
+  }
   const response = await fetch(`${gatewayUrl}/v1/tool-calls`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${internalToken}`,
+    },
     body: JSON.stringify(request),
     signal,
   });
