@@ -12,8 +12,8 @@ class OpenAISpeechProvider:
         api_key: str,
         *,
         stt_model: str = "gpt-4o-mini-transcribe",
-        tts_model: str = "gpt-4o-mini-tts",
-        voice: str = "coral",
+        tts_model: str = "tts-1",
+        voice: str = "alloy",
     ) -> None:
         self.api_key = api_key
         self.stt_model = stt_model

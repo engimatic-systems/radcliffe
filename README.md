@@ -60,8 +60,8 @@ For the physical M1 gate:
 4. Configure `RADCLIFFE_LIVEKIT_URL`, `RADCLIFFE_LIVEKIT_TOKEN`,
    `RADCLIFFE_SESSION_ID`, `RADCLIFFE_OPENAI_API_KEY`, and the optional sidecar
    and database settings, then run
-   `uv run python -m radcliffe_media.production`. OpenAI's mini transcribe and
-   TTS models are the selected M1 speech pair; deterministic fakes remain CI.
+   `uv run python -m radcliffe_media.production`. `gpt-4o-mini-transcribe` and
+   `tts-1` are the selected M1 speech pair; deterministic fakes remain CI.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
    token, grant microphone access, then tap Start.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
