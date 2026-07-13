@@ -44,6 +44,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.exoplayer)
     implementation(libs.livekit.android)
     implementation(libs.protobuf.kotlin.lite)
 
