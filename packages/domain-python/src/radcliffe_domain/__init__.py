@@ -1,5 +1,20 @@
-"""Radcliffe's transport-independent domain layer."""
+"""Transport-independent conversation, projection, and tool domain."""
 
-__all__ = ["VERSION"]
+from radcliffe_domain.envelope import (
+    Content,
+    MessageEnvelope,
+    Provenance,
+    Sensitivity,
+    SourceKind,
+)
 
 VERSION = "0.1.0"
+
+__all__ = [
+    "VERSION",
+    "Content",
+    "MessageEnvelope",
+    "Provenance",
+    "Sensitivity",
+    "SourceKind",
+]

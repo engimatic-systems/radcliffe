@@ -16,6 +16,7 @@ fi
 "$protoc_bin" \
   --proto_path="$proto_root" \
   --python_out="$python_root" \
+  --pyi_out="$python_root" \
   --java_out=lite:"$android_root" \
   --kotlin_out=lite:"$android_root" \
   "$proto_root/radcliffe/v2/protocol.proto"
