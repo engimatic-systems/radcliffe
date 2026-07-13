@@ -8,12 +8,12 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, webrtc]
+tags: [radcliffe, foundation, webrtc, milestone-1]
 ---
-# Provision the self-hosted LiveKit development media edge
+# Provision the self-hosted LiveKit Milestone 1 media topology
 
-Create the deployable LiveKit/TURN/token-service development topology and operational checks needed for reliable Android connectivity.
+Create the reproducible single-node LiveKit/TURN/token-service topology needed to run and diagnose the Milestone 1 Pixel demo.
 
 ## Acceptance Criteria
 
-A self-hosted LiveKit server is reachable through a trusted TLS domain; direct UDP, TURN/UDP, TURN/TLS, and TCP fallback are configured and documented; the token service issues least-privilege short-lived room tokens without exposing server secrets; health, ICE/TURN diagnostics, and a TURN-only test path exist; the Radcliffe worker connects outbound without opening inbound access to the home machine.
+A self-hosted LiveKit server is reachable from the target Pixel and Radcliffe worker through trusted TLS; direct UDP and at least one verified TURN fallback path work; the token service issues least-privilege short-lived room tokens without exposing server secrets; health and ICE/TURN diagnostics are documented; a clean bootstrap reproduces the topology; and the worker connects outbound without opening inbound access to the home machine.

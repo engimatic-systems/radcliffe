@@ -8,7 +8,7 @@ type: task
 priority: 0
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, security]
+tags: [radcliffe, foundation, security, milestone-1]
 ---
 # Define Radcliffe capability policy and threat model
 

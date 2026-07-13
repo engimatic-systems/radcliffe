@@ -8,7 +8,7 @@ type: task
 priority: 0
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, protocol]
+tags: [radcliffe, foundation, protocol, milestone-1]
 ---
 # Define Protocol v2 and the MessageEnvelope schema
 

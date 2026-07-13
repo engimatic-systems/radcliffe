@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, provenance]
+tags: [radcliffe, foundation, provenance, milestone-1]
 ---
 # Implement envelope persistence and deterministic projection engine
 

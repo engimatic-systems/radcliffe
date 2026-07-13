@@ -1,19 +1,19 @@
 ---
 id: rad-au20
 status: open
-deps: [rad-wnwh, rad-avzf, rad-0ekb, rad-g7di]
+deps: [rad-wnwh, rad-avzf, rad-0ekb]
 links: []
 created: 2026-07-13T01:37:25Z
 type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, tools, security]
+tags: [radcliffe, foundation, tools, security, milestone-1]
 ---
-# Implement the capability-scoped Tool Gateway
+# Implement the Milestone 1 read-only Tool Gateway
 
-Build the sole execution path for model-requested tools, with immutable validation, authorization, durable audit, cancellation, and capability workers.
+Build the sole execution path for the Milestone 1 read_source tool, with immutable validation, a read-only capability root, durable audit, cancellation, and exact source handoff to RenderProjection.
 
 ## Acceptance Criteria
 
-Every tool request creates a CALL envelope before execution; gateway copies and validates arguments against Radcliffe schemas, evaluates the current capability grant, records authorization, and dispatches only permitted work; results and progress are persisted as CALL envelopes; initial tools default to sequential execution; cancellation reaches the worker and leaves an auditable final state; tests prove denied calls, path traversal, symlink escape, SSRF, stale grants, replay, and non-idempotent recovery fail safely.
+Every read_source request creates a CALL envelope before execution; the gateway copies and validates arguments against the Radcliffe schema, evaluates a read-only root grant, records authorization, and resolves only permitted Markdown fixtures; canonical bytes and content hash are persisted in a TEXT_SOURCE/CALL result envelope and handed directly to RenderProjection; execution is sequential; cancellation leaves an auditable final state; and tests cover allowed reads, denied paths, traversal, symlink escape, stale grants, duplicate call IDs, and exact canonical-text output.

@@ -47,6 +47,36 @@ the first release is a multi-tenant SaaS product.
   foreground session.
 - Treating a model’s generated long-form text as a trusted verbatim source.
 
+### Milestone 1: verifiable foundation demo
+
+The first implementation milestone is a vertical slice, delivered as one
+reviewable PR from `epic/radcliffe-foundation`. It proves the architecture on
+the target Pixel before broader production hardening.
+
+The milestone is accepted by performing this demo:
+
+1. Launch the native Android app, tap Start, and connect through the self-hosted
+   LiveKit deployment to the Radcliffe worker.
+2. Ask an ordinary question by voice. The app shows the user transcript and
+   speaks a frontier-model answer, with first meaningful audio within five
+   seconds under the demo conditions.
+3. Interrupt the answer by speaking or tapping. Audible playback stops within
+   500 ms and the new turn is accepted.
+4. Ask Radcliffe to read a provided Markdown fixture. Pi issues the typed
+   `read_source` call through the capability-scoped Tool Gateway; the canonical
+   source bypasses model generation, appears with source provenance in the UI,
+   and is sent exactly to TTS.
+5. Pause and resume the source reading using both the app and a system media
+   control. Reading resumes from the persisted playback boundary.
+6. End and restart the app session without leaving an orphaned worker or tool
+   operation. The generated demo report contains latency, interruption,
+   canonical-text, state-transition, and tool-audit evidence.
+
+Milestone 1 uses one target Pixel, one configured frontier-model provider, one
+STT provider, one TTS provider, one self-hosted LiveKit node, and the read-only
+`read_source` tool. Device matrices, hostile-network coverage, mutating tools,
+and operational hardening follow as smaller milestones.
+
 ## 3. Architectural decisions
 
 | Concern | Decision | Why |
@@ -365,22 +395,30 @@ no severity-one loss of data, privacy, or recoverable session continuity.
 
 ## 12. Delivery sequence
 
-1. Freeze Protocol v2, the state diagram, envelope schema, capability model,
-   and threat model.
-2. Create the reproducible monorepo, control plane, persistence, CI, and
-   observability foundation.
-3. Prove LiveKit/TURN connectivity and the Kotlin Android session service on
-   the target Pixel before adding model intelligence.
-4. Implement the Radcliffe state machine, playback ledger, reconnect contract,
-   and fake-provider test harness.
-5. Complete the Pi `AgentOrchestrator` integration spike: context projection,
-   sequential typed tool calls, gateway authorization, cancellation, recovery,
-   and adapter conformance tests.
-6. Implement deterministic source reading and provenance UI.
-7. Add the minimum safe tool set through the Tool Gateway.
-8. Port and expand Oxford’s independent audio acceptance suite.
-9. Complete security hardening, device matrix testing, soak tests, and dogfood
-   release.
+### Milestone 1 PR
+
+1. Freeze the minimum Protocol v2 envelope/state contracts, capability model,
+   and threat model needed by the vertical slice.
+2. Create the reproducible monorepo and CI baseline.
+3. Implement envelope persistence, deterministic projection, the state
+   machine, and playback acknowledgements against fake providers.
+4. Prove LiveKit connectivity and the Android foreground session on the target
+   Pixel.
+5. Integrate the streaming VAD/STT/Pi/TTS pipeline.
+6. Route the typed `read_source` call through the read-only Tool Gateway and
+   deterministic render path.
+7. Run the Milestone 1 conformance scenarios and record the Pixel demo.
+
+Ticket-sized commits should follow that order on
+`epic/radcliffe-foundation`. The completed branch is reviewed and merged as one
+major Milestone 1 PR.
+
+### Smaller post-Milestone 1 PRs
+
+After the vertical slice merges, use separate PRs for device identity and
+secret management, mobile/network continuity, service operations and
+observability, security/chaos/soak gates, additional source formats, and
+mutating or web-connected tools.
 
 ## 13. Open questions
 

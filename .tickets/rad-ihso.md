@@ -8,12 +8,12 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, session]
+tags: [radcliffe, foundation, session, milestone-1]
 ---
-# Implement conversation state machine, playback ledger, and reconnect recovery
+# Implement the Milestone 1 state machine and playback ledger
 
-Implement product-level state and client-authoritative playback acknowledgement above WebRTC transport recovery.
+Implement the product-level state, cancellation generations, and client-authoritative playback acknowledgements required by the Milestone 1 conversation and deterministic-reading demo.
 
 ## Acceptance Criteria
 
-The engine implements idle, connecting, listening, thinking, speaking, reading, paused, reconnecting, and failed states; every operation has session, generation, operation, and cancellation IDs; client acknowledgements persist started, position, completed, flushed, and failed segment events; reconnect resumes without duplicate or skipped output in the fixture corpus; interruptions create accurate context from heard versus unspoken segments; state and cursor tests pass under simulated reconnect and cancellation.
+The engine implements idle, connecting, listening, thinking, speaking, reading, paused, and failed states; every operation has session, generation, operation, and cancellation IDs; client acknowledgements persist started, position, completed, flushed, and failed segment events; interruption invalidates stale audible output within the target and records heard versus unspoken segments; pause/resume restarts at the persisted sentence boundary; end/restart does not leave an orphaned generation or tool call; and deterministic state/cursor tests pass with fake transports and providers.

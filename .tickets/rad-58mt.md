@@ -8,7 +8,7 @@ type: task
 priority: 0
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, devex]
+tags: [radcliffe, foundation, devex, milestone-1]
 ---
 # Create reproducible Radcliffe repository and CI baseline
 
