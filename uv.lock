@@ -7,6 +7,7 @@ members = [
     "radcliffe-control-plane",
     "radcliffe-domain",
     "radcliffe-media-worker",
+    "radcliffe-protocol",
     "radcliffe-workspace",
 ]
 
@@ -951,12 +952,14 @@ source = { editable = "packages/domain-python" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "pydantic" },
+    { name = "radcliffe-protocol" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = "==0.22.1" },
     { name = "pydantic", specifier = "==2.13.4" },
+    { name = "radcliffe-protocol", editable = "packages/protocol/python" },
 ]
 
 [[package]]
@@ -977,6 +980,17 @@ requires-dist = [
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "radcliffe-domain", editable = "packages/domain-python" },
 ]
+
+[[package]]
+name = "radcliffe-protocol"
+version = "0.1.0"
+source = { editable = "packages/protocol/python" }
+dependencies = [
+    { name = "protobuf" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "protobuf", specifier = "==6.33.6" }]
 
 [[package]]
 name = "radcliffe-workspace"

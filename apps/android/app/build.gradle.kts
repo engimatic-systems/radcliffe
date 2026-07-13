@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.media3.session)
     implementation(libs.livekit.android)
+    implementation(libs.protobuf.kotlin.lite)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)

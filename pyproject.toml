@@ -19,6 +19,7 @@ package = false
 [tool.uv.workspace]
 members = [
   "packages/domain-python",
+  "packages/protocol/python",
   "services/control-plane",
   "services/media-worker",
 ]
@@ -27,12 +28,14 @@ members = [
 addopts = "-q"
 testpaths = [
   "packages/domain-python/tests",
+  "packages/protocol/python/tests",
   "services/control-plane/tests",
   "services/media-worker/tests",
   "tests/conformance",
 ]
 
 [tool.ruff]
+extend-exclude = ["**/*_pb2.py"]
 line-length = 100
 target-version = "py312"
 

@@ -1,8 +1,11 @@
-.PHONY: bootstrap check check-python check-node check-android test-python test-node
+.PHONY: bootstrap check check-python check-node check-android generate-protocol test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
 	npm ci
+
+generate-protocol:
+	./scripts/generate-protocol.sh
 
 check: check-python check-node check-android
 

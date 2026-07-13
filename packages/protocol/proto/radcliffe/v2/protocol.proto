@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package radcliffe.v2;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "works.ravd.radcliffe.protocol.v2";
+
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_USER = 1;
+  SOURCE_KIND_MODEL = 2;
+  SOURCE_KIND_CALL = 3;
+  SOURCE_KIND_TEXT_SOURCE = 4;
+  SOURCE_KIND_SYSTEM = 5;
+}
+
+enum Sensitivity {
+  SENSITIVITY_UNSPECIFIED = 0;
+  SENSITIVITY_PUBLIC = 1;
+  SENSITIVITY_PRIVATE = 2;
+  SENSITIVITY_SECRET = 3;
+}
+
+enum ConversationState {
+  CONVERSATION_STATE_UNSPECIFIED = 0;
+  CONVERSATION_STATE_IDLE = 1;
+  CONVERSATION_STATE_CONNECTING = 2;
+  CONVERSATION_STATE_LISTENING = 3;
+  CONVERSATION_STATE_THINKING = 4;
+  CONVERSATION_STATE_SPEAKING = 5;
+  CONVERSATION_STATE_READING = 6;
+  CONVERSATION_STATE_PAUSED = 7;
+  CONVERSATION_STATE_RECONNECTING = 8;
+  CONVERSATION_STATE_FAILED = 9;
+}
+
+enum PlaybackStatus {
+  PLAYBACK_STATUS_UNSPECIFIED = 0;
+  PLAYBACK_STATUS_STARTED = 1;
+  PLAYBACK_STATUS_POSITION = 2;
+  PLAYBACK_STATUS_COMPLETED = 3;
+  PLAYBACK_STATUS_FLUSHED = 4;
+  PLAYBACK_STATUS_FAILED = 5;
+}
+
+enum ToolOutcome {
+  TOOL_OUTCOME_UNSPECIFIED = 0;
+  TOOL_OUTCOME_REQUESTED = 1;
+  TOOL_OUTCOME_AUTHORIZED = 2;
+  TOOL_OUTCOME_DENIED = 3;
+  TOOL_OUTCOME_RUNNING = 4;
+  TOOL_OUTCOME_SUCCEEDED = 5;
+  TOOL_OUTCOME_CANCELLED = 6;
+  TOOL_OUTCOME_FAILED = 7;
+}
+
+message ContentRef {
+  string mime_type = 1;
+  uint64 byte_length = 2;
+  oneof value {
+    string inline_text = 3;
+    string blob_uri = 4;
+  }
+}
+
+message Provenance {
+  string locator = 1;
+  string display_name = 2;
+  string extractor = 3;
+  string extractor_version = 4;
+  bytes source_sha256 = 5;
+  string permission_basis = 6;
+}
+
+message MessageEnvelope {
+  uint32 schema_version = 1;
+  string message_id = 2;
+  string session_id = 3;
+  uint64 sequence = 4;
+  SourceKind source = 5;
+  ContentRef content = 6;
+  bytes content_sha256 = 7;
+  google.protobuf.Timestamp created_at = 8;
+  map<string, string> metadata = 9;
+  Provenance provenance = 10;
+  Sensitivity sensitivity = 11;
+}
+
+message OperationRef {
+  string session_id = 1;
+  uint64 generation = 2;
+  string operation_id = 3;
+  string cancellation_id = 4;
+}
+
+message SessionStart {
+  string request_id = 1;
+  string session_id = 2;
+  string participant_identity = 3;
+  uint64 last_acknowledged_sequence = 4;
+  string idempotency_key = 5;
+}
+
+message SessionReady {
+  string request_id = 1;
+  string session_id = 2;
+  uint64 generation = 3;
+  uint64 last_persisted_sequence = 4;
+}
+
+message StateChanged {
+  OperationRef operation = 1;
+  ConversationState previous = 2;
+  ConversationState current = 3;
+  string reason = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+}
+
+message PlaybackAcknowledgement {
+  string acknowledgement_id = 1;
+  OperationRef operation = 2;
+  string segment_id = 3;
+  PlaybackStatus status = 4;
+  uint64 position_ms = 5;
+  uint32 boundary_index = 6;
+  google.protobuf.Timestamp occurred_at = 7;
+  string detail = 8;
+}
+
+message CapabilityGrant {
+  string grant_id = 1;
+  string session_id = 2;
+  repeated string readable_roots = 3;
+  repeated string allowed_tools = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message ToolCall {
+  OperationRef operation = 1;
+  string call_id = 2;
+  string tool_name = 3;
+  bytes arguments_json = 4;
+  string capability_grant_id = 5;
+  string idempotency_key = 6;
+}
+
+message ToolProgress {
+  string call_id = 1;
+  ToolOutcome outcome = 2;
+  string detail = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message ToolResult {
+  string call_id = 1;
+  ToolOutcome outcome = 2;
+  MessageEnvelope result = 3;
+  string error_code = 4;
+  string error_message = 5;
+}
+
+message Reconnect {
+  string request_id = 1;
+  string session_id = 2;
+  uint64 generation = 3;
+  uint64 last_acknowledged_sequence = 4;
+  repeated PlaybackAcknowledgement latest_playback = 5;
+  string idempotency_key = 6;
+}
+
+message ControlCommand {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_INTERRUPT = 1;
+    KIND_PAUSE = 2;
+    KIND_RESUME = 3;
+    KIND_STOP = 4;
+  }
+
+  string command_id = 1;
+  Kind kind = 2;
+  OperationRef operation = 3;
+  string idempotency_key = 4;
+}
+
+message ProtocolError {
+  string request_id = 1;
+  string code = 2;
+  string message = 3;
+  bool retryable = 4;
+}
+
+message ClientEvent {
+  uint32 protocol_version = 1;
+  oneof payload {
+    SessionStart session_start = 2;
+    Reconnect reconnect = 3;
+    PlaybackAcknowledgement playback_acknowledgement = 4;
+    ControlCommand control_command = 5;
+    MessageEnvelope message = 6;
+  }
+}
+
+message ServerEvent {
+  uint32 protocol_version = 1;
+  oneof payload {
+    SessionReady session_ready = 2;
+    StateChanged state_changed = 3;
+    MessageEnvelope message = 4;
+    ToolProgress tool_progress = 5;
+    ToolResult tool_result = 6;
+    ProtocolError error = 7;
+  }
+}

@@ -7,6 +7,7 @@ lifecycle = "2.10.0"
 livekit = "2.26.1"
 media3 = "1.10.1"
 junit = "4.13.2"
+protobuf = "4.33.6"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
@@ -19,6 +20,7 @@ androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-kt
 androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 livekit-android = { module = "io.livekit:livekit-android", version.ref = "livekit" }
 junit = { module = "junit:junit", version.ref = "junit" }
+protobuf-kotlin-lite = { module = "com.google.protobuf:protobuf-kotlin-lite", version.ref = "protobuf" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
