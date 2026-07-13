@@ -17,3 +17,4 @@ runtime/
 infra/livekit/livekit.yaml
 infra/livekit/certs/
 artifacts/
+/var/
