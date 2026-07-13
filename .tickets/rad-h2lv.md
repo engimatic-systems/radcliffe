@@ -17,3 +17,9 @@ Create the native Kotlin/Compose Android client needed to perform the Milestone 
 ## Acceptance Criteria
 
 The Android app uses Kotlin, Compose, and the LiveKit Android SDK; VoiceSessionService is a user-started foreground service declared for microphone and media playback; the app can start/end a room, publish microphone audio, play agent audio, display user/model/source messages distinctly, and show listening/thinking/speaking/reading/paused state; tap and speech barge-in flush audible output; Media3 controls pause, resume, and stop from the notification or a hardware media control; the demo passes on the target Pixel speaker; and no microphone capture begins without explicit user action.
+
+## Notes
+
+**2026-07-13T03:02:56Z**
+
+Implementation is committed and Android test/lint pass: permission-gated foreground MediaSessionService, LiveKit microphone/audio, Protocol v2 controls/events, reconnect state, provenance UI, and notification actions. Remaining acceptance evidence is the target Pixel speaker, hardware/lock-screen, and speech-barge run.

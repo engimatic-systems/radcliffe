@@ -17,3 +17,9 @@ Create the reproducible single-node LiveKit/TURN/token-service topology needed t
 ## Acceptance Criteria
 
 A self-hosted LiveKit server is reachable from the target Pixel and Radcliffe worker through trusted TLS; direct UDP and at least one verified TURN fallback path work; the token service issues least-privilege short-lived room tokens without exposing server secrets; health and ICE/TURN diagnostics are documented; a clean bootstrap reproduces the topology; and the worker connects outbound without opening inbound access to the home machine.
+
+## Notes
+
+**2026-07-13T03:02:56Z**
+
+Implementation is committed: pinned host-network LiveKit/TURN profiles, configuration generator, diagnostics, scoped token service, and tests. Remaining acceptance evidence requires a public TLS domain, Docker host, direct-UDP run, and forced TURN run from the target Pixel.

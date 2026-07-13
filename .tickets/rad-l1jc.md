@@ -17,3 +17,9 @@ Port Oxford's audio-first acceptance philosophy into a focused Protocol v2 suite
 ## Acceptance Criteria
 
 The suite runs separately from the system under test or with isolated compute capacity; a reference implementation validates the harness; tests judge heard audio and cross-check state; the required scenarios cover a normal answer within five seconds, audible stop within 500 ms, pause/resume from a persisted boundary, a read_source CALL lifecycle, and exact canonical source text submitted to TTS; reports retain seeds, audio, envelope/state timelines, tool audit, and measured checks; and a documented Pixel demo procedure produces the same report bundle.
+
+## Notes
+
+**2026-07-13T03:02:56Z**
+
+Credential-free contract report is implemented and passing with exact source/TTS hashes. Ticket remains open because the acceptance authority requires captured Pixel audio, isolated latency, TURN, interruption, and pause/resume evidence.
