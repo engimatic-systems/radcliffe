@@ -99,3 +99,20 @@ with the offline macOS voice. Conversation context and tool calls go only to
 the loopback Ollama API. Ollama and Whisper each require a one-time model
 download; after both models are cached, turns require no model-provider network
 access.
+
+With the local services and `radcliffe-demo` worker running, exercise the same
+LiveKit audio and Protocol v2 paths without a phone:
+
+```sh
+set -a
+source var/.env
+set +a
+RADCLIFFE_CONTROL_URL=http://127.0.0.1:8000 \
+  uv run python scripts/livekit-voice-smoke.py
+```
+
+The smoke client synthesizes microphone input, proves paused speech does not
+become a turn, requires return audio within five seconds, verifies binary
+state/message events, and requires interrupt acknowledgement within 500 ms.
+Its generated user/model envelopes are persisted in the configured demo
+session just like a physical client turn.

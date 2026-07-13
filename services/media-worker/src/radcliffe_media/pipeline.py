@@ -39,6 +39,19 @@ class AudioPublisher(Protocol):
     async def flush(self) -> None: ...
 
 
+class VoiceEventSink(Protocol):
+    async def message(self, envelope: MessageEnvelope) -> None: ...
+
+    async def state_changed(
+        self,
+        previous: ConversationState,
+        current: ConversationState,
+        generation: int,
+        reason: str,
+        operation: Operation | None = None,
+    ) -> None: ...
+
+
 def _packet(packet: ContextPacket, timestamp: int) -> dict[str, object]:
     return {
         "projectionVersion": packet.projection_version,
@@ -60,22 +73,56 @@ class VoicePipeline:
         orchestrator: Orchestrator,
         synthesizer: Synthesizer,
         publisher: AudioPublisher,
+        events: VoiceEventSink | None = None,
     ) -> None:
         self.store = store
         self.engine = SessionEngine(session_id, store)
         self.orchestrator = orchestrator
         self.synthesizer = synthesizer
         self.publisher = publisher
+        self.events = events
         self._cancelled = asyncio.Event()
 
     async def start(self) -> None:
+        previous = self.engine.state
         self.engine.connect()
+        await self._notify_state(previous, "session connected")
+        previous = self.engine.state
         self.engine.ready()
+        await self._notify_state(previous, "session ready")
 
     async def barge_in(self) -> None:
         self._cancelled.set()
         await self.publisher.flush()
-        self.engine.interrupt()
+        if self.engine.state in {
+            ConversationState.THINKING,
+            ConversationState.SPEAKING,
+            ConversationState.READING,
+            ConversationState.PAUSED,
+        }:
+            previous = self.engine.state
+            self.engine.interrupt()
+            await self._notify_state(previous, "interrupted")
+
+    async def pause(self) -> None:
+        if self.engine.state is not ConversationState.LISTENING:
+            await self.barge_in()
+        if self.engine.state is ConversationState.LISTENING:
+            previous = self.engine.state
+            self.engine.pause()
+            await self._notify_state(previous, "paused")
+
+    async def resume(self) -> None:
+        if self.engine.state is ConversationState.PAUSED:
+            previous = self.engine.state
+            self.engine.resume()
+            await self._notify_state(previous, "resumed")
+
+    async def stop(self) -> None:
+        previous = self.engine.state
+        self.engine.end()
+        if previous is not ConversationState.IDLE:
+            await self._notify_state(previous, "session ended")
 
     async def handle_transcript(self, text: str) -> None:
         if self.engine.state is not ConversationState.LISTENING:
@@ -88,7 +135,11 @@ class VoicePipeline:
             text=text,
         )
         await self.store.append(user)
+        if self.events is not None:
+            await self.events.message(user)
+        previous = self.engine.state
         operation = self.engine.begin(ConversationState.THINKING)
+        await self._notify_state(previous, "transcription complete", operation)
         history = await self.store.replay(self.engine.session_id)
         request_id = str(uuid4())
         request: dict[str, object] = {
@@ -125,7 +176,11 @@ class VoicePipeline:
                     )
                     if source is not None:
                         if self.engine.state is ConversationState.THINKING:
-                            self.engine.transition(ConversationState.READING)
+                            await self._transition(
+                                ConversationState.READING, "source authorized", operation
+                            )
+                        if self.events is not None:
+                            await self.events.message(source)
                         await self._speak_plan(source, operation)
                         source_rendered = True
                         buffer = ""
@@ -143,19 +198,23 @@ class VoicePipeline:
                 text=full_model,
             )
             await self.store.append(model)
+            if self.events is not None:
+                await self.events.message(model)
         if buffer and not source_rendered and not self._cancelled.is_set():
             if self.engine.state is ConversationState.THINKING:
-                self.engine.transition(ConversationState.SPEAKING)
+                await self._transition(
+                    ConversationState.SPEAKING, "model response ready", operation
+                )
             await self._speak(buffer, f"{operation.operation_id}:final", 0, operation)
         if not self._cancelled.is_set() and self.engine.state is not ConversationState.FAILED:
-            self.engine.transition(ConversationState.LISTENING)
+            await self._transition(ConversationState.LISTENING, "turn complete", operation)
 
     async def _speak_complete_sentences(self, buffer: str, operation: Operation) -> str:
         matches = list(_SENTENCE.finditer(buffer))
         if not matches:
             return buffer
         if self.engine.state is ConversationState.THINKING:
-            self.engine.transition(ConversationState.SPEAKING)
+            await self._transition(ConversationState.SPEAKING, "model sentence ready", operation)
         end = matches[-1].end()
         start = 0
         for index, match in enumerate(matches):
@@ -167,6 +226,28 @@ class VoicePipeline:
             )
             start = match.end()
         return buffer[end:]
+
+    async def _transition(
+        self, target: ConversationState, reason: str, operation: Operation | None = None
+    ) -> None:
+        previous = self.engine.state
+        self.engine.transition(target)
+        await self._notify_state(previous, reason, operation)
+
+    async def _notify_state(
+        self,
+        previous: ConversationState,
+        reason: str,
+        operation: Operation | None = None,
+    ) -> None:
+        if self.events is not None:
+            await self.events.state_changed(
+                previous,
+                self.engine.state,
+                self.engine.generation,
+                reason,
+                operation,
+            )
 
     async def _speak_plan(self, envelope: MessageEnvelope, operation: Operation) -> None:
         plan = render_projection(envelope)

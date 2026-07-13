@@ -27,3 +27,7 @@ Implementation is committed and Android test/lint pass: permission-gated foregro
 **2026-07-13T04:10:14Z**
 
 Fixed physical Pixel bootstrap failure found during demo: Build.MODEL included spaces (Pixel 8 Pro), violating the control-plane participant identity contract. Android now sanitizes identities to pixel-Pixel-8-Pro with bounded length and fallback coverage; debug APK bumped to 0.1.1 (versionCode 2).
+
+**2026-07-13T04:37:37Z**
+
+Protocol v2 control/data interoperability is now live: the Pipecat adapter preserves binary Protobuf instead of decoding UTF-8; pause suppresses microphone turns, resume restores listening, interrupt flushes/cancels and returns listening, and worker ServerEvents drive Android thinking/speaking/listening plus user/model messages. Live harness measured interrupt acknowledgement at 51ms. Physical Pixel confirmation remains.

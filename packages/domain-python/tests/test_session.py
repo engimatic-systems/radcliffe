@@ -60,3 +60,14 @@ def test_reading_pause_resume_and_end_are_explicit(tmp_path) -> None:
     assert engine.resume() is ConversationState.READING
     engine.end()
     assert engine.state is ConversationState.IDLE
+
+
+def test_listening_session_can_pause_without_an_active_playback(tmp_path) -> None:
+    engine = SessionEngine("s1", EventStore(tmp_path / "events.sqlite3"))
+    engine.connect()
+    engine.ready()
+
+    engine.pause()
+
+    assert engine.state is ConversationState.PAUSED
+    assert engine.resume() is ConversationState.LISTENING

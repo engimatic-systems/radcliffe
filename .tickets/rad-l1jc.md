@@ -23,3 +23,7 @@ The suite runs separately from the system under test or with isolated compute ca
 **2026-07-13T03:02:56Z**
 
 Credential-free contract report is implemented and passing with exact source/TTS hashes. Ticket remains open because the acceptance authority requires captured Pixel audio, isolated latency, TURN, interruption, and pause/resume evidence.
+
+**2026-07-13T04:37:37Z**
+
+Added scripts/livekit-voice-smoke.py as the first external live-room harness toward the Oxford-style suite. It publishes generated microphone audio through LiveKit, checks pause suppression, captures returned TTS audio, validates binary state/message events, enforces <5s first audio and <500ms interrupt acknowledgement. Current local run: 2.812s first audio, 0.051s interrupt acknowledgement.

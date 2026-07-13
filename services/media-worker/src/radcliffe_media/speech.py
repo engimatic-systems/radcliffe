@@ -9,6 +9,7 @@ from typing import Protocol
 
 import httpx
 import mlx_whisper  # type: ignore[import-untyped]
+import numpy as np
 
 
 class SpeechProvider(Protocol):
@@ -30,22 +31,33 @@ class LocalAppleSpeechProvider:
         self.voice = voice
 
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
-        with tempfile.TemporaryDirectory(prefix="radcliffe-stt-") as directory:
-            audio_path = Path(directory) / "turn.wav"
-            with wave.open(str(audio_path), "wb") as stream:
-                stream.setnchannels(channels)
-                stream.setsampwidth(2)
-                stream.setframerate(sample_rate)
-                stream.writeframes(pcm)
-            result = await asyncio.to_thread(
-                mlx_whisper.transcribe,
-                str(audio_path),
-                path_or_hf_repo=self.whisper_model,
-                language=self.language,
-                condition_on_previous_text=False,
-                no_speech_threshold=0.7,
-            )
-            return str(result["text"]).strip()
+        audio = self._waveform(pcm, sample_rate, channels)
+        result = await asyncio.to_thread(
+            mlx_whisper.transcribe,
+            audio,
+            path_or_hf_repo=self.whisper_model,
+            language=self.language,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.7,
+        )
+        return str(result["text"]).strip()
+
+    @staticmethod
+    def _waveform(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
+        if sample_rate <= 0 or channels <= 0:
+            raise ValueError("sample rate and channel count must be positive")
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+        complete_samples = samples.size - (samples.size % channels)
+        samples = samples[:complete_samples]
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1)
+        samples /= 32768.0
+        if sample_rate != 16000 and samples.size:
+            output_size = max(1, round(samples.size * 16000 / sample_rate))
+            source = np.arange(samples.size, dtype=np.float64)
+            target = np.linspace(0, samples.size - 1, output_size)
+            samples = np.interp(target, source, samples).astype(np.float32)
+        return samples
 
     async def synthesize(self, canonical_text: str) -> bytes:
         with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:

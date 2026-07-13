@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from radcliffe_domain.envelope import SourceKind
+from radcliffe_domain.session import ConversationState
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolGateway
 from radcliffe_media.pipeline import VoicePipeline
@@ -29,6 +30,18 @@ class FakePublisher:
 
     async def flush(self) -> None:
         self.flushed = True
+
+
+class FakeEvents:
+    def __init__(self) -> None:
+        self.messages = []
+        self.states = []
+
+    async def message(self, envelope) -> None:
+        self.messages.append(envelope)
+
+    async def state_changed(self, previous, current, generation, reason, operation=None) -> None:
+        self.states.append((previous, current, generation, reason, operation))
 
 
 class AnswerOrchestrator:
@@ -66,12 +79,27 @@ class SourceOrchestrator:
 
 
 @pytest.mark.asyncio
+async def test_interrupt_is_safe_while_listening(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline("s1", store, AnswerOrchestrator(), FakeSynthesizer(), publisher)
+    await pipeline.start()
+
+    await pipeline.barge_in()
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert publisher.flushed
+
+
+@pytest.mark.asyncio
 async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
     tts = FakeSynthesizer()
     publisher = FakePublisher()
-    pipeline = VoicePipeline("s1", store, AnswerOrchestrator(), tts, publisher)
+    events = FakeEvents()
+    pipeline = VoicePipeline("s1", store, AnswerOrchestrator(), tts, publisher, events)
     await pipeline.start()
 
     await pipeline.handle_transcript("Tell me something")
@@ -81,6 +109,14 @@ async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None
     assert [item.source for item in await store.replay("s1")] == [
         SourceKind.USER,
         SourceKind.MODEL,
+    ]
+    assert [item.source for item in events.messages] == [SourceKind.USER, SourceKind.MODEL]
+    assert [state[1] for state in events.states] == [
+        ConversationState.CONNECTING,
+        ConversationState.LISTENING,
+        ConversationState.THINKING,
+        ConversationState.SPEAKING,
+        ConversationState.LISTENING,
     ]
 
 
