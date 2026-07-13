@@ -1,6 +1,6 @@
 ---
 id: rad-2tft
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-13T01:36:39Z

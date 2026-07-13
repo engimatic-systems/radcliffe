@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.idea/
+.gradle/
+.kotlin/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.iml
+build/
+dist/
+node_modules/
+local.properties
+runtime/

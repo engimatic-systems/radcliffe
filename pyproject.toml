@@ -1,0 +1,45 @@
+[project]
+name = "radcliffe-workspace"
+version = "0.1.0"
+description = "Radcliffe voice-agent workspace"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "mypy==2.2.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.15.21",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+  "packages/domain-python",
+  "services/control-plane",
+  "services/media-worker",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = [
+  "packages/domain-python/tests",
+  "services/control-plane/tests",
+  "services/media-worker/tests",
+  "tests/conformance",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
