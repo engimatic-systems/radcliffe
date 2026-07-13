@@ -35,6 +35,10 @@ make check-node
 make check-android
 ```
 
+GitHub-hosted CI is intentionally deferred to optional ticket `rad-r5dp` to
+avoid imposing Actions usage on the sponsoring organization. `make check` is
+the required pull-request gate in the meantime.
+
 Secrets are configured through environment files copied from committed
 `.env.example` templates. Never commit populated `.env` files.
 
