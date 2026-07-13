@@ -8,11 +8,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/server.js",
     "test": "vitest run"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.6",
     "@earendil-works/pi-ai": "0.80.6",
     "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4"
   }
 }
