@@ -1,9 +1,90 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import tempfile
 import wave
+from pathlib import Path
+from typing import Protocol
 
 import httpx
+import mlx_whisper  # type: ignore[import-untyped]
+
+
+class SpeechProvider(Protocol):
+    async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str: ...
+
+    async def synthesize(self, canonical_text: str) -> bytes: ...
+
+
+class LocalAppleSpeechProvider:
+    def __init__(
+        self,
+        *,
+        whisper_model: str = "mlx-community/whisper-large-v3-turbo",
+        language: str = "en",
+        voice: str = "Samantha",
+    ) -> None:
+        self.whisper_model = whisper_model
+        self.language = language
+        self.voice = voice
+
+    async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
+        with tempfile.TemporaryDirectory(prefix="radcliffe-stt-") as directory:
+            audio_path = Path(directory) / "turn.wav"
+            with wave.open(str(audio_path), "wb") as stream:
+                stream.setnchannels(channels)
+                stream.setsampwidth(2)
+                stream.setframerate(sample_rate)
+                stream.writeframes(pcm)
+            result = await asyncio.to_thread(
+                mlx_whisper.transcribe,
+                str(audio_path),
+                path_or_hf_repo=self.whisper_model,
+                language=self.language,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.7,
+            )
+            return str(result["text"]).strip()
+
+    async def synthesize(self, canonical_text: str) -> bytes:
+        with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:
+            aiff_path = Path(directory) / "speech.aiff"
+            pcm_path = Path(directory) / "speech.pcm"
+            say = await asyncio.create_subprocess_exec(
+                "/usr/bin/say",
+                "-v",
+                self.voice,
+                "-o",
+                str(aiff_path),
+                canonical_text,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, say_error = await say.communicate()
+            if say.returncode:
+                raise RuntimeError(f"local TTS failed: {say_error.decode().strip()}")
+            ffmpeg = await asyncio.create_subprocess_exec(
+                "/opt/homebrew/bin/ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(aiff_path),
+                "-f",
+                "s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                str(pcm_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, ffmpeg_error = await ffmpeg.communicate()
+            if ffmpeg.returncode:
+                raise RuntimeError(f"TTS conversion failed: {ffmpeg_error.decode().strip()}")
+            return pcm_path.read_bytes()
 
 
 class OpenAISpeechProvider:

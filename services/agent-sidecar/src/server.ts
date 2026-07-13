@@ -1,6 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
 
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { Model } from "@earendil-works/pi-ai";
 
 import { PiAgentOrchestrator } from "./orchestrator.js";
 import type {
@@ -16,8 +19,29 @@ const modelId = process.env.RADCLIFFE_MODEL_ID ?? "gpt-5.1";
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
 const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
 const models = builtinModels();
-const model = models.getModel(provider, modelId);
+const ollamaModel: Model<"openai-completions"> = {
+  id: modelId,
+  name: modelId,
+  api: "openai-completions",
+  provider: "ollama",
+  baseUrl: process.env.RADCLIFFE_OLLAMA_URL ?? "http://127.0.0.1:11434/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 65536,
+  maxTokens: 8192,
+};
+const model = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
 if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
+const streamFn: StreamFn =
+  provider === "ollama"
+    ? (selectedModel, context, options) =>
+        streamOpenAICompletions(
+          selectedModel as Model<"openai-completions">,
+          context,
+          { ...options, apiKey: "ollama" },
+        )
+    : models.streamSimple;
 
 async function executeTool(
   request: ToolExecutionRequest,
@@ -39,7 +63,7 @@ async function executeTool(
   return (await response.json()) as ToolExecutionResult;
 }
 
-const orchestrator = new PiAgentOrchestrator(model, models.streamSimple, executeTool);
+const orchestrator = new PiAgentOrchestrator(model, streamFn, executeTool);
 
 function writeEvent(response: ServerResponse, event: SidecarEvent): void {
   response.write(`${JSON.stringify(event)}\n`);

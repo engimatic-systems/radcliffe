@@ -23,3 +23,7 @@ The Python worker subscribes to target-participant microphone audio; VAD and end
 **2026-07-13T03:02:56Z**
 
 Implementation is committed: executable Pipecat LiveKit worker, energy endpointing, OpenAI STT/TTS adapters, Pi sidecar streaming, playback acknowledgements, exact-source bypass, cancellation, and fake-provider tests. Remaining acceptance evidence is five measured provider turns under five seconds on the deployed Pixel path.
+
+**2026-07-13T03:54:22Z**
+
+Local privacy profile implemented and verified on the M2 Max: Pi streams qwen3:8b through Ollama on loopback; MLX Whisper large-v3-turbo completed a real local transcription; macOS Samantha produced 24 kHz mono PCM; and the supervised worker connected to the radcliffe-demo LiveKit room. Direct model smoke completed in 2.3s and an authorized read_source tool round trip completed in 9.6s. Pixel acoustic and five-turn latency evidence remain outstanding.

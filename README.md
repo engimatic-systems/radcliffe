@@ -61,11 +61,11 @@ For the physical M1 gate:
    internal-token, database, and source-root settings.
 3. Start the Pi sidecar with the same internal token, Tool Gateway URL, model
    selection, and provider credential.
-4. Configure `RADCLIFFE_LIVEKIT_URL`, `RADCLIFFE_LIVEKIT_TOKEN`,
-   `RADCLIFFE_SESSION_ID`, `RADCLIFFE_OPENAI_API_KEY`, and the optional sidecar
-   and database settings, then run
-   `uv run python -m radcliffe_media.production`. `gpt-4o-mini-transcribe` and
-   `tts-1` are the selected M1 speech pair; deterministic fakes remain CI.
+4. The default private profile uses an installed Ollama model, MLX Whisper
+   `large-v3-turbo`, and the macOS `Samantha` voice converted to 24 kHz PCM.
+   Configure the LiveKit session values and run
+   `uv run python -m radcliffe_media.production`. The first transcription
+   downloads the MLX Whisper checkpoint; subsequent speech stays local.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
    token, grant microphone access, then tap Start.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
@@ -75,3 +75,18 @@ For the physical M1 gate:
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.
+
+### Local privacy profile
+
+The LAN launcher defaults are:
+
+- `RADCLIFFE_MODEL_PROVIDER=ollama`
+- `RADCLIFFE_MODEL_ID=qwen3:8b`
+- `RADCLIFFE_SPEECH_PROVIDER=local`
+- `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
+- `RADCLIFFE_TTS_VOICE=Samantha`
+
+Audio is endpointed in the media worker, transcribed by MLX Whisper, and spoken
+with the offline macOS voice. Conversation context and tool calls go only to
+the loopback Ollama API. The initial Whisper checkpoint fetch is the sole
+network dependency for this profile after repository bootstrap.

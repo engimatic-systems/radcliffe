@@ -19,6 +19,12 @@ Required production environment:
 - `RADCLIFFE_INTERNAL_TOKEN`, shared only with the loopback Tool Gateway
 - optional `RADCLIFFE_SIDECAR_PORT` (default `8787`, loopback only)
 
+For the private local profile, set `RADCLIFFE_MODEL_PROVIDER=ollama`,
+`RADCLIFFE_MODEL_ID` to an installed model, and optionally
+`RADCLIFFE_OLLAMA_URL` (default `http://127.0.0.1:11434/v1`). Pi uses Ollama's
+OpenAI-compatible streaming and tool-call endpoint with the ignored local key
+`ollama`; no provider credential or prompt leaves the Mac.
+
 `PiAgentOrchestrator` is the replacement seam. Another loop can implement the
 same `run(TurnRequest, emit, signal)` contract without changing envelopes,
 projection policy, tools, Android, or playback state.

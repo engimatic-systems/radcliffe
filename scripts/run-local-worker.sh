@@ -7,11 +7,6 @@ set -a
 source var/.env
 set +a
 
-if [[ -z "${RADCLIFFE_OPENAI_API_KEY:-}" ]]; then
-  echo "Add RADCLIFFE_OPENAI_API_KEY to var/.env first." >&2
-  exit 1
-fi
-
 session_id="${RADCLIFFE_SESSION_ID:-radcliffe-demo}"
 uv_bin="${RADCLIFFE_UV_BIN:-/opt/homebrew/bin/uv}"
 response="$(curl --fail --silent --show-error \

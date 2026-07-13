@@ -16,11 +16,11 @@ from radcliffe_domain.store import EventStore
 from radcliffe_media.livekit_adapter import LiveKitConnection, create_transport
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarClient
-from radcliffe_media.speech import OpenAISpeechProvider
+from radcliffe_media.speech import LocalAppleSpeechProvider, OpenAISpeechProvider, SpeechProvider
 
 
 class EndpointProcessor(FrameProcessor):
-    def __init__(self, speech: OpenAISpeechProvider) -> None:
+    def __init__(self, speech: SpeechProvider) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
         self.voice: VoicePipeline | None = None
@@ -81,7 +81,6 @@ async def run() -> None:
             "RADCLIFFE_LIVEKIT_URL",
             "RADCLIFFE_LIVEKIT_TOKEN",
             "RADCLIFFE_SESSION_ID",
-            "RADCLIFFE_OPENAI_API_KEY",
         )
     }
     missing = [key for key, value in required.items() if not value]
@@ -89,7 +88,22 @@ async def run() -> None:
         raise RuntimeError(f"missing required settings: {', '.join(missing)}")
     store = EventStore(Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3")))
     await store.migrate()
-    speech = OpenAISpeechProvider(required["RADCLIFFE_OPENAI_API_KEY"] or "")
+    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
+    if speech_provider == "local":
+        speech: SpeechProvider = LocalAppleSpeechProvider(
+            whisper_model=os.environ.get(
+                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
+            ),
+            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+        )
+    elif speech_provider == "openai":
+        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
+        speech = OpenAISpeechProvider(api_key)
+    else:
+        raise RuntimeError(f"unsupported speech provider: {speech_provider}")
     endpoint = EndpointProcessor(speech)
     voice = VoicePipeline(
         required["RADCLIFFE_SESSION_ID"] or "",
