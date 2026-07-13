@@ -38,10 +38,16 @@ class ContextPacket:
 
 
 def _sentences(text: str) -> tuple[str, ...]:
-    stripped = text.strip()
-    if not stripped:
+    if not text:
         return ()
-    return tuple(part for part in _SENTENCE_BOUNDARY.split(stripped) if part)
+    boundaries: list[str] = []
+    start = 0
+    for match in _SENTENCE_BOUNDARY.finditer(text):
+        boundaries.append(text[start : match.end()])
+        start = match.end()
+    if start < len(text):
+        boundaries.append(text[start:])
+    return tuple(part for part in boundaries if part)
 
 
 def render_projection(envelope: MessageEnvelope) -> RenderPlan:

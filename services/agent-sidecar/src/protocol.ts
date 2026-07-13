@@ -41,6 +41,7 @@ export type SidecarEvent =
       callId: string;
       toolName: string;
       isError: boolean;
+      result: unknown;
     }
   | { type: "complete"; requestId: string }
   | { type: "error"; requestId: string; message: string };

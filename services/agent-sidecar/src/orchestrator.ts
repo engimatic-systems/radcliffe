@@ -194,6 +194,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
+          result: event.result,
         });
       }
     });

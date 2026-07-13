@@ -63,10 +63,12 @@ def test_projection_is_deterministic_source_aware_and_secret_safe() -> None:
     second = project_replay((source, secret))
 
     assert first == second
-    assert [segment.canonical_text for segment in render_projection(source).segments] == [
+    segments = render_projection(source).segments
+    assert [segment.canonical_text.strip() for segment in segments] == [
         "First sentence.",
         "Second sentence!",
     ]
+    assert "".join(segment.canonical_text for segment in segments) == source.content.inline_text
     packet = context_projection(secret)
     assert not packet.include
     assert "provider-key" not in packet.content
