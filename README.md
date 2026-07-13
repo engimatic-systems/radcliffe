@@ -86,7 +86,16 @@ The LAN launcher defaults are:
 - `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
 - `RADCLIFFE_TTS_VOICE=Samantha`
 
+Install and cache the local runtime before starting the launchers:
+
+```sh
+brew install ollama ffmpeg
+ollama pull qwen3:8b
+uv sync --all-packages --all-groups
+```
+
 Audio is endpointed in the media worker, transcribed by MLX Whisper, and spoken
 with the offline macOS voice. Conversation context and tool calls go only to
-the loopback Ollama API. The initial Whisper checkpoint fetch is the sole
-network dependency for this profile after repository bootstrap.
+the loopback Ollama API. Ollama and Whisper each require a one-time model
+download; after both models are cached, turns require no model-provider network
+access.
