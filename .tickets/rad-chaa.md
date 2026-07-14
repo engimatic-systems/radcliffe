@@ -21,4 +21,3 @@ Flush model speech on sentence boundaries plus deterministic maximum character a
 ## Acceptance Criteria
 
 Markdown bullets, headings, emoji grids, and long punctuation-free output begin synthesis before the entire response completes; chunk concatenation preserves canonical model text and order; segment identities and boundary indexes remain unique across streaming deltas; phase-level latency evidence is emitted without message content or secrets; exact source-reading behavior is unchanged; automated regressions cover the emoji-mandala shape and five local turns meet the documented target or retain actionable phase evidence.
-

@@ -21,4 +21,3 @@ Feed canonical UTF-8 through an option-safe input channel such as say -f. Treat 
 ## Acceptance Criteria
 
 Leading dash, double-dash, Markdown bullets, emoji, and multiline text synthesize without CLI option parsing; the live Cosmic touch regression is covered; a TTS failure records exactly one failed disposition and no orphaned pending audio; the session returns to LISTENING and accepts the next transcript; the real macOS say path and a deterministic failing fake are tested.
-
