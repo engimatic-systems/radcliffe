@@ -2,7 +2,7 @@
 id: rad-l1jc
 status: in_progress
 deps: [rad-wnwh, rad-8i08, rad-h2lv, rad-ihso, rad-g7di, rad-au20, rad-ghti]
-links: []
+links: [rad-enbx]
 created: 2026-07-13T01:37:26Z
 type: task
 priority: 1

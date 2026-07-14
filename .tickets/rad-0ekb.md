@@ -2,7 +2,7 @@
 id: rad-0ekb
 status: closed
 deps: [rad-wnwh, rad-58mt]
-links: []
+links: [rad-lod5, rad-4myy]
 created: 2026-07-13T01:37:25Z
 type: task
 priority: 1
