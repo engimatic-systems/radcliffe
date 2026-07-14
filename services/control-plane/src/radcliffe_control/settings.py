@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     livekit_api_secret: str = "secret"
     bootstrap_token: str = Field(default="local-development-only", min_length=16)
     internal_token: str = Field(default="local-internal-only", min_length=16)
+    owner_id: str = Field(default="local-owner", pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
     database_path: Path = Path("var/radcliffe.sqlite3")
     source_root: Path = Path("fixtures/sources")
     room_token_ttl_seconds: int = Field(default=600, ge=60, le=3600)

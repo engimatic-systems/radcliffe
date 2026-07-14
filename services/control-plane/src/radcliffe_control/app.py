@@ -7,10 +7,17 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from livekit import api
 from pydantic import BaseModel, ConfigDict, Field
+from radcliffe_domain.catalog import (
+    InvalidPageCursorError,
+    SessionCatalog,
+    SessionConflictError,
+    SessionRecord,
+)
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 
@@ -25,18 +32,47 @@ def _to_camel(value: str) -> str:
 class SessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,96}$")
+    session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,96}$")
+    participant_identity: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
+    role: Literal["client", "worker"] = "client"
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    title: str | None = Field(default=None, max_length=120)
+
+
+class SessionCredentialsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     participant_identity: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
     role: Literal["client", "worker"] = "client"
 
 
-class SessionResponse(BaseModel):
+class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=120)
+    status: Literal["active", "ended", "archived"] = "active"
+
+
+class SessionSummaryResponse(BaseModel):
+    session_id: str
+    created_at: datetime
+    last_activity_at: datetime
+    title: str | None
+    status: Literal["active", "ended", "archived"]
+    protocol_version: int
+    generation: int
+
+
+class SessionResponse(SessionSummaryResponse):
     livekit_url: str
     room_name: str
     participant_token: str
     expires_in_seconds: int
-    protocol_version: int = 2
-    generation: int
+
+
+class SessionListResponse(BaseModel):
+    items: tuple[SessionSummaryResponse, ...]
+    next_cursor: str | None
 
 
 class ReadSourceArguments(BaseModel):
@@ -75,6 +111,7 @@ class ActiveSession:
 class Runtime:
     settings: Settings
     store: EventStore
+    catalog: SessionCatalog
     gateway: ToolGateway
     sessions: dict[str, ActiveSession]
     lock: asyncio.Lock
@@ -86,6 +123,18 @@ def _bearer(authorization: str | None, expected: str) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token")
 
 
+def _summary(record: SessionRecord) -> SessionSummaryResponse:
+    return SessionSummaryResponse(
+        session_id=record.session_id,
+        created_at=record.created_at,
+        last_activity_at=record.last_activity_at,
+        title=record.title,
+        status=record.status,  # type: ignore[arg-type]
+        protocol_version=record.protocol_version,
+        generation=record.generation,
+    )
+
+
 def create_app(provided_settings: Settings | None = None) -> FastAPI:
     runtime: Runtime | None = None
 
@@ -95,7 +144,14 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
         settings = provided_settings or Settings()
         store = EventStore(settings.database_path)
         await store.migrate()
-        runtime = Runtime(settings, store, ToolGateway(store), {}, asyncio.Lock())
+        runtime = Runtime(
+            settings,
+            store,
+            SessionCatalog(settings.database_path),
+            ToolGateway(store),
+            {},
+            asyncio.Lock(),
+        )
         yield
         runtime = None
 
@@ -110,40 +166,49 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok" if runtime is not None else "starting"}
 
-    @app.post("/v1/sessions", response_model=SessionResponse)
-    async def create_session(
-        request: SessionRequest,
-        active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+    async def issue_credentials(
+        *,
+        active: Runtime,
+        record: SessionRecord,
+        participant_identity: str,
+        role: Literal["client", "worker"],
     ) -> SessionResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
+        refreshed = await active.catalog.touch(
+            principal_id=active.settings.owner_id,
+            session_id=record.session_id,
+        )
+        assert refreshed is not None
+        grant = CapabilityGrant(
+            grant_id=f"source:{record.session_id}:{record.generation}",
+            session_id=record.session_id,
+            generation=record.generation,
+            readable_roots=(active.settings.source_root.resolve(),),
+            allowed_tools=frozenset({"read_source"}),
+            expires_at=datetime.now(UTC)
+            + timedelta(seconds=active.settings.room_token_ttl_seconds),
+        )
         async with active.lock:
-            current = active.sessions.get(request.session_id)
-            generation = current.generation if current is not None else 1
-            grant = CapabilityGrant(
-                grant_id=f"source:{request.session_id}:{generation}",
-                session_id=request.session_id,
-                generation=generation,
-                readable_roots=(active.settings.source_root.resolve(),),
-                allowed_tools=frozenset({"read_source"}),
-                expires_at=datetime.now(UTC)
-                + timedelta(seconds=active.settings.room_token_ttl_seconds),
-            )
-            active.sessions[request.session_id] = ActiveSession(generation, grant)
+            active.sessions[record.session_id] = ActiveSession(record.generation, grant)
 
-        sources = ["microphone"] if request.role == "client" else None
+        sources = ["microphone"] if role == "client" else None
         token = (
             api.AccessToken(
                 active.settings.livekit_api_key,
                 active.settings.livekit_api_secret,
             )
-            .with_identity(request.participant_identity)
+            .with_identity(participant_identity)
             .with_ttl(timedelta(seconds=active.settings.room_token_ttl_seconds))
-            .with_attributes({"radcliffe.protocol": "2", "radcliffe.generation": str(generation)})
+            .with_attributes(
+                {
+                    "radcliffe.protocol": str(record.protocol_version),
+                    "radcliffe.generation": str(record.generation),
+                    "radcliffe.token_nonce": uuid4().hex,
+                }
+            )
             .with_grants(
                 api.VideoGrants(
                     room_join=True,
-                    room=request.session_id,
+                    room=record.session_id,
                     can_publish=True,
                     can_subscribe=True,
                     can_publish_data=True,
@@ -153,11 +218,112 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
             .to_jwt()
         )
         return SessionResponse(
+            **_summary(refreshed).model_dump(),
             livekit_url=active.settings.livekit_url,
-            room_name=request.session_id,
+            room_name=record.session_id,
             participant_token=token,
             expires_in_seconds=active.settings.room_token_ttl_seconds,
-            generation=generation,
+        )
+
+    @app.post("/v1/sessions", response_model=SessionResponse)
+    async def create_session(
+        request: SessionRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SessionResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        try:
+            record, _created = await active.catalog.create(
+                principal_id=active.settings.owner_id,
+                session_id=request.session_id,
+                idempotency_key=request.idempotency_key,
+                title=request.title,
+            )
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return await issue_credentials(
+            active=active,
+            record=record,
+            participant_identity=request.participant_identity,
+            role=request.role,
+        )
+
+    @app.get("/v1/sessions", response_model=SessionListResponse)
+    async def list_sessions(
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        cursor: str | None = None,
+    ) -> SessionListResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        try:
+            page = await active.catalog.list(
+                principal_id=active.settings.owner_id,
+                limit=limit,
+                cursor=cursor,
+            )
+        except InvalidPageCursorError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return SessionListResponse(
+            items=tuple(_summary(item) for item in page.items),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get("/v1/sessions/{session_id}", response_model=SessionSummaryResponse)
+    async def get_session(
+        session_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SessionSummaryResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        record = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return _summary(record)
+
+    @app.patch("/v1/sessions/{session_id}", response_model=SessionSummaryResponse)
+    async def update_session(
+        session_id: str,
+        request: SessionUpdateRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SessionSummaryResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        record = await active.catalog.update(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+            title=request.title,
+            status=request.status,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return _summary(record)
+
+    @app.post(
+        "/v1/sessions/{session_id}/credentials",
+        response_model=SessionResponse,
+    )
+    async def reopen_session(
+        session_id: str,
+        request: SessionCredentialsRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SessionResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        record = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return await issue_credentials(
+            active=active,
+            record=record,
+            participant_identity=request.participant_identity,
+            role=request.role,
         )
 
     @app.post("/v1/tool-calls", response_model=ToolCallResponse)

@@ -37,14 +37,34 @@ class EventStore:
 
     async def migrate(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        migration = files("radcliffe_domain.migrations").joinpath("001_initial.sql").read_text()
         async with aiosqlite.connect(self.path) as db:
-            await db.executescript(migration)
             await db.execute(
-                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                (1, datetime.now(UTC).isoformat()),
+                """CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )"""
             )
-            await db.commit()
+            migrations = files("radcliffe_domain.migrations")
+            for resource in sorted(migrations.iterdir(), key=lambda item: item.name):
+                if not resource.name.endswith(".sql"):
+                    continue
+                version_text = resource.name.partition("_")[0]
+                if not version_text.isdigit():
+                    continue
+                version = int(version_text)
+                applied = await (
+                    await db.execute(
+                        "SELECT 1 FROM schema_migrations WHERE version = ?", (version,)
+                    )
+                ).fetchone()
+                if applied is not None:
+                    continue
+                await db.executescript(resource.read_text())
+                await db.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (version, datetime.now(UTC).isoformat()),
+                )
+                await db.commit()
 
     async def append(self, envelope: MessageEnvelope) -> bool:
         wire = envelope.to_proto().SerializeToString(deterministic=True)
