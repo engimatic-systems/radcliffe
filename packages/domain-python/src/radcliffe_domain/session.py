@@ -36,6 +36,7 @@ _TRANSITIONS: dict[ConversationState, frozenset[ConversationState]] = {
     ConversationState.LISTENING: frozenset(
         {
             ConversationState.THINKING,
+            ConversationState.PAUSED,
             ConversationState.RECONNECTING,
             ConversationState.FAILED,
             ConversationState.IDLE,
@@ -165,7 +166,11 @@ class SessionEngine:
         self._resume_state = None
 
     def pause(self) -> None:
-        if self.state not in {ConversationState.SPEAKING, ConversationState.READING}:
+        if self.state not in {
+            ConversationState.LISTENING,
+            ConversationState.SPEAKING,
+            ConversationState.READING,
+        }:
             raise InvalidTransitionError(f"cannot pause from {self.state}")
         self._resume_state = self.state
         self.transition(ConversationState.PAUSED)

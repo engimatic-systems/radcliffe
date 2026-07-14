@@ -17,3 +17,13 @@ Integrate the foundation components into the single verifiable Pixel demo that g
 ## Acceptance Criteria
 
 From a clean documented setup, the target Pixel connects to the self-hosted LiveKit topology; an ordinary spoken question yields a visible transcript and spoken frontier-model answer within five seconds; speech or tap interruption stops audible output within 500 ms and accepts the next turn; asking to read the supplied Markdown fixture causes Pi to request read_source and the Tool Gateway to send canonical source text directly to TTS with visible provenance; app and system controls pause and resume at the persisted sentence boundary; ending and restarting leaves no orphaned operation; the independent suite produces a passing report with audio, latency, envelope/state timeline, canonical-text proof, and tool audit; and the README contains a concise demo script.
+
+## Notes
+
+**2026-07-13T03:54:22Z**
+
+An installable debug APK and LAN setup sheet are available in /Users/ravd/agent-share. The local Ollama/Whisper/TTS stack and worker are running; the remaining milestone gate is the physical Pixel demo and its acoustic/interrupt/TURN evidence.
+
+**2026-07-14T02:46:33Z**
+
+User physically verified ordinary Pixel voice conversation and basic app controls on 2026-07-13. Remaining M1 acceptance is the exact read_source/provenance phone scenario plus stricter captured latency, persisted-boundary resume, lock-screen/hardware, and network-path evidence.

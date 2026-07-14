@@ -58,3 +58,17 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         body = tool.json()
         assert "Canonical source text" not in body["modelContent"]
         assert body["details"]["sourceMessageId"] == "source:call-1"
+
+        camel_case_tool = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "sessionId": "session-1",
+                "generation": 1,
+                "callId": "call-2",
+                "idempotencyKey": "idem-2",
+                "toolName": "read_source",
+                "arguments": {"path": "demo.md"},
+            },
+        )
+        assert camel_case_tool.status_code == 200

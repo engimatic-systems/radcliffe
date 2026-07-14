@@ -23,3 +23,15 @@ The Python worker subscribes to target-participant microphone audio; VAD and end
 **2026-07-13T03:02:56Z**
 
 Implementation is committed: executable Pipecat LiveKit worker, energy endpointing, OpenAI STT/TTS adapters, Pi sidecar streaming, playback acknowledgements, exact-source bypass, cancellation, and fake-provider tests. Remaining acceptance evidence is five measured provider turns under five seconds on the deployed Pixel path.
+
+**2026-07-13T03:54:22Z**
+
+Local privacy profile implemented and verified on the M2 Max: Pi streams qwen3:8b through Ollama on loopback; MLX Whisper large-v3-turbo completed a real local transcription; macOS Samantha produced 24 kHz mono PCM; and the supervised worker connected to the radcliffe-demo LiveKit room. Direct model smoke completed in 2.3s and an authorized read_source tool round trip completed in 9.6s. Pixel acoustic and five-turn latency evidence remain outstanding.
+
+**2026-07-13T04:37:37Z**
+
+Physical Pixel run exposed and local fixes now verify: LiveKit microphone audio reached endpointing, but MLX Whisper's file loader could not find ffmpeg in the LaunchAgent PATH and Pipecat cancelled the persistent pipeline after five idle minutes. STT now passes normalized PCM directly to MLX in memory, the worker uses PipelineWorker with no room idle expiry, sidecar cancellation is observed, and errors are contained. A live synthetic room returned local speech in 2.812s.
+
+**2026-07-14T02:46:33Z**
+
+Physical Pixel verification passed the basic local loop on 2026-07-13: microphone transcription, visible user/model messages, Ollama response, local TTS playback, tap interrupt, pause/resume, and end-to-idle all worked. The run also exposed a deterministic concurrency defect: an interrupted unanswered user request remained in projection and was answered alongside the next prompt; a naturally split utterance launched overlapping model turns and logged InvalidTransitionError (listening -> listening). Follow-up cancellation/serialization work will be tracked on the stacked next-milestone branch.

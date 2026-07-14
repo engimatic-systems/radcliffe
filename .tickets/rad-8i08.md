@@ -23,3 +23,7 @@ A self-hosted LiveKit server is reachable from the target Pixel and Radcliffe wo
 **2026-07-13T03:02:56Z**
 
 Implementation is committed: pinned host-network LiveKit/TURN profiles, configuration generator, diagnostics, scoped token service, and tests. Remaining acceptance evidence requires a public TLS domain, Docker host, direct-UDP run, and forced TURN run from the target Pixel.
+
+**2026-07-13T03:54:22Z**
+
+LAN development topology is now deployed locally: pinned LiveKit is reachable at ws://192.168.18.71:7880, scoped tokens are issued by the control plane, and the supervised media worker connects outbound to radcliffe-demo. Trusted TLS, public TURN, forced-relay, and target-Pixel evidence remain intentionally deferred.

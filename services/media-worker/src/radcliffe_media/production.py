@@ -6,21 +6,28 @@ import os
 from array import array
 from pathlib import Path
 
+from loguru import logger
 from pipecat.frames.frames import Frame, InterruptionFrame, OutputAudioRawFrame, UserAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.workers.runner import WorkerRunner
 from radcliffe_domain.store import EventStore
 
-from radcliffe_media.livekit_adapter import LiveKitConnection, create_transport
+from radcliffe_media.control import ClientControlHandler
+from radcliffe_media.events import LiveKitEventSink
+from radcliffe_media.livekit_adapter import (
+    LiveKitConnection,
+    RadcliffeLiveKitTransport,
+    create_transport,
+)
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarClient
-from radcliffe_media.speech import OpenAISpeechProvider
+from radcliffe_media.speech import LocalAppleSpeechProvider, OpenAISpeechProvider, SpeechProvider
 
 
 class EndpointProcessor(FrameProcessor):
-    def __init__(self, speech: OpenAISpeechProvider) -> None:
+    def __init__(self, speech: SpeechProvider) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
         self.voice: VoicePipeline | None = None
@@ -29,11 +36,14 @@ class EndpointProcessor(FrameProcessor):
         self.silence_ms = 0.0
         self.voice_ms = 0.0
         self.turn_task: asyncio.Task[None] | None = None
+        self.paused = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if not isinstance(frame, UserAudioRawFrame):
             await self.push_frame(frame, direction)
+            return
+        if self.paused:
             return
         duration_ms = len(frame.audio) / (2 * frame.num_channels * frame.sample_rate) * 1000
         samples = array("h")
@@ -62,9 +72,43 @@ class EndpointProcessor(FrameProcessor):
             )
 
     async def _complete(self, pcm: bytes, sample_rate: int, channels: int) -> None:
-        transcript = await self.speech.transcribe(pcm, sample_rate, channels)
-        if transcript and self.voice is not None:
-            await self.voice.handle_transcript(transcript)
+        try:
+            transcript = await self.speech.transcribe(pcm, sample_rate, channels)
+            if transcript and self.voice is not None and not self.paused:
+                await self.voice.handle_transcript(transcript)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("voice turn failed before completion")
+
+    async def interrupt(self) -> None:
+        self.paused = False
+        await self._cancel_current_turn()
+
+    async def _cancel_current_turn(self) -> None:
+        self.speaking = False
+        self.buffer.clear()
+        if self.voice is not None:
+            await self.voice.barge_in()
+        if self.turn_task is not None and not self.turn_task.done():
+            self.turn_task.cancel()
+
+    async def pause(self) -> None:
+        self.paused = True
+        await self._cancel_current_turn()
+        if self.voice is not None:
+            await self.voice.pause()
+
+    async def resume(self) -> None:
+        self.paused = False
+        if self.voice is not None:
+            await self.voice.resume()
+
+    async def stop(self) -> None:
+        self.paused = True
+        await self._cancel_current_turn()
+        if self.voice is not None:
+            await self.voice.stop()
 
     async def publish(self, _segment_id: str, pcm_audio: bytes) -> int:
         await self.push_frame(OutputAudioRawFrame(pcm_audio, 24000, 1))
@@ -81,7 +125,6 @@ async def run() -> None:
             "RADCLIFFE_LIVEKIT_URL",
             "RADCLIFFE_LIVEKIT_TOKEN",
             "RADCLIFFE_SESSION_ID",
-            "RADCLIFFE_OPENAI_API_KEY",
         )
     }
     missing = [key for key, value in required.items() if not value]
@@ -89,17 +132,23 @@ async def run() -> None:
         raise RuntimeError(f"missing required settings: {', '.join(missing)}")
     store = EventStore(Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3")))
     await store.migrate()
-    speech = OpenAISpeechProvider(required["RADCLIFFE_OPENAI_API_KEY"] or "")
+    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
+    if speech_provider == "local":
+        speech: SpeechProvider = LocalAppleSpeechProvider(
+            whisper_model=os.environ.get(
+                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
+            ),
+            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+        )
+    elif speech_provider == "openai":
+        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
+        speech = OpenAISpeechProvider(api_key)
+    else:
+        raise RuntimeError(f"unsupported speech provider: {speech_provider}")
     endpoint = EndpointProcessor(speech)
-    voice = VoicePipeline(
-        required["RADCLIFFE_SESSION_ID"] or "",
-        store,
-        SidecarClient(os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")),
-        speech,
-        endpoint,
-    )
-    endpoint.voice = voice
-    await voice.start()
     transport = create_transport(
         LiveKitConnection(
             required["RADCLIFFE_LIVEKIT_URL"] or "",
@@ -107,16 +156,39 @@ async def run() -> None:
             required["RADCLIFFE_SESSION_ID"] or "",
         )
     )
+    voice = VoicePipeline(
+        required["RADCLIFFE_SESSION_ID"] or "",
+        store,
+        SidecarClient(os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")),
+        speech,
+        endpoint,
+        LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or ""),
+    )
+    endpoint.voice = voice
+    await voice.start()
+    controls = ClientControlHandler(endpoint)
+
+    async def on_data_received(
+        _transport: RadcliffeLiveKitTransport, data: bytes, _participant_id: str
+    ) -> None:
+        if not await controls.handle(data):
+            logger.warning("ignored unsupported Protocol v2 client event")
+
+    transport.add_event_handler("on_data_received", on_data_received)
     pipeline = Pipeline([transport.input(), endpoint, transport.output()])
-    task = PipelineTask(
+    worker = PipelineWorker(
         pipeline,
         params=PipelineParams(
             audio_in_sample_rate=16000,
             audio_out_sample_rate=24000,
             enable_metrics=True,
         ),
+        enable_rtvi=False,
+        idle_timeout_secs=None,
     )
-    await PipelineRunner(handle_sigint=True).run(task)
+    runner = WorkerRunner(handle_sigint=True)
+    await runner.add_workers(worker)
+    await runner.run()
 
 
 def main() -> None:

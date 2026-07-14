@@ -17,6 +17,11 @@ from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 from radcliffe_control.settings import Settings
 
 
+def _to_camel(value: str) -> str:
+    first, *rest = value.split("_")
+    return first + "".join(part.title() for part in rest)
+
+
 class SessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +46,11 @@ class ReadSourceArguments(BaseModel):
 
 
 class ToolCallRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
 
     session_id: str
     generation: int

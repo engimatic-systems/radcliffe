@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -21,11 +22,12 @@ class SidecarClient:
     async def turn(
         self, request: dict[str, object], cancelled: object | None = None
     ) -> AsyncIterator[SidecarEvent]:
-        del cancelled
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream("POST", f"{self.base_url}/v1/turns", json=request) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
+                    if isinstance(cancelled, asyncio.Event) and cancelled.is_set():
+                        break
                     if not line:
                         continue
                     payload: dict[str, object] = json.loads(line)

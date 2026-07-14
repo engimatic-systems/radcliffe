@@ -1,9 +1,102 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import tempfile
 import wave
+from pathlib import Path
+from typing import Protocol
 
 import httpx
+import mlx_whisper  # type: ignore[import-untyped]
+import numpy as np
+
+
+class SpeechProvider(Protocol):
+    async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str: ...
+
+    async def synthesize(self, canonical_text: str) -> bytes: ...
+
+
+class LocalAppleSpeechProvider:
+    def __init__(
+        self,
+        *,
+        whisper_model: str = "mlx-community/whisper-large-v3-turbo",
+        language: str = "en",
+        voice: str = "Samantha",
+    ) -> None:
+        self.whisper_model = whisper_model
+        self.language = language
+        self.voice = voice
+
+    async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
+        audio = self._waveform(pcm, sample_rate, channels)
+        result = await asyncio.to_thread(
+            mlx_whisper.transcribe,
+            audio,
+            path_or_hf_repo=self.whisper_model,
+            language=self.language,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.7,
+        )
+        return str(result["text"]).strip()
+
+    @staticmethod
+    def _waveform(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
+        if sample_rate <= 0 or channels <= 0:
+            raise ValueError("sample rate and channel count must be positive")
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+        complete_samples = samples.size - (samples.size % channels)
+        samples = samples[:complete_samples]
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1)
+        samples /= 32768.0
+        if sample_rate != 16000 and samples.size:
+            output_size = max(1, round(samples.size * 16000 / sample_rate))
+            source = np.arange(samples.size, dtype=np.float64)
+            target = np.linspace(0, samples.size - 1, output_size)
+            samples = np.interp(target, source, samples).astype(np.float32)
+        return samples
+
+    async def synthesize(self, canonical_text: str) -> bytes:
+        with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:
+            aiff_path = Path(directory) / "speech.aiff"
+            pcm_path = Path(directory) / "speech.pcm"
+            say = await asyncio.create_subprocess_exec(
+                "/usr/bin/say",
+                "-v",
+                self.voice,
+                "-o",
+                str(aiff_path),
+                canonical_text,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, say_error = await say.communicate()
+            if say.returncode:
+                raise RuntimeError(f"local TTS failed: {say_error.decode().strip()}")
+            ffmpeg = await asyncio.create_subprocess_exec(
+                "/opt/homebrew/bin/ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(aiff_path),
+                "-f",
+                "s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                str(pcm_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, ffmpeg_error = await ffmpeg.communicate()
+            if ffmpeg.returncode:
+                raise RuntimeError(f"TTS conversion failed: {ffmpeg_error.decode().strip()}")
+            return pcm_path.read_bytes()
 
 
 class OpenAISpeechProvider:
