@@ -28,3 +28,7 @@ Control URL and credential survive activity recreation, process death, app resta
 **2026-07-14T03:35:26Z**
 
 Implemented on feat/android-persisted-profile: DataStore stores normalized control URL and compatibility session; Android Keystore AES-256-GCM protects the bootstrap token in a versioned ciphertext envelope; setup/edit/test/reset UI added; screenshots and all backup/transfer domains disabled; unreadable credentials fail closed to setup; repository recreation, corruption, reset, normalization, and redaction unit tests added. Keep open pending physical upgrade, process-death, and reboot verification on the Pixel.
+
+**2026-07-14T04:05:38Z**
+
+2026-07-13 Pixel verification: the v0.2.0 APK upgraded successfully; saved-profile Test and Start both reached the control plane and the local voice loop connected. Relaunch and reboot persistence remain the only physical-device acceptance checks.

@@ -2,7 +2,7 @@
 id: rad-214n
 status: in_progress
 deps: []
-links: []
+links: [rad-rwfl, rad-lo0t, rad-chaa, rad-ghti, rad-nu8n]
 created: 2026-07-14T02:47:05Z
 type: bug
 priority: 0
@@ -28,3 +28,7 @@ A new transcript atomically cancels and awaits the previous active turn before i
 **2026-07-14T03:03:23Z**
 
 Implemented on fix/generation-safe-voice-turns: immutable per-turn cancellation, serialized ownership, newest-submission wins, persisted turn dispositions, context-v2 exclusion, partial-model audit, stale-output guards, double audio flush, count/model regression, and 10 repeated race iterations. Local make check passes. Keep open pending physical interrupt latency and live Sidecar HTTP cancellation verification.
+
+**2026-07-14T04:05:38Z**
+
+2026-07-13 Pixel verification: the latest session showed no recurrence of the stale listening-to-listening transition race. Completed and interrupted dispositions were recorded. A separate TTS failure exposed recoverability work tracked by rad-nu8n and transcript publication work tracked by rad-lo0t.
