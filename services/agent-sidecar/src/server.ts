@@ -6,6 +6,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Model } from "@earendil-works/pi-ai";
 
 import { PiAgentOrchestrator } from "./orchestrator.js";
+import { createOllamaModel } from "./ollama-model.js";
 import { assertProviderAllowed } from "./provider-policy.js";
 import type {
   SidecarEvent,
@@ -21,18 +22,10 @@ assertProviderAllowed(provider, process.env.RADCLIFFE_ALLOW_CLOUD_MODELS);
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
 const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
 const models = builtinModels();
-const ollamaModel: Model<"openai-completions"> = {
-  id: modelId,
-  name: modelId,
-  api: "openai-completions",
-  provider: "ollama",
+const ollamaModel = createOllamaModel({
+  modelId,
   baseUrl: process.env.RADCLIFFE_OLLAMA_URL ?? "http://127.0.0.1:11434/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 65536,
-  maxTokens: 8192,
-};
+});
 const model = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
 if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
 const streamFn: StreamFn =

@@ -25,7 +25,12 @@ from radcliffe_media.livekit_adapter import (
 )
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarClient
-from radcliffe_media.speech import LocalAppleSpeechProvider, OpenAISpeechProvider, SpeechProvider
+from radcliffe_media.speech import (
+    DEFAULT_WHISPER_INITIAL_PROMPT,
+    LocalAppleSpeechProvider,
+    OpenAISpeechProvider,
+    SpeechProvider,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,9 +38,18 @@ class EndpointSettings:
     rms_threshold: float = 600
     minimum_voice_ms: float = 250
     end_silence_ms: float = 900
+    maximum_utterance_ms: float = 30000
 
     def __post_init__(self) -> None:
-        if min(self.rms_threshold, self.minimum_voice_ms, self.end_silence_ms) <= 0:
+        if (
+            min(
+                self.rms_threshold,
+                self.minimum_voice_ms,
+                self.end_silence_ms,
+                self.maximum_utterance_ms,
+            )
+            <= 0
+        ):
             raise ValueError("endpoint settings must be positive")
 
     @classmethod
@@ -44,6 +58,9 @@ class EndpointSettings:
             rms_threshold=float(os.environ.get("RADCLIFFE_ENDPOINT_RMS", "600")),
             minimum_voice_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "250")),
             end_silence_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_SILENCE_MS", "900")),
+            maximum_utterance_ms=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "30000")
+            ),
         )
 
 
@@ -84,15 +101,18 @@ class EndpointProcessor(FrameProcessor):
         self.buffer.extend(frame.audio)
         self.voice_ms += duration_ms if voiced else 0
         self.silence_ms = 0 if voiced else self.silence_ms + duration_ms
+        utterance_ms = len(self.buffer) / (2 * frame.num_channels * frame.sample_rate) * 1000
+        silence_endpoint = self.silence_ms >= self.settings.end_silence_ms
+        maximum_endpoint = utterance_ms >= self.settings.maximum_utterance_ms
         if (
-            self.silence_ms >= self.settings.end_silence_ms
-            and self.voice_ms >= self.settings.minimum_voice_ms
-        ):
+            silence_endpoint or maximum_endpoint
+        ) and self.voice_ms >= self.settings.minimum_voice_ms:
             audio = bytes(self.buffer)
             logger.info(
-                "voice turn phase complete phase=endpoint audio_ms={} voice_ms={} "
+                "voice turn phase complete phase=endpoint reason={} audio_ms={} voice_ms={} "
                 "trailing_silence_ms={}",
-                round(len(audio) / (2 * frame.num_channels * frame.sample_rate) * 1000, 2),
+                "maximum_utterance" if maximum_endpoint else "silence",
+                round(utterance_ms, 2),
                 round(self.voice_ms, 2),
                 round(self.silence_ms, 2),
             )
@@ -102,6 +122,16 @@ class EndpointProcessor(FrameProcessor):
                 self._complete(audio, frame.sample_rate, frame.num_channels),
                 name="radcliffe-voice-turn",
             )
+        elif maximum_endpoint:
+            logger.info(
+                "voice endpoint discarded insufficient speech audio_ms={} voice_ms={}",
+                round(utterance_ms, 2),
+                round(self.voice_ms, 2),
+            )
+            self.speaking = False
+            self.buffer.clear()
+            self.voice_ms = 0
+            self.silence_ms = 0
 
     async def _complete(self, pcm: bytes, sample_rate: int, channels: int) -> None:
         started_at = monotonic()
@@ -185,6 +215,10 @@ async def run() -> None:
             ),
             language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
             voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+            initial_prompt=os.environ.get(
+                "RADCLIFFE_WHISPER_INITIAL_PROMPT",
+                DEFAULT_WHISPER_INITIAL_PROMPT,
+            ),
         )
     elif speech_provider == "openai":
         if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":

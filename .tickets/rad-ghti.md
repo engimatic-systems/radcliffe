@@ -2,7 +2,7 @@
 id: rad-ghti
 status: in_progress
 deps: [rad-wnwh, rad-58mt, rad-8i08, rad-0ekb, rad-ihso, rad-g7di]
-links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n]
+links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z]
 created: 2026-07-13T01:52:53Z
 type: task
 priority: 1
@@ -39,3 +39,7 @@ Physical Pixel verification passed the basic local loop on 2026-07-13: microphon
 **2026-07-14T04:05:38Z**
 
 2026-07-13 Pixel evidence: transcript-to-first-playback was approximately 6.44s, 5.34s, 12.93s, and 10.87s across four turns, excluding endpoint silence and Whisper time. Punctuation-poor Markdown and emoji were slowest. The latency/chunking follow-up is rad-chaa.
+
+**2026-07-14T05:26:25Z**
+
+Five consecutive real local-provider turns now pass through the black-box LiveKit harness at 2.680s, 2.144s, 2.221s, 2.186s, and 2.509s from synthetic speech end to heard output. Qwen3 hidden thinking was the latency defect: Pi now emits Ollama reasoning_effort=none, reducing the previous 4.5-5.5s run without weakening the 5s gate. STT/TTS/Ollama remain local. Full make check and make check-voice-local pass.

@@ -2,7 +2,7 @@
 id: rad-rwfl
 status: in_progress
 deps: [rad-214n]
-links: [rad-lo0t, rad-chaa, rad-214n, rad-ghti, rad-nu8n]
+links: [rad-lo0t, rad-chaa, rad-214n, rad-ghti, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z]
 created: 2026-07-14T02:47:05Z
 type: task
 priority: 1
@@ -28,3 +28,11 @@ Core implementation on fix/generation-safe-voice-turns: endpoint task cancellati
 **2026-07-14T04:05:38Z**
 
 2026-07-13 Pixel evidence: live endpointing, pause/resume, interrupt, and end remained usable. Latest transcript-to-playback measurements exclude roughly 0.9s endpoint silence; phase-level latency instrumentation is tracked by rad-chaa.
+
+**2026-07-14T04:59:00Z**
+
+2026-07-13 Pixel evidence: the Markdown command was split across multiple transcripts, and one 34.8s endpoint contained only 0.55s of detected voice. Oxford-derived short-pause, noise, and echo/segmentation fixtures are now part of rad-9e2z and the conformance expansion.
+
+**2026-07-14T05:26:25Z**
+
+Added a configurable 30s maximum utterance boundary so intermittent noise/echo cannot recreate the observed 34.8s endpoint; unit coverage injects voiced spikes and proves bounded finalization. The seeded corpus now covers natural pauses, noise, echo, and frame loss, and the end-to-end LiveKit suite remains under the latency budget. Keep open for the remaining explicit long-pause/barge-in/echo ownership matrix.

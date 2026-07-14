@@ -5,11 +5,17 @@ import io
 import tempfile
 import wave
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import httpx
 import mlx_whisper  # type: ignore[import-untyped]
 import numpy as np
+
+DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_WHISPER_INITIAL_PROMPT = (
+    "Radcliffe vocabulary: dash, bold, Markdown, Cosmic touch, voice controls work, "
+    "read source, metadata."
+)
 
 
 class SpeechProvider(Protocol):
@@ -22,25 +28,34 @@ class LocalAppleSpeechProvider:
     def __init__(
         self,
         *,
-        whisper_model: str = "mlx-community/whisper-large-v3-turbo",
+        whisper_model: str = DEFAULT_WHISPER_MODEL,
         language: str = "en",
         voice: str = "Samantha",
+        initial_prompt: str | None = DEFAULT_WHISPER_INITIAL_PROMPT,
     ) -> None:
         self.whisper_model = whisper_model
         self.language = language
         self.voice = voice
+        self.initial_prompt = initial_prompt
 
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
-        audio = self._waveform(pcm, sample_rate, channels)
-        result = await asyncio.to_thread(
-            mlx_whisper.transcribe,
-            audio,
-            path_or_hf_repo=self.whisper_model,
-            language=self.language,
-            condition_on_previous_text=False,
-            no_speech_threshold=0.7,
-        )
+        result = await self.transcribe_result(pcm, sample_rate, channels)
         return str(result["text"]).strip()
+
+    async def transcribe_result(
+        self, pcm: bytes, sample_rate: int, channels: int
+    ) -> dict[str, object]:
+        audio = self._waveform(pcm, sample_rate, channels)
+        options: dict[str, object] = {
+            "path_or_hf_repo": self.whisper_model,
+            "language": self.language,
+            "condition_on_previous_text": False,
+            "no_speech_threshold": 0.7,
+        }
+        if self.initial_prompt:
+            options["initial_prompt"] = self.initial_prompt
+        result = await asyncio.to_thread(mlx_whisper.transcribe, audio, **options)
+        return cast(dict[str, object], result)
 
     @staticmethod
     def _waveform(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
