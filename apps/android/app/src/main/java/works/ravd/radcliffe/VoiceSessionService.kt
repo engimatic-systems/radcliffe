@@ -85,7 +85,7 @@ class VoiceSessionService : MediaSessionService() {
             }.onFailure {
                 SessionModel.state(VoiceState.FAILED)
                 SessionModel.message(DisplayMessage("connection-error", MessageKind.SYSTEM, it.message ?: "Connection failed"))
-                stopSession()
+                stopSession(resetState = false)
             }
         }
     }
@@ -173,11 +173,11 @@ class VoiceSessionService : MediaSessionService() {
         }
     }
 
-    private fun stopSession() {
+    private fun stopSession(resetState: Boolean = true) {
         room?.disconnect()
         room?.release()
         room = null
-        SessionModel.state(VoiceState.IDLE)
+        if (resetState) SessionModel.state(VoiceState.IDLE)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

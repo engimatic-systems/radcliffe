@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -41,7 +42,7 @@ data class ConnectionProfile(
             return "Control URL must start with http:// or https://"
         }
         if (value.bootstrapToken.isBlank()) return "Bootstrap token is required"
-        if (!SESSION_ID.matches(value.sessionId)) {
+        if (value.sessionId.isNotBlank() && !SESSION_ID.matches(value.sessionId)) {
             return "Session must use 1-96 letters, numbers, underscores, or hyphens"
         }
         return null
@@ -51,7 +52,7 @@ data class ConnectionProfile(
         "ConnectionProfile(controlUrl=$controlUrl, bootstrapToken=[redacted], sessionId=$sessionId)"
 
     companion object {
-        const val DEFAULT_SESSION_ID = "radcliffe-demo"
+        const val DEFAULT_SESSION_ID = ""
         private val SESSION_ID = Regex("^[A-Za-z0-9_-]{1,96}$")
     }
 }
@@ -155,10 +156,30 @@ class ConnectionProfileRepository(
         tokenCipher.clear()
     }
 
+    suspend fun beginSessionCreation(): String {
+        var key = ""
+        dataStore.edit { preferences ->
+            key = preferences[PENDING_SESSION_KEY] ?: UUID.randomUUID().toString().also {
+                preferences[PENDING_SESSION_KEY] = it
+            }
+        }
+        return key
+    }
+
+    suspend fun selectSession(sessionId: String) {
+        require(SESSION_ID_PATTERN.matches(sessionId)) { "invalid session ID" }
+        dataStore.edit { preferences ->
+            preferences[SESSION_ID] = sessionId
+            preferences.remove(PENDING_SESSION_KEY)
+        }
+    }
+
     companion object {
         private val CONTROL_URL = stringPreferencesKey("control_url")
         private val SESSION_ID = stringPreferencesKey("session_id")
         private val BOOTSTRAP_TOKEN = stringPreferencesKey("bootstrap_token_encrypted")
+        private val PENDING_SESSION_KEY = stringPreferencesKey("pending_session_creation_key")
+        private val SESSION_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
 
         fun create(context: Context): ConnectionProfileRepository = ConnectionProfileRepository(
             context.applicationContext.connectionProfileDataStore,

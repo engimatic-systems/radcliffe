@@ -32,3 +32,7 @@ Implemented on feat/android-persisted-profile: DataStore stores normalized contr
 **2026-07-14T04:05:38Z**
 
 2026-07-13 Pixel verification: the v0.2.0 APK upgraded successfully; saved-profile Test and Start both reached the control plane and the local voice loop connected. Relaunch and reboot persistence remain the only physical-device acceptance checks.
+
+**2026-07-14T12:35:29Z**
+
+Android 0.3.0 now removes manual session configuration while preserving encrypted URL/token and selected-session state. The pending generated-session idempotency key survives repository/process recreation and clears only after durable selection. Local tests pass; keep open for upgrade/relaunch/reboot verification on the Pixel.

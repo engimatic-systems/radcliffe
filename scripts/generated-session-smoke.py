@@ -139,7 +139,7 @@ async def run(commit: str) -> int:
                 await client.patch(
                     f"{control_url}/v1/sessions/{session_id}",
                     headers=headers,
-                    json={"status": "ended"},
+                    json={"status": "archived"},
                 )
     report["session_id"] = session_id
     report["passed"] = all(bool(check["passed"]) for check in checks)

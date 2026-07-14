@@ -180,10 +180,12 @@ class SessionCatalog:
         principal_id: str,
         limit: int = 20,
         cursor: str | None = None,
+        include_archived: bool = False,
     ) -> SessionPage:
         if not 1 <= limit <= 100:
             raise ValueError("session page limit must be between 1 and 100")
         parameters: list[str | int] = [principal_id]
+        visibility = "" if include_archived else "AND status != 'archived'"
         boundary = ""
         if cursor:
             activity, session_id = _decode_cursor(cursor)
@@ -194,7 +196,7 @@ class SessionCatalog:
             db.row_factory = aiosqlite.Row
             rows = await (
                 await db.execute(
-                    f"""SELECT * FROM sessions WHERE principal_id = ? {boundary}
+                    f"""SELECT * FROM sessions WHERE principal_id = ? {visibility} {boundary}
                     ORDER BY last_activity_at DESC, session_id DESC LIMIT ?""",  # noqa: S608
                     parameters,
                 )

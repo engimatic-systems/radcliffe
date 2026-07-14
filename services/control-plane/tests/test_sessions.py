@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from livekit import api
 from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
-from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity, SourceKind
 from radcliffe_domain.projection import (
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
@@ -175,6 +175,13 @@ def test_catalog_list_detail_update_pagination_and_authorization(tmp_path) -> No
         )
         assert updated.json()["title"] == "Renamed"
         assert updated.json()["status"] == "archived"
+        visible = client.get("/v1/sessions", headers=AUTHORIZATION).json()["items"]
+        assert "legacy-b" not in {item["session_id"] for item in visible}
+        with_archived = client.get(
+            "/v1/sessions?include_archived=true",
+            headers=AUTHORIZATION,
+        ).json()["items"]
+        assert "legacy-b" in {item["session_id"] for item in with_archived}
         assert client.get("/v1/sessions?cursor=not-valid", headers=AUTHORIZATION).status_code == 422
         assert client.get("/v1/sessions/missing", headers=AUTHORIZATION).status_code == 404
 
@@ -289,6 +296,93 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
             client.get("/v1/sessions/missing/context-usage", headers=AUTHORIZATION).status_code
             == 404
         )
+
+
+def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -> None:
+    config = settings(tmp_path)
+    with TestClient(create_app(config)) as client:
+        assert create(client, session_id="timeline-session").status_code == 200
+        store = EventStore(config.database_path)
+        envelopes = (
+            MessageEnvelope.text(
+                session_id="timeline-session",
+                sequence=1,
+                source=SourceKind.USER,
+                text="First question",
+                message_id="user-1",
+            ),
+            MessageEnvelope.text(
+                session_id="timeline-session",
+                sequence=2,
+                source=SourceKind.SYSTEM,
+                text="provider-secret",
+                sensitivity=Sensitivity.SECRET,
+                message_id="secret-1",
+            ),
+            MessageEnvelope.text(
+                session_id="timeline-session",
+                sequence=3,
+                source=SourceKind.MODEL,
+                text="First answer",
+                provenance=Provenance(display_name="Local model"),
+                message_id="model-1",
+            ),
+            MessageEnvelope.text(
+                session_id="timeline-session",
+                sequence=4,
+                source=SourceKind.SYSTEM,
+                text="internal interrupted-turn audit",
+                metadata={
+                    TURN_EVENT_METADATA: TURN_DISPOSITION_EVENT,
+                    TURN_DISPOSITION_METADATA: "interrupted",
+                },
+                message_id="audit-1",
+            ),
+        )
+        for envelope in envelopes:
+            asyncio.run(store.append(envelope))
+
+        path = "/v1/sessions/timeline-session/messages"
+        assert client.get(path).status_code == 401
+        first = client.get(path, headers=AUTHORIZATION, params={"limit": 1})
+        assert first.status_code == 200
+        assert first.json() == {
+            "items": [
+                {
+                    "sequence": 1,
+                    "message_id": "user-1",
+                    "created_at": envelopes[0].created_at.isoformat().replace("+00:00", "Z"),
+                    "source": "user",
+                    "text": "First question",
+                    "provenance_label": None,
+                }
+            ],
+            "next_after": 1,
+        }
+        second = client.get(
+            path,
+            headers=AUTHORIZATION,
+            params={"after": first.json()["next_after"], "limit": 1},
+        )
+        assert [item["message_id"] for item in second.json()["items"]] == ["model-1"]
+        assert second.json()["items"][0]["provenance_label"] == "Local model"
+        assert second.json()["next_after"] is None
+        assert "provider-secret" not in second.text
+        assert "internal interrupted-turn audit" not in second.text
+        assert client.get("/v1/sessions/missing/messages", headers=AUTHORIZATION).status_code == 404
+
+
+def test_status_only_update_preserves_session_title(tmp_path) -> None:
+    config = settings(tmp_path)
+    with TestClient(create_app(config)) as client:
+        assert create(client, session_id="preserve-title", title="Keep me").status_code == 200
+        archived = client.patch(
+            "/v1/sessions/preserve-title",
+            headers=AUTHORIZATION,
+            json={"status": "archived"},
+        )
+        assert archived.status_code == 200
+        assert archived.json()["title"] == "Keep me"
 
 
 def test_generated_session_dispatches_one_worker_and_end_cleans_it_up(tmp_path) -> None:

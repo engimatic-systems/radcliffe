@@ -322,17 +322,17 @@ async def run(commit: str) -> int:
         if event.protocol_version == 2:
             state.events.append(TimedEvent(time.monotonic(), event))
 
-    await room.connect(credentials["livekit_url"], credentials["participant_token"])
-    await wait_until(lambda: "radcliffe-worker" in room.remote_participants, 30)
-    state.started_at = time.monotonic()
-    source = rtc.AudioSource(INPUT_RATE, 1)
-    track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", source)
-    options = rtc.TrackPublishOptions()
-    options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
-    await room.local_participant.publish_track(track, options)
-    await asyncio.sleep(0.5)
-
     try:
+        await room.connect(credentials["livekit_url"], credentials["participant_token"])
+        await wait_until(lambda: "radcliffe-worker" in room.remote_participants, 30)
+        state.started_at = time.monotonic()
+        source = rtc.AudioSource(INPUT_RATE, 1)
+        track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", source)
+        options = rtc.TrackPublishOptions()
+        options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
+        await room.local_participant.publish_track(track, options)
+        await asyncio.sleep(0.5)
+
         await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
         await wait_until(
             lambda: (
@@ -843,6 +843,13 @@ async def run(commit: str) -> int:
             worker.kill()
             await worker.wait()
         await worker_log_task
+        async with httpx.AsyncClient(timeout=10) as client:
+            archive = await client.patch(
+                f"{control_url.rstrip('/')}/v1/sessions/{session_id}",
+                headers={"Authorization": f"Bearer {bootstrap_token}"},
+                json={"status": "archived"},
+            )
+            archive.raise_for_status()
 
     envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
     packets = context_replay(envelopes)

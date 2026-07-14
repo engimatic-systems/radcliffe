@@ -39,12 +39,20 @@ async def test_append_replay_is_ordered_idempotent_and_hash_checked(tmp_path) ->
     assert not await store.append(first)
     await store.append(second)
     assert await store.replay("s1") == (first, second)
+    first_page = await store.replay_page("s1", limit=1)
+    assert first_page.items == (first,)
+    assert first_page.next_after == 1
+    second_page = await store.replay_page("s1", after=first_page.next_after, limit=1)
+    assert second_page.items == (second,)
+    assert second_page.next_after is None
 
     out_of_order = MessageEnvelope.text(
         session_id="s1", sequence=4, source=SourceKind.USER, text="skip"
     )
     with pytest.raises(StoreConflictError, match="expected sequence 3"):
         await store.append(out_of_order)
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        await store.replay_page("s1", limit=101)
 
 
 def test_projection_is_deterministic_source_aware_and_secret_safe() -> None:

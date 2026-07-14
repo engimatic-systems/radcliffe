@@ -1,6 +1,6 @@
 ---
 id: rad-mp26
-status: open
+status: in_progress
 deps: [rad-tx88, rad-lod5, rad-yk82]
 links: [rad-lod5, rad-yk82, rad-h2lv]
 created: 2026-07-14T02:48:09Z
@@ -28,3 +28,7 @@ Automatic random sessions remain deferred: the current local media worker is pin
 **2026-07-14T11:53:12Z**
 
 Backend prerequisites are now implemented: rad-lod5 provides the durable generated-ID/recent-session API and rad-yk82 dispatches exactly one managed media worker for generated rooms. Android can now replace the compatibility session field with automatic create/reopen behavior once the profile PR chain lands.
+
+**2026-07-14T12:35:29Z**
+
+Implemented on feat/android-session-home: configuration-only setup, generated sessions with persisted idempotency, authenticated recent-session paging, chronological timeline restore before LiveKit connect, selected-session persistence, diagnostic-only raw IDs, explicit loading/empty/offline/unauthorized/retry states, and archived-test filtering. JVM/API tests cover creation-key recreation, parsing, reducer pagination/order/deduplication, failures, and timeline secret/audit filtering. Keep open for the Pixel UI/process/reboot checkpoint.

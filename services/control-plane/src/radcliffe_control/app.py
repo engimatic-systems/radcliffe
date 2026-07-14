@@ -20,7 +20,13 @@ from radcliffe_domain.catalog import (
     SessionConflictError,
     SessionRecord,
 )
-from radcliffe_domain.projection import CONTEXT_PROJECTION_VERSION, context_replay
+from radcliffe_domain.envelope import MessageEnvelope, Sensitivity
+from radcliffe_domain.projection import (
+    CONTEXT_PROJECTION_VERSION,
+    TURN_DISPOSITION_EVENT,
+    TURN_EVENT_METADATA,
+    context_replay,
+)
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 
@@ -124,6 +130,20 @@ class ContextUsageResponse(BaseModel):
     measurement_basis: str
     exact: bool
     overflow: bool
+
+
+class SessionMessageResponse(BaseModel):
+    sequence: int
+    message_id: str
+    created_at: datetime
+    source: Literal["user", "model", "call", "text_source", "system"]
+    text: str | None
+    provenance_label: str | None
+
+
+class SessionMessageListResponse(BaseModel):
+    items: tuple[SessionMessageResponse, ...]
+    next_after: int | None
 
 
 class ReadSourceArguments(BaseModel):
@@ -402,6 +422,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
         cursor: str | None = None,
+        include_archived: bool = False,
     ) -> SessionListResponse:
         _bearer(authorization, active.settings.bootstrap_token)
         try:
@@ -409,6 +430,7 @@ def create_app(
                 principal_id=active.settings.owner_id,
                 limit=limit,
                 cursor=cursor,
+                include_archived=include_archived,
             )
         except InvalidPageCursorError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -472,6 +494,59 @@ def create_app(
             **measured.model_dump(exclude={"request_digest"}),
         )
 
+    @app.get(
+        "/v1/sessions/{session_id}/messages",
+        response_model=SessionMessageListResponse,
+    )
+    async def get_session_messages(
+        session_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+        after: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> SessionMessageListResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        record = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        visible: list[MessageEnvelope] = []
+        cursor = after
+        exhausted = False
+        while len(visible) <= limit and not exhausted:
+            page = await active.store.replay_page(session_id, after=cursor, limit=100)
+            if not page.items:
+                break
+            for envelope in page.items:
+                cursor = envelope.sequence
+                if (
+                    envelope.sensitivity is not Sensitivity.SECRET
+                    and envelope.metadata.get(TURN_EVENT_METADATA) != TURN_DISPOSITION_EVENT
+                ):
+                    visible.append(envelope)
+                if len(visible) > limit:
+                    break
+            exhausted = page.next_after is None
+        items = visible[:limit]
+        return SessionMessageListResponse(
+            items=tuple(
+                SessionMessageResponse(
+                    sequence=envelope.sequence,
+                    message_id=envelope.message_id,
+                    created_at=envelope.created_at,
+                    source=envelope.source.value,
+                    text=envelope.content.inline_text,
+                    provenance_label=(
+                        envelope.provenance.display_name or envelope.provenance.locator or None
+                    ),
+                )
+                for envelope in items
+            ),
+            next_after=items[-1].sequence if len(visible) > limit else None,
+        )
+
     @app.patch("/v1/sessions/{session_id}", response_model=SessionSummaryResponse)
     async def update_session(
         session_id: str,
@@ -480,14 +555,19 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> SessionSummaryResponse:
         _bearer(authorization, active.settings.bootstrap_token)
+        existing = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="session not found")
         record = await active.catalog.update(
             principal_id=active.settings.owner_id,
             session_id=session_id,
-            title=request.title,
+            title=request.title if "title" in request.model_fields_set else existing.title,
             status=request.status,
         )
-        if record is None:
-            raise HTTPException(status_code=404, detail="session not found")
+        assert record is not None
         if active.workers is not None and record.worker_mode == "managed":
             if record.status == "active":
                 record = await ensure_worker(active, record)

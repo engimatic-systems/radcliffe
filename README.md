@@ -67,10 +67,10 @@ For the physical M1 gate:
    `uv run python -m radcliffe_media.production`. The first transcription
    downloads the MLX Whisper checkpoint; subsequent speech stays local.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
-   token once, retain the compatibility session `radcliffe-demo`, save the
-   profile, grant microphone access, then tap Start. Later launches load the
-   saved profile; use Change settings only when the endpoint or credential
-   changes.
+   token once, and save the profile. Later launches load the saved profile and
+   recent conversations. Tap New conversation for a server-generated session,
+   or choose an existing conversation to restore its timeline before joining;
+   use Settings only when the endpoint or credential changes.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
    candidate report. The LiveKit and Android tickets remain open until direct
    UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.
@@ -145,6 +145,10 @@ randomized source workspaces, file mutation, session restart/catalog ordering,
 context-budget UI rendering, and agent-controlled safe settings. Phone testing is
 reserved for Android lifecycle, Bluetooth controls, lock-screen behavior,
 network transitions, and UI rendering.
+
+Conformance rooms are archived after each run. They remain available through
+the authenticated catalog's `include_archived` diagnostic option but do not
+clutter the Android recent-conversation home.
 
 With LiveKit, the control plane, and the Pi sidecar running, exercise the same
 LiveKit audio and Protocol v2 paths without a phone. The harness creates a

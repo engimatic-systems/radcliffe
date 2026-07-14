@@ -13,12 +13,17 @@ the configured bootstrap bearer token. The authenticated principal comes from
   creation. Explicit IDs remain available for the compatibility demo and tests.
 - `GET /v1/sessions?limit=20&cursor=...` lists metadata newest-first. The opaque
   cursor preserves a deterministic `(last_activity_at, session_id)` boundary.
+  Archived sessions are hidden unless `include_archived=true`, keeping test and
+  deliberately archived conversations out of the normal Android home.
 - `GET /v1/sessions/{session_id}` returns metadata only. Envelope/message content
   is deliberately absent.
 - `GET /v1/sessions/{session_id}/context-usage` replays the current deterministic
   projection and returns model ID, exact/estimated input usage, reserved output,
   remaining capacity, percentage, projection version, and overflow state. It
   never returns message content or the internal request digest.
+- `GET /v1/sessions/{session_id}/messages?after=...&limit=...` returns the
+  owner-authenticated, chronological persisted timeline for reopen. Secret
+  envelopes are skipped without breaking the stable sequence cursor.
 - `PATCH /v1/sessions/{session_id}` updates the optional title and lifecycle
   status (`active`, `ended`, or `archived`).
 - `POST /v1/sessions/{session_id}/credentials` reopens a durable session with a

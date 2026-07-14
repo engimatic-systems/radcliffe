@@ -36,3 +36,7 @@ First Oxford-derived increment is now executable via make check-voice-local with
 **2026-07-14T12:16:46Z**
 
 2026-07-14 context-accounting increment is now covered locally: the control API replays real context-v2 history, the Sidecar golden-compares the exact Pi/Ollama serialized request including CALL/TEXT_SOURCE roles and excluded interrupted turns, model/history changes invalidate the digest, overflow is stopped before provider generation, and public metrics contain no message content. Deployed radcliffe-demo accounting returned 1,356 exact input tokens and the full voice suite stayed under latency gates.
+
+**2026-07-14T12:35:29Z**
+
+The Android checkpoint adds locally automated scenarios for recent-session parsing/paging, loading/empty/offline/expired-auth/retry reducers, stable deduplication, timeline restoration/deduplication, context indicator boundaries, and server-side secret/internal-audit filtering. Live generated-worker dispatch and full acoustic interruption conformance also pass; physical testing remains limited to lifecycle and rendered UI behavior.
