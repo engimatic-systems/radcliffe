@@ -88,6 +88,7 @@ The LAN launcher defaults are:
 - `RADCLIFFE_SPEECH_PROVIDER=local`
 - `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
 - `RADCLIFFE_TTS_VOICE=Samantha`
+- `RADCLIFFE_MODEL_CHUNK_CHARS=240`
 
 Install and cache the local runtime before starting the launchers:
 
@@ -106,9 +107,13 @@ access.
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
-`RADCLIFFE_ENDPOINT_RMS`. If a later endpoint does arrive while a turn is
-active, the newer transcript deterministically supersedes and awaits the old
-turn before model work begins.
+`RADCLIFFE_ENDPOINT_RMS`. Model speech flushes on sentence and completed-line
+boundaries, with `RADCLIFFE_MODEL_CHUNK_CHARS` providing an upper bound for
+punctuation-poor output. Phase logs report endpointing, transcription, first
+model delta, synthesis, publish, and first-audio timings without message
+content. If a later endpoint does arrive while a turn is active, the newer
+transcript deterministically supersedes and awaits the old turn before model
+work begins.
 
 With the local services and `radcliffe-demo` worker running, exercise the same
 LiveKit audio and Protocol v2 paths without a phone:

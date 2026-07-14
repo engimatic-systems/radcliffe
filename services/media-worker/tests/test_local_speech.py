@@ -10,7 +10,7 @@ from radcliffe_media.speech import LocalAppleSpeechProvider
 async def test_local_tts_produces_24khz_mono_pcm() -> None:
     provider = LocalAppleSpeechProvider(voice="Samantha")
 
-    audio = await provider.synthesize("Radcliffe local speech works.")
+    audio = await provider.synthesize("- **Cosmic touch:** Moon 🌙\n-- still canonical text")
 
     assert len(audio) > 2400
     assert len(audio) % 2 == 0

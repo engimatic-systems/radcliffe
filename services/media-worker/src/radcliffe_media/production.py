@@ -6,6 +6,7 @@ import os
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 from loguru import logger
 from pipecat.frames.frames import Frame, InterruptionFrame, OutputAudioRawFrame, UserAudioRawFrame
@@ -88,6 +89,13 @@ class EndpointProcessor(FrameProcessor):
             and self.voice_ms >= self.settings.minimum_voice_ms
         ):
             audio = bytes(self.buffer)
+            logger.info(
+                "voice turn phase complete phase=endpoint audio_ms={} voice_ms={} "
+                "trailing_silence_ms={}",
+                round(len(audio) / (2 * frame.num_channels * frame.sample_rate) * 1000, 2),
+                round(self.voice_ms, 2),
+                round(self.silence_ms, 2),
+            )
             self.speaking = False
             self.buffer.clear()
             self.turn_task = asyncio.create_task(
@@ -96,8 +104,14 @@ class EndpointProcessor(FrameProcessor):
             )
 
     async def _complete(self, pcm: bytes, sample_rate: int, channels: int) -> None:
+        started_at = monotonic()
         try:
             transcript = await self.speech.transcribe(pcm, sample_rate, channels)
+            logger.info(
+                "voice turn phase complete phase=transcription duration_ms={} audio_ms={}",
+                round((monotonic() - started_at) * 1000, 2),
+                round(len(pcm) / (2 * channels * sample_rate) * 1000, 2),
+            )
             if transcript and self.voice is not None and not self.paused:
                 await self.voice.handle_transcript(transcript)
         except asyncio.CancelledError:
@@ -199,6 +213,7 @@ async def run() -> None:
         speech,
         endpoint,
         LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or ""),
+        model_chunk_chars=int(os.environ.get("RADCLIFFE_MODEL_CHUNK_CHARS", "240")),
     )
     endpoint.voice = voice
     await voice.start()

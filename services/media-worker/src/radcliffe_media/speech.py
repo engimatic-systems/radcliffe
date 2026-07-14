@@ -63,13 +63,16 @@ class LocalAppleSpeechProvider:
         with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:
             aiff_path = Path(directory) / "speech.aiff"
             pcm_path = Path(directory) / "speech.pcm"
+            input_path = Path(directory) / "speech.txt"
+            input_path.write_text(canonical_text, encoding="utf-8")
             say = await asyncio.create_subprocess_exec(
                 "/usr/bin/say",
                 "-v",
                 self.voice,
                 "-o",
                 str(aiff_path),
-                canonical_text,
+                "-f",
+                str(input_path),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
