@@ -80,6 +80,22 @@ def test_projection_is_deterministic_source_aware_and_secret_safe() -> None:
     packet = context_projection(secret)
     assert not packet.include
     assert "provider-key" not in packet.content
+    assert context_projection(source).to_wire(1_767_225_600_000) == {
+        "projectionVersion": "context-v2",
+        "messageId": "source-1",
+        "role": "source",
+        "content": "First sentence. Second sentence!",
+        "source": "text_source",
+        "annotations": [
+            ["format", "markdown"],
+            ["locator", ""],
+            ["permission_basis", ""],
+            ["projection", "context-v2"],
+            ["source", "text_source"],
+        ],
+        "include": True,
+        "timestamp": 1_767_225_600_000,
+    }
 
 
 def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_content() -> None:

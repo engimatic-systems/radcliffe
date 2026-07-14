@@ -85,6 +85,8 @@ The LAN launcher defaults are:
 
 - `RADCLIFFE_MODEL_PROVIDER=ollama`
 - `RADCLIFFE_MODEL_ID=qwen3:8b`
+- `RADCLIFFE_MODEL_CONTEXT_LIMIT=40960`
+- `RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS=8192`
 - `RADCLIFFE_SPEECH_PROVIDER=local`
 - `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
 - `RADCLIFFE_WHISPER_INITIAL_PROMPT=Radcliffe vocabulary: ...`
@@ -140,7 +142,7 @@ the current turbo model and full large-v3 on the identical generated corpus.
 This is the first increment of rad-l1jc/rad-enbx. The remaining Oxford scenarios
 are added as their product contracts land: resumable playback boundaries,
 randomized source workspaces, file mutation, session restart/catalog ordering,
-context-budget accounting, and agent-controlled safe settings. Phone testing is
+context-budget UI rendering, and agent-controlled safe settings. Phone testing is
 reserved for Android lifecycle, Bluetooth controls, lock-screen behavior,
 network transitions, and UI rendering.
 

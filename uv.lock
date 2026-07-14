@@ -1322,6 +1322,7 @@ version = "0.1.0"
 source = { editable = "services/control-plane" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "livekit-api" },
     { name = "pydantic-settings" },
     { name = "radcliffe-domain" },
@@ -1331,6 +1332,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.139.0" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "livekit-api", specifier = "==1.2.0" },
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "radcliffe-domain", editable = "packages/domain-python" },

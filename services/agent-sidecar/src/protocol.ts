@@ -18,6 +18,20 @@ export interface TurnRequest {
   packets: ContextPacket[];
 }
 
+export interface ContextUsage {
+  modelId: string;
+  contextLimit: number;
+  projectedInputTokens: number;
+  reservedOutputTokens: number;
+  remainingTokens: number;
+  percentage: number;
+  projectionVersion: string;
+  measurementBasis: string;
+  exact: boolean;
+  overflow: boolean;
+  requestDigest: string;
+}
+
 export type SidecarEvent =
   | { type: "model_delta"; requestId: string; text: string }
   | { type: "model_complete"; requestId: string; text: string }

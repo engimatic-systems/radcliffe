@@ -11,8 +11,10 @@ import {
   Type,
 } from "@earendil-works/pi-ai";
 
+import type { ContextMeter } from "./context-meter.js";
 import type {
   ContextPacket,
+  ContextUsage,
   SidecarEvent,
   ToolExecutionRequest,
   ToolExecutor,
@@ -46,6 +48,14 @@ const EMPTY_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+export const RADCLIFFE_SYSTEM_PROMPT =
+  "You are Radcliffe. Use read_source for requests to read a file. Never recreate source text.";
+export const READ_SOURCE_DESCRIPTION =
+  "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant.";
+export const READ_SOURCE_PARAMETERS = Type.Object({
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+});
 
 function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextMessage {
   return "role" in message && message.role === "radcliffe";
@@ -84,30 +94,59 @@ export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
   });
 }
 
+export function modelContextFromRequest(request: TurnRequest) {
+  const messages: RadcliffeContextMessage[] = request.packets
+    .filter((packet) => packet.include)
+    .map((packet) => ({ role: "radcliffe", packet }));
+  return {
+    systemPrompt: RADCLIFFE_SYSTEM_PROMPT,
+    messages: convertRadcliffeContext(messages),
+    tools: [
+      {
+        name: "read_source",
+        description: READ_SOURCE_DESCRIPTION,
+        parameters: READ_SOURCE_PARAMETERS,
+      },
+    ],
+  };
+}
+
 export class PiAgentOrchestrator implements AgentOrchestrator {
   constructor(
     private readonly model: Model<string>,
     private readonly streamFn: StreamFn,
     private readonly executeTool: ToolExecutor,
+    private readonly contextMeter?: ContextMeter,
   ) {}
+
+  async measure(request: TurnRequest): Promise<ContextUsage> {
+    if (!this.contextMeter) throw new Error("context accounting is unavailable");
+    return this.contextMeter.measure(request);
+  }
 
   async run(
     request: TurnRequest,
     emit: (event: SidecarEvent) => void | Promise<void>,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (this.contextMeter) {
+      const usage = await this.contextMeter.measure(request);
+      if (usage.overflow) {
+        throw new Error(
+          `context overflow: ${usage.projectedInputTokens} input + ` +
+            `${usage.reservedOutputTokens} reserved > ${usage.contextLimit} token limit`,
+        );
+      }
+    }
     const packets = request.packets.filter((packet) => packet.include);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
     let modelText = "";
-    const readSourceParameters = Type.Object({
-      path: Type.String({ minLength: 1, maxLength: 4096 }),
-    });
-    const readSource: AgentTool<typeof readSourceParameters> = {
+    const readSource: AgentTool<typeof READ_SOURCE_PARAMETERS> = {
       name: "read_source",
       label: "Read source",
-      description: "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant.",
-      parameters: readSourceParameters,
+      description: READ_SOURCE_DESCRIPTION,
+      parameters: READ_SOURCE_PARAMETERS,
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
@@ -144,8 +183,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     }));
     const agent = new Agent({
       initialState: {
-        systemPrompt:
-          "You are Radcliffe. Use read_source for requests to read a file. Never recreate source text.",
+        systemPrompt: RADCLIFFE_SYSTEM_PROMPT,
         model: this.model,
         thinkingLevel: "off",
         tools: [readSource],

@@ -32,3 +32,7 @@ First Oxford-derived increment is now executable via make check-voice-local with
 **2026-07-14T12:02:23Z**
 
 2026-07-14 Oxford-derived external-suite increment now covers a live rapid replacement turn end to end, including active-stream observation, speech interruption, old-audio cessation, exact replacement content/latency, HTTP cancellation, durable interrupted disposition, and projection exclusion. Cold Ollama readiness is also deterministic: the Sidecar warms and pins the selected local model before health is exposed, preserving the unchanged five-second first-audio gate after restart.
+
+**2026-07-14T12:16:46Z**
+
+2026-07-14 context-accounting increment is now covered locally: the control API replays real context-v2 history, the Sidecar golden-compares the exact Pi/Ollama serialized request including CALL/TEXT_SOURCE roles and excluded interrupted turns, model/history changes invalidate the digest, overflow is stopped before provider generation, and public metrics contain no message content. Deployed radcliffe-demo accounting returned 1,356 exact input tokens and the full voice suite stayed under latency gates.

@@ -3,6 +3,8 @@ import type { Model } from "@earendil-works/pi-ai";
 export interface OllamaModelOptions {
   modelId: string;
   baseUrl: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 /**
@@ -11,7 +13,18 @@ export interface OllamaModelOptions {
  * the model is reasoning-capable; without this metadata Ollama lets Qwen use
  * its default hidden-thinking mode.
  */
-export function createOllamaModel({ modelId, baseUrl }: OllamaModelOptions): Model<"openai-completions"> {
+export function createOllamaModel({
+  modelId,
+  baseUrl,
+  contextWindow = 40960,
+  maxTokens = 8192,
+}: OllamaModelOptions): Model<"openai-completions"> {
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) {
+    throw new Error("Ollama context window must be a positive integer");
+  }
+  if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0 || maxTokens >= contextWindow) {
+    throw new Error("Ollama reserved output must be positive and smaller than its context window");
+  }
   return {
     id: modelId,
     name: modelId,
@@ -22,7 +35,7 @@ export function createOllamaModel({ modelId, baseUrl }: OllamaModelOptions): Mod
     thinkingLevelMap: { off: "none" },
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 65536,
-    maxTokens: 8192,
+    contextWindow,
+    maxTokens,
   };
 }

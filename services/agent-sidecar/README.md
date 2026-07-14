@@ -35,6 +35,21 @@ the loopback native API. `RADCLIFFE_OLLAMA_KEEP_ALIVE` controls residency and
 defaults to `-1` (retain until Ollama stops), preventing an idle model unload
 from turning the next voice response into a cold-start latency failure.
 
+The local model contract defaults to a 40,960-token context window with 8,192
+tokens reserved for output. Override those matched model/runtime values with
+`RADCLIFFE_MODEL_CONTEXT_LIMIT` and
+`RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS` only as a pair validated for the
+selected Ollama model.
+
+`POST /v1/context-usage` captures the exact Pi chat-completion payload and asks
+the loopback Ollama endpoint for its authoritative `prompt_tokens` count using
+a one-token, non-tool-executing dry run. Counts are cached by a SHA-256 digest
+of the model-visible request. Normal turns perform the same cached preflight
+and return an actionable 422 before real generation if projected input plus
+reserved output exceeds the limit. If Ollama reports or silently truncates an
+already-oversized prompt, the result is explicitly labeled an inexact lower
+bound and remains an overflow; it is never presented as an exact count.
+
 `PiAgentOrchestrator` is the replacement seam. Another loop can implement the
 same `run(TurnRequest, emit, signal)` contract without changing envelopes,
 projection policy, tools, Android, or playback state.
