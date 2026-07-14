@@ -31,3 +31,7 @@ Local privacy profile implemented and verified on the M2 Max: Pi streams qwen3:8
 **2026-07-13T04:37:37Z**
 
 Physical Pixel run exposed and local fixes now verify: LiveKit microphone audio reached endpointing, but MLX Whisper's file loader could not find ffmpeg in the LaunchAgent PATH and Pipecat cancelled the persistent pipeline after five idle minutes. STT now passes normalized PCM directly to MLX in memory, the worker uses PipelineWorker with no room idle expiry, sidecar cancellation is observed, and errors are contained. A live synthetic room returned local speech in 2.812s.
+
+**2026-07-14T02:46:33Z**
+
+Physical Pixel verification passed the basic local loop on 2026-07-13: microphone transcription, visible user/model messages, Ollama response, local TTS playback, tap interrupt, pause/resume, and end-to-idle all worked. The run also exposed a deterministic concurrency defect: an interrupted unanswered user request remained in projection and was answered alongside the next prompt; a naturally split utterance launched overlapping model turns and logged InvalidTransitionError (listening -> listening). Follow-up cancellation/serialization work will be tracked on the stacked next-milestone branch.

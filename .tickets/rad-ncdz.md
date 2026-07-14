@@ -23,3 +23,7 @@ From a clean documented setup, the target Pixel connects to the self-hosted Live
 **2026-07-13T03:54:22Z**
 
 An installable debug APK and LAN setup sheet are available in /Users/ravd/agent-share. The local Ollama/Whisper/TTS stack and worker are running; the remaining milestone gate is the physical Pixel demo and its acoustic/interrupt/TURN evidence.
+
+**2026-07-14T02:46:33Z**
+
+User physically verified ordinary Pixel voice conversation and basic app controls on 2026-07-13. Remaining M1 acceptance is the exact read_source/provenance phone scenario plus stricter captured latency, persisted-boundary resume, lock-screen/hardware, and network-path evidence.

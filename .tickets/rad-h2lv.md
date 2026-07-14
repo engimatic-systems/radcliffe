@@ -31,3 +31,7 @@ Fixed physical Pixel bootstrap failure found during demo: Build.MODEL included s
 **2026-07-13T04:37:37Z**
 
 Protocol v2 control/data interoperability is now live: the Pipecat adapter preserves binary Protobuf instead of decoding UTF-8; pause suppresses microphone turns, resume restores listening, interrupt flushes/cancels and returns listening, and worker ServerEvents drive Android thinking/speaking/listening plus user/model messages. Live harness measured interrupt acknowledgement at 51ms. Physical Pixel confirmation remains.
+
+**2026-07-14T02:46:33Z**
+
+User physically verified the v0.1.1 Pixel app connects, displays state, plays responses, and the on-screen interrupt, pause/resume, and end controls basically work. Persistent setup fields, automatic sessions, recent-session navigation, lock-screen/hardware evidence, and context usage UI remain follow-up work.
