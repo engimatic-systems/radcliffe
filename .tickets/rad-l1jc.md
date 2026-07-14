@@ -39,3 +39,7 @@ Physical exploratory run confirms the basic Pixel voice/control loop. It also su
 **2026-07-14T05:26:25Z**
 
 Oxford-derived black-box harness now creates an isolated LiveKit session and temporary worker store, paces seeded microphone WAVs in real time, captures heard agent audio into a timeline WAV, cross-checks Protocol v2 state/envelopes, and retains inputs/log/report. Local provider run passed pause suppression, exact normal and Cosmic-command STT, five consecutive <5s responses (2.144-2.680s), model content, 9ms interrupt acknowledgement, and 44ms audible stop. Evidence: artifacts/voice-conformance/20260714T052441Z/report.json. Routine backend/audio verification is now local; phone review remains for Android/WebRTC/UI behavior.
+
+**2026-07-14T12:02:23Z**
+
+2026-07-14 conformance hardening added real speech replacement and provider cold-readiness. After explicitly unloading qwen3:8b and restarting the Sidecar, health was withheld until the model was resident; the complete local run then passed first audio at 2.651 s, tap audible stop at 57 ms, and speech-barge audible stop at 208 ms. Report: artifacts/voice-conformance/20260714T120038Z/report.json.

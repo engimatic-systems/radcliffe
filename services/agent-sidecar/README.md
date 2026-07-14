@@ -30,6 +30,16 @@ For the private local profile, set `RADCLIFFE_MODEL_PROVIDER=ollama`,
 OpenAI-compatible streaming and tool-call endpoint with the ignored local key
 `ollama`; no provider credential or prompt leaves the Mac.
 
+Before reporting healthy, the sidecar loads the selected Ollama model through
+the loopback native API. `RADCLIFFE_OLLAMA_KEEP_ALIVE` controls residency and
+defaults to `-1` (retain until Ollama stops), preventing an idle model unload
+from turning the next voice response into a cold-start latency failure.
+
 `PiAgentOrchestrator` is the replacement seam. Another loop can implement the
 same `run(TurnRequest, emit, signal)` contract without changing envelopes,
 projection policy, tools, Android, or playback state.
+
+`GET /healthz` exposes content-free `active_turns` and cumulative
+`cancelled_turns` counters. The external conformance suite uses them to prove
+that speech replacement closes the abandoned HTTP stream; neither prompts nor
+model output are included.

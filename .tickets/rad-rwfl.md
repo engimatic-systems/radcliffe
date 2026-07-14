@@ -36,3 +36,7 @@ Core implementation on fix/generation-safe-voice-turns: endpoint task cancellati
 **2026-07-14T05:26:25Z**
 
 Added a configurable 30s maximum utterance boundary so intermittent noise/echo cannot recreate the observed 34.8s endpoint; unit coverage injects voiced spikes and proves bounded finalization. The seeded corpus now covers natural pauses, noise, echo, and frame loss, and the end-to-end LiveKit suite remains under the latency budget. Keep open for the remaining explicit long-pause/barge-in/echo ownership matrix.
+
+**2026-07-14T12:02:23Z**
+
+2026-07-14 automated live speech-barge matrix increment passed: the harness interrupted a currently audible long response with a replacement utterance, observed the old Sidecar stream close, stopped old audio in 208 ms, and returned only the replacement answer. Existing acoustic fixtures cover short natural pause, background noise, speaker echo, and frame loss. Remaining acceptance work is the explicit long-pause/echo ownership matrix, so this ticket stays open.

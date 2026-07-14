@@ -43,3 +43,7 @@ Physical Pixel verification passed the basic local loop on 2026-07-13: microphon
 **2026-07-14T05:26:25Z**
 
 Five consecutive real local-provider turns now pass through the black-box LiveKit harness at 2.680s, 2.144s, 2.221s, 2.186s, and 2.509s from synthetic speech end to heard output. Qwen3 hidden thinking was the latency defect: Pi now emits Ollama reasoning_effort=none, reducing the previous 4.5-5.5s run without weakening the 5s gate. STT/TTS/Ollama remain local. Full make check and make check-voice-local pass.
+
+**2026-07-14T12:02:23Z**
+
+2026-07-14 local-provider readiness no longer depends on an accidentally warm Ollama cache. Sidecar startup now loads qwen3:8b through Ollama's native API and retains it by default before reporting healthy. A forced-unload restart followed by the full live suite passed first audio at 2.651 s and all cancellation checks.
