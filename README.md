@@ -100,6 +100,13 @@ the loopback Ollama API. Ollama and Whisper each require a one-time model
 download; after both models are cached, turns require no model-provider network
 access.
 
+The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
+before finalizing an utterance. Tune those local VAD heuristics with
+`RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
+`RADCLIFFE_ENDPOINT_RMS`. If a later endpoint does arrive while a turn is
+active, the newer transcript deterministically supersedes and awaits the old
+turn before model work begins.
+
 With the local services and `radcliffe-demo` worker running, exercise the same
 LiveKit audio and Protocol v2 paths without a phone:
 

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity, SourceKind
 
 RENDER_PROJECTION_VERSION = "render-v1"
-CONTEXT_PROJECTION_VERSION = "context-v1"
+CONTEXT_PROJECTION_VERSION = "context-v2"
+TURN_ID_METADATA = "radcliffe.turn_id"
+TURN_EVENT_METADATA = "radcliffe.event"
+TURN_DISPOSITION_METADATA = "radcliffe.turn_disposition"
+TURN_DISPOSITION_EVENT = "turn_disposition"
+EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])(?:[\"')\]]*)\s+")
 
 
@@ -83,10 +88,13 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
         SourceKind.TEXT_SOURCE: "source",
         SourceKind.SYSTEM: "system",
     }[envelope.source]
-    include = envelope.sensitivity is not Sensitivity.SECRET
+    is_disposition = envelope.metadata.get(TURN_EVENT_METADATA) == TURN_DISPOSITION_EVENT
+    include = envelope.sensitivity is not Sensitivity.SECRET and not is_disposition
     text = envelope.content.inline_text or ""
-    if not include:
+    if envelope.sensitivity is Sensitivity.SECRET:
         text = "[redacted: secret envelope]"
+    elif is_disposition:
+        text = "[excluded: turn disposition audit]"
     annotations = tuple(
         sorted(
             {
@@ -109,10 +117,38 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
     )
 
 
+def context_replay(envelopes: tuple[MessageEnvelope, ...]) -> tuple[ContextPacket, ...]:
+    dispositions: dict[str, str] = {}
+    for envelope in envelopes:
+        if envelope.metadata.get(TURN_EVENT_METADATA) != TURN_DISPOSITION_EVENT:
+            continue
+        turn_id = envelope.metadata.get(TURN_ID_METADATA)
+        disposition = envelope.metadata.get(TURN_DISPOSITION_METADATA)
+        if turn_id and disposition:
+            dispositions[turn_id] = disposition
+
+    packets: list[ContextPacket] = []
+    for envelope in envelopes:
+        packet = context_projection(envelope)
+        turn_id = envelope.metadata.get(TURN_ID_METADATA)
+        disposition = dispositions.get(turn_id, "") if turn_id else ""
+        if disposition in EXCLUDED_TURN_DISPOSITIONS:
+            annotations = dict(packet.annotations)
+            annotations[TURN_DISPOSITION_METADATA] = disposition
+            packet = replace(
+                packet,
+                content=f"[excluded: {disposition} turn]",
+                annotations=tuple(sorted(annotations.items())),
+                include=False,
+            )
+        packets.append(packet)
+    return tuple(packets)
+
+
 def project_replay(
     envelopes: tuple[MessageEnvelope, ...],
 ) -> tuple[tuple[RenderPlan, ...], tuple[ContextPacket, ...]]:
     return (
         tuple(render_projection(envelope) for envelope in envelopes),
-        tuple(context_projection(envelope) for envelope in envelopes),
+        context_replay(envelopes),
     )
