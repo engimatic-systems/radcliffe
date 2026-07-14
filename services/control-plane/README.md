@@ -24,3 +24,23 @@ Catalog rows and envelope events share the configured SQLite/WAL database.
 Envelope, playback, and tool-call inserts advance session recency through
 database triggers, so ordering survives worker and control-plane restarts.
 Schema migrations are incremental and recorded in `schema_migrations`.
+
+## Managed workers
+
+Server-generated sessions use a control-plane-owned local worker supervisor;
+explicit compatibility sessions such as `radcliffe-demo` remain external. The
+supervisor starts at most one media-worker process per active generated session,
+reconciles recent sessions after a graceful control-plane restart, stops workers
+when a session ends or exceeds `RADCLIFFE_WORKER_IDLE_SECONDS`, and stores only a
+safe lifecycle status in catalog responses. Child environments exclude the
+bootstrap token, LiveKit API secret, and disabled cloud-provider keys. Per-session
+logs live under `RADCLIFFE_WORKER_LOG_DIRECTORY` (default `var/workers`).
+Compatibility sessions report `external` rather than pretending that the
+control-plane supervisor can observe their separately launched worker.
+
+Run the real local dispatch check after LiveKit, the sidecar, and the control
+plane are healthy:
+
+```sh
+make check-worker-dispatch-local
+```

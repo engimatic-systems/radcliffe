@@ -24,3 +24,7 @@ After configuration, app launch shows recent sessions ordered by server last act
 **2026-07-14T03:35:26Z**
 
 Automatic random sessions remain deferred: the current local media worker is pinned to radcliffe-demo, so generating a new room in the Android client would create a room without an agent. The persisted-profile APK retains radcliffe-demo as a saved compatibility setting until the durable server catalog and worker lifecycle in rad-lod5 are available.
+
+**2026-07-14T11:53:12Z**
+
+Backend prerequisites are now implemented: rad-lod5 provides the durable generated-ID/recent-session API and rad-yk82 dispatches exactly one managed media worker for generated rooms. Android can now replace the compatibility session field with automatic create/reopen behavior once the profile PR chain lands.

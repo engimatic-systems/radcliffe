@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -22,6 +24,14 @@ from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 
 from radcliffe_control.settings import Settings
+from radcliffe_control.workers import (
+    LocalWorkerLauncher,
+    WorkerLauncher,
+    WorkerLaunchError,
+    WorkerSupervisor,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _to_camel(value: str) -> str:
@@ -61,6 +71,7 @@ class SessionSummaryResponse(BaseModel):
     status: Literal["active", "ended", "archived"]
     protocol_version: int
     generation: int
+    worker_status: Literal["external", "stopped", "starting", "running", "failed"]
 
 
 class SessionResponse(SessionSummaryResponse):
@@ -115,6 +126,8 @@ class Runtime:
     gateway: ToolGateway
     sessions: dict[str, ActiveSession]
     lock: asyncio.Lock
+    workers: WorkerSupervisor | None
+    worker_maintenance: asyncio.Task[None] | None
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -132,10 +145,52 @@ def _summary(record: SessionRecord) -> SessionSummaryResponse:
         status=record.status,  # type: ignore[arg-type]
         protocol_version=record.protocol_version,
         generation=record.generation,
+        worker_status=("external" if record.worker_mode == "external" else record.worker_status),  # type: ignore[arg-type]
     )
 
 
-def create_app(provided_settings: Settings | None = None) -> FastAPI:
+def _room_token(
+    settings: Settings,
+    record: SessionRecord,
+    *,
+    participant_identity: str,
+    role: Literal["client", "worker"],
+) -> str:
+    sources = ["microphone"] if role == "client" else None
+    return (
+        api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
+        .with_identity(participant_identity)
+        .with_ttl(timedelta(seconds=settings.room_token_ttl_seconds))
+        .with_attributes(
+            {
+                "radcliffe.protocol": str(record.protocol_version),
+                "radcliffe.generation": str(record.generation),
+                "radcliffe.token_nonce": uuid4().hex,
+            }
+        )
+        .with_grants(
+            api.VideoGrants(
+                room_join=True,
+                room=record.session_id,
+                can_publish=True,
+                can_subscribe=True,
+                can_publish_data=True,
+                can_publish_sources=sources,
+            )
+        )
+        .to_jwt()
+    )
+
+
+def _worker_identity(session_id: str) -> str:
+    digest = hashlib.sha256(session_id.encode()).hexdigest()[:16]
+    return f"radcliffe-worker-{digest}"
+
+
+def create_app(
+    provided_settings: Settings | None = None,
+    worker_launcher: WorkerLauncher | None = None,
+) -> FastAPI:
     runtime: Runtime | None = None
 
     @asynccontextmanager
@@ -144,16 +199,60 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
         settings = provided_settings or Settings()
         store = EventStore(settings.database_path)
         await store.migrate()
+        catalog = SessionCatalog(settings.database_path)
+        workers: WorkerSupervisor | None = None
+        if settings.managed_workers_enabled:
+            launcher = worker_launcher or LocalWorkerLauncher(
+                command=(
+                    str(settings.worker_uv_bin),
+                    "run",
+                    "python",
+                    "-m",
+                    "radcliffe_media.production",
+                ),
+                workspace_root=settings.worker_workspace_root,
+                log_directory=settings.worker_log_directory,
+                database_path=settings.database_path,
+                livekit_url=settings.livekit_url,
+                token_factory=lambda record: _room_token(
+                    settings,
+                    record,
+                    participant_identity=_worker_identity(record.session_id),
+                    role="worker",
+                ),
+            )
+            workers = WorkerSupervisor(
+                catalog=catalog,
+                principal_id=settings.owner_id,
+                launcher=launcher,
+                stop_timeout_seconds=settings.worker_stop_timeout_seconds,
+            )
         runtime = Runtime(
             settings,
             store,
-            SessionCatalog(settings.database_path),
+            catalog,
             ToolGateway(store),
             {},
             asyncio.Lock(),
+            workers,
+            None,
         )
-        yield
-        runtime = None
+        await reconcile_workers(runtime)
+        if workers is not None:
+            runtime.worker_maintenance = asyncio.create_task(
+                maintain_workers(runtime),
+                name="radcliffe-worker-maintenance",
+            )
+        try:
+            yield
+        finally:
+            if runtime.worker_maintenance is not None:
+                runtime.worker_maintenance.cancel()
+                with suppress(asyncio.CancelledError):
+                    await runtime.worker_maintenance
+            if runtime.workers is not None:
+                await runtime.workers.close()
+            runtime = None
 
     app = FastAPI(title="Radcliffe Control Plane", version="0.1.0", lifespan=lifespan)
 
@@ -165,6 +264,32 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok" if runtime is not None else "starting"}
+
+    async def reconcile_workers(active: Runtime) -> None:
+        if active.workers is None:
+            return
+        active_since = datetime.now(UTC) - timedelta(seconds=active.settings.worker_idle_seconds)
+        records = await active.catalog.managed_active_since(
+            principal_id=active.settings.owner_id,
+            active_since=active_since,
+        )
+        await active.workers.reconcile(records)
+
+    async def maintain_workers(active: Runtime) -> None:
+        while True:
+            await asyncio.sleep(active.settings.worker_reconcile_seconds)
+            try:
+                await reconcile_workers(active)
+            except Exception:
+                logger.exception("managed worker reconciliation failed")
+
+    async def ensure_worker(active: Runtime, record: SessionRecord) -> SessionRecord:
+        if active.workers is None or record.worker_mode != "managed":
+            return record
+        try:
+            return await active.workers.ensure(record)
+        except WorkerLaunchError as exc:
+            raise HTTPException(status_code=503, detail="media worker failed to start") from exc
 
     async def issue_credentials(
         *,
@@ -190,32 +315,11 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
         async with active.lock:
             active.sessions[record.session_id] = ActiveSession(record.generation, grant)
 
-        sources = ["microphone"] if role == "client" else None
-        token = (
-            api.AccessToken(
-                active.settings.livekit_api_key,
-                active.settings.livekit_api_secret,
-            )
-            .with_identity(participant_identity)
-            .with_ttl(timedelta(seconds=active.settings.room_token_ttl_seconds))
-            .with_attributes(
-                {
-                    "radcliffe.protocol": str(record.protocol_version),
-                    "radcliffe.generation": str(record.generation),
-                    "radcliffe.token_nonce": uuid4().hex,
-                }
-            )
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=record.session_id,
-                    can_publish=True,
-                    can_subscribe=True,
-                    can_publish_data=True,
-                    can_publish_sources=sources,
-                )
-            )
-            .to_jwt()
+        token = _room_token(
+            active.settings,
+            record,
+            participant_identity=participant_identity,
+            role=role,
         )
         return SessionResponse(
             **_summary(refreshed).model_dump(),
@@ -241,6 +345,7 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
             )
         except SessionConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        record = await ensure_worker(active, record)
         return await issue_credentials(
             active=active,
             record=record,
@@ -300,6 +405,17 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
         )
         if record is None:
             raise HTTPException(status_code=404, detail="session not found")
+        if active.workers is not None and record.worker_mode == "managed":
+            if record.status == "active":
+                record = await ensure_worker(active, record)
+            else:
+                await active.workers.stop(record.session_id)
+                refreshed = await active.catalog.get(
+                    principal_id=active.settings.owner_id,
+                    session_id=record.session_id,
+                )
+                assert refreshed is not None
+                record = refreshed
         return _summary(record)
 
     @app.post(
@@ -319,6 +435,7 @@ def create_app(provided_settings: Settings | None = None) -> FastAPI:
         )
         if record is None:
             raise HTTPException(status_code=404, detail="session not found")
+        record = await ensure_worker(active, record)
         return await issue_credentials(
             active=active,
             record=record,

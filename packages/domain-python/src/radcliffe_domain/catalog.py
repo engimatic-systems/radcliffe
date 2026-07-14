@@ -29,6 +29,8 @@ class SessionRecord:
     status: str
     protocol_version: int
     generation: int
+    worker_mode: str
+    worker_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,8 @@ def _row_to_record(row: aiosqlite.Row) -> SessionRecord:
         status=str(row["status"]),
         protocol_version=int(row["protocol_version"]),
         generation=int(row["generation"]),
+        worker_mode=str(row["worker_mode"]),
+        worker_status=str(row["worker_status"]),
     )
 
 
@@ -101,6 +105,7 @@ class SessionCatalog:
     ) -> tuple[SessionRecord, bool]:
         now = self.clock().astimezone(UTC).isoformat()
         generated = session_id is None
+        worker_mode = "managed" if generated else "external"
         attempts = 4 if generated else 1
         for _attempt in range(attempts):
             candidate = session_id or self.id_factory()
@@ -132,8 +137,9 @@ class SessionCatalog:
                     await db.execute(
                         """INSERT INTO sessions(
                             session_id, principal_id, idempotency_key, created_at,
-                            last_activity_at, title, status, protocol_version, generation
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 1)""",
+                            last_activity_at, title, status, protocol_version, generation,
+                            worker_mode, worker_status, worker_updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, 'stopped', ?)""",
                         (
                             candidate,
                             principal_id,
@@ -142,6 +148,8 @@ class SessionCatalog:
                             now,
                             title,
                             protocol_version,
+                            worker_mode,
+                            now,
                         ),
                     )
                     await db.commit()
@@ -235,3 +243,41 @@ class SessionCatalog:
         if cursor.rowcount == 0:
             return None
         return await self.get(principal_id=principal_id, session_id=session_id)
+
+    async def set_worker_status(
+        self,
+        *,
+        principal_id: str,
+        session_id: str,
+        worker_status: str,
+    ) -> SessionRecord | None:
+        timestamp = self.clock().astimezone(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """UPDATE sessions SET worker_status = ?, worker_updated_at = ?
+                WHERE principal_id = ? AND session_id = ?""",
+                (worker_status, timestamp, principal_id, session_id),
+            )
+            await db.commit()
+        if cursor.rowcount == 0:
+            return None
+        return await self.get(principal_id=principal_id, session_id=session_id)
+
+    async def managed_active_since(
+        self,
+        *,
+        principal_id: str,
+        active_since: datetime,
+    ) -> tuple[SessionRecord, ...]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (
+                await db.execute(
+                    """SELECT * FROM sessions
+                    WHERE principal_id = ? AND worker_mode = 'managed'
+                    AND status = 'active' AND last_activity_at >= ?
+                    ORDER BY last_activity_at DESC, session_id DESC""",
+                    (principal_id, active_since.astimezone(UTC).isoformat()),
+                )
+            ).fetchall()
+        return tuple(_row_to_record(row) for row in rows)
