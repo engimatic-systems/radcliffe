@@ -18,3 +18,9 @@ Replace the manually typed session field with a home screen that creates session
 
 After configuration, app launch shows recent sessions ordered by server last activity descending; each row shows a stable title or fallback label and human-readable date; New session requests a server-generated ID and starts without exposing the ID as required input; selecting a recent session obtains a fresh room token and restores its persisted message timeline before connecting; returning from a session refreshes recency; loading, empty, offline, expired-auth, pagination, and retry states are accessible and tested; process recreation retains the selected session without duplicating it; and an advanced diagnostics view may expose the raw session ID without making it normal UI.
 
+
+## Notes
+
+**2026-07-14T03:35:26Z**
+
+Automatic random sessions remain deferred: the current local media worker is pinned to radcliffe-demo, so generating a new room in the Android client would create a room without an agent. The persisted-profile APK retains radcliffe-demo as a saved compatibility setting until the durable server catalog and worker lifecycle in rad-lod5 are available.
