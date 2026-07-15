@@ -73,6 +73,85 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_source_resolves_narrow_spoken_markdown_filename(tmp_path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    fixture = source_root / "radcliffe-demo.md"
+    fixture.write_text("Canonical spoken path source.\n")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    result = await ToolGateway(store).read_source(
+        call_id="spoken-path",
+        idempotency_key="spoken-path",
+        session_id="s1",
+        generation=1,
+        grant=grant(source_root),
+        raw_arguments={"path": "Radcliffe dash demo dot M D"},
+    )
+
+    assert result.canonical_bytes == fixture.read_bytes()
+    assert result.source_envelope.provenance.display_name == "radcliffe-demo.md"
+    assert result.call_envelope.content.inline_text == ('{"path":"Radcliffe dash demo dot M D"}')
+
+
+@pytest.mark.asyncio
+async def test_read_source_denies_missing_markdown_as_a_tool_decision(tmp_path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    with pytest.raises(ToolDeniedError, match="readable roots"):
+        await ToolGateway(store).read_source(
+            call_id="missing",
+            idempotency_key="missing",
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "missing.md"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_source_prefers_exact_name_over_case_folded_ambiguity(tmp_path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    exact = source_root / "demo.md"
+    exact.write_text("Exact case wins.\n")
+    differently_cased = source_root / "DEMO.md"
+    try:
+        differently_cased.write_text("Other case.\n")
+    except OSError:
+        pytest.skip("filesystem does not support case-distinct filenames")
+    if exact.samefile(differently_cased):
+        pytest.skip("filesystem is case-insensitive")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    result = await ToolGateway(store).read_source(
+        call_id="exact-case",
+        idempotency_key="exact-case",
+        session_id="s1",
+        generation=1,
+        grant=grant(source_root),
+        raw_arguments={"path": "demo.md"},
+    )
+
+    assert result.canonical_bytes == b"Exact case wins.\n"
+
+    with pytest.raises(ToolDeniedError, match="readable roots"):
+        await ToolGateway(store).read_source(
+            call_id="ambiguous-case",
+            idempotency_key="ambiguous-case",
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "DeMo.md"},
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["../secret.md", "/tmp/secret.md", "source.txt"])
 async def test_read_source_denies_unsafe_paths(tmp_path, path: str) -> None:
     source_root = tmp_path / "sources"

@@ -31,3 +31,7 @@ User physically verified ordinary Pixel voice conversation and basic app control
 **2026-07-15T03:54:21Z**
 
 2026-07-14 automated milestone evidence now includes the exact source plus persisted-boundary pause/resume: pause 3ms, audible stop 67ms, resume audio 535ms, one source envelope/tool execution, final boundary 4. Next manual gate is frontend/device behavior on the existing Pixel app: visible source provenance and app/notification pause-resume while hearing the fixture.
+
+**2026-07-15T04:12:34Z**
+
+2026-07-14 Pixel source-read failure was not an OS permission failure: Whisper/model supplied the literal spoken path 'Radcliffe dash demo dot MD'. Added literal-first, narrowly scoped spoken Markdown filename normalization while preserving original audited arguments and rooted traversal controls. Full suite passes and a deployed control-plane smoke resolved the request to fixtures/sources/radcliffe-demo.md.

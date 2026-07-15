@@ -497,6 +497,13 @@ no severity-one loss of data, privacy, or recoverable session continuity.
    deterministic render path.
 7. Run the Milestone 1 conformance scenarios and record the Pixel demo.
 
+Voice-originated source requests may normalize only a small, documented set of
+filename punctuation after an exact path lookup fails: `dash` or `hyphen`
+between words and a terminal `dot M D`. The gateway must retain the original
+tool arguments in its audit event, resolve the normalized candidate beneath an
+explicit readable root, reject traversal and ambiguous case-insensitive
+matches, and keep the canonical source bytes out of the model context.
+
 Ticket-sized commits should follow that order on
 `epic/radcliffe-foundation`. The completed branch is reviewed and merged as one
 major Milestone 1 PR.

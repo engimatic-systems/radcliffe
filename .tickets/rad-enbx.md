@@ -2,7 +2,7 @@
 id: rad-enbx
 status: open
 deps: [rad-214n, rad-rwfl, rad-mp26, rad-4myy]
-links: [rad-l1jc, rad-rwfl, rad-ghti, rad-9e2z]
+links: [rad-l1jc, rad-rwfl, rad-ghti, rad-9e2z, rad-fvx9]
 created: 2026-07-14T02:48:09Z
 type: task
 priority: 1

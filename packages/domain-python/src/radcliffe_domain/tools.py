@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
@@ -13,6 +14,8 @@ from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.store import EventStore, ToolAudit
 
 MAX_SOURCE_BYTES = 1024 * 1024
+_SPOKEN_DASH = re.compile(r"\s+(?:dash|hyphen)\s+", re.IGNORECASE)
+_SPOKEN_MARKDOWN_SUFFIX = re.compile(r"\s+dot\s+m\s*d\s*$", re.IGNORECASE)
 
 
 class ToolDeniedError(PermissionError):
@@ -188,27 +191,49 @@ class ToolGateway:
 
     @staticmethod
     def _resolve(requested: str, roots: tuple[Path, ...]) -> Path:
-        relative = PurePath(requested)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ToolDeniedError("path traversal is not permitted")
-        if relative.suffix.lower() != ".md":
+        requested_paths = ToolGateway._requested_paths(requested)
+        markdown_candidate = False
+        for requested_path in requested_paths:
+            relative = PurePath(requested_path)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ToolDeniedError("path traversal is not permitted")
+            if relative.suffix.lower() != ".md":
+                continue
+            markdown_candidate = True
+            for root in roots:
+                resolved_root = root.resolve(strict=True)
+                try:
+                    candidate = ToolGateway._resolve_beneath_root(resolved_root, relative)
+                except OSError:
+                    continue
+                if candidate.is_file():
+                    return candidate
+        if not markdown_candidate:
             raise ToolDeniedError("only Markdown sources are permitted")
-        for root in roots:
-            resolved_root = root.resolve(strict=True)
-            candidate = (resolved_root / relative).resolve(strict=True)
-            if candidate.is_relative_to(resolved_root) and candidate.is_file():
-                return ToolGateway._canonical_case(candidate)
         raise ToolDeniedError("source is outside the readable roots")
 
     @staticmethod
-    def _canonical_case(candidate: Path) -> Path:
-        entries = tuple(candidate.parent.iterdir())
-        for entry in entries:
-            if entry.name == candidate.name and entry.samefile(candidate):
-                return entry.resolve(strict=True)
-        for entry in entries:
-            if entry.name.casefold() == candidate.name.casefold() and entry.samefile(candidate):
-                return entry.resolve(strict=True)
+    def _requested_paths(requested: str) -> tuple[str, ...]:
+        literal = requested.strip()
+        spoken = _SPOKEN_DASH.sub("-", literal)
+        spoken = _SPOKEN_MARKDOWN_SUFFIX.sub(".md", spoken)
+        return (literal,) if spoken == literal else (literal, spoken)
+
+    @staticmethod
+    def _resolve_beneath_root(root: Path, relative: PurePath) -> Path:
+        """Resolve an exact or unambiguous case-insensitive path below root."""
+        candidate = root
+        for part in relative.parts:
+            entries = tuple(candidate.iterdir())
+            exact = tuple(entry for entry in entries if entry.name == part)
+            matches = exact or tuple(
+                entry for entry in entries if entry.name.casefold() == part.casefold()
+            )
+            if len(matches) != 1:
+                raise FileNotFoundError(part)
+            candidate = matches[0].resolve(strict=True)
+            if not candidate.is_relative_to(root):
+                raise ToolDeniedError("source is outside the readable roots")
         return candidate
 
     @staticmethod
