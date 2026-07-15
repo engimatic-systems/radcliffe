@@ -79,6 +79,14 @@ class SessionHomeTest {
         assertEquals(null, appended.problem)
     }
 
+    @Test
+    fun failedPreflightKeepsItsErrorWhileEndedConversationRefreshesHome() {
+        assertFalse(shouldRefreshSessionHome(VoiceState.CONNECTING, VoiceState.IDLE))
+        assertFalse(shouldRefreshSessionHome(VoiceState.FAILED, VoiceState.IDLE))
+        assertTrue(shouldRefreshSessionHome(VoiceState.LISTENING, VoiceState.IDLE))
+        assertTrue(shouldRefreshSessionHome(VoiceState.PAUSED, VoiceState.IDLE))
+    }
+
     private fun assertIndicator(
         percentage: Double,
         severity: ContextSeverity,

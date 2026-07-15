@@ -217,7 +217,7 @@ object SessionApi {
         )
     }
 
-    private fun parseCredentials(json: JSONObject): SessionCredentials = SessionCredentials(
+    internal fun parseCredentials(json: JSONObject): SessionCredentials = SessionCredentials(
         liveKitUrl = json.getString("livekit_url"),
         roomName = json.getString("room_name"),
         participantToken = json.getString("participant_token"),

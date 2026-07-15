@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
         }
 
         LaunchedEffect(state) {
-            if (state == VoiceState.IDLE && previousVoiceState != VoiceState.IDLE) {
+            if (shouldRefreshSessionHome(previousVoiceState, state)) {
                 refreshKey += 1
             }
             previousVoiceState = state
@@ -139,7 +139,6 @@ class MainActivity : ComponentActivity() {
                                 profile.bootstrapToken,
                                 idempotencyKey,
                             )
-                            profiles.selectSession(credentials.roomName)
                             Triple(credentials, emptyList(), credentials.roomName)
                         }
                         is SessionAction.Open -> {
@@ -153,14 +152,35 @@ class MainActivity : ComponentActivity() {
                                 profile.bootstrapToken,
                                 action.sessionId,
                             )
-                            profiles.selectSession(action.sessionId)
                             Triple(credentials, timeline, action.sessionId)
                         }
                     }
                 }
             }.onSuccess { (credentials, timeline, sessionId) ->
                 SessionModel.open(sessionId, timeline)
-                startVoiceService(credentials)
+                runCatching { startVoiceService(credentials) }
+                    .onSuccess {
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    profiles.selectSession(sessionId)
+                                }
+                            }.onFailure { error ->
+                                SessionModel.message(
+                                    DisplayMessage(
+                                        "selection-persistence-error",
+                                        MessageKind.SYSTEM,
+                                        "Conversation connected, but its selection could not be saved: " +
+                                            (error.message ?: "local preference error"),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                    .onFailure { error ->
+                        SessionModel.state(VoiceState.IDLE)
+                        homeState = sessionHomeFailure(homeState, error)
+                    }
             }.onFailure { error ->
                 SessionModel.state(VoiceState.IDLE)
                 homeState = sessionHomeFailure(homeState, error)

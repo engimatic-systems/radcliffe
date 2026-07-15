@@ -95,6 +95,13 @@ internal fun sessionHomeFailure(
     problemDetail = error.message,
 )
 
+internal fun shouldRefreshSessionHome(previous: VoiceState, current: VoiceState): Boolean =
+    current == VoiceState.IDLE && previous !in setOf(
+        VoiceState.IDLE,
+        VoiceState.CONNECTING,
+        VoiceState.FAILED,
+    )
+
 enum class ContextSeverity { NORMAL, WARNING, NEAR_LIMIT, OVER_LIMIT, UNKNOWN, UNAVAILABLE }
 
 data class ContextIndicatorModel(

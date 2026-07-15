@@ -93,4 +93,30 @@ class SessionApiTest {
         assertEquals("demo.md", page.messages.last().provenance)
         assertEquals(2L, page.nextAfter)
     }
+
+    @Test
+    fun credentialParserAcceptsTheGeneratedAndReopenResponseContract() {
+        val credentials = SessionApi.parseCredentials(
+            JSONObject(
+                """{
+                    "session_id": "ses_abc123",
+                    "created_at": "2026-07-15T02:47:20Z",
+                    "last_activity_at": "2026-07-15T02:47:21Z",
+                    "title": null,
+                    "status": "active",
+                    "protocol_version": 2,
+                    "generation": 1,
+                    "worker_status": "running",
+                    "livekit_url": "ws://192.168.18.71:7880",
+                    "room_name": "ses_abc123",
+                    "participant_token": "header.payload.signature",
+                    "expires_in_seconds": 600
+                }""".trimIndent(),
+            ),
+        )
+
+        assertEquals("ws://192.168.18.71:7880", credentials.liveKitUrl)
+        assertEquals("ses_abc123", credentials.roomName)
+        assertEquals("header.payload.signature", credentials.participantToken)
+    }
 }
