@@ -390,10 +390,20 @@ TTS, plus end-to-end acoustic evaluation against audio produced on real devices.
   the permitted work to a capability worker.
 - Tool results and streamed updates return through the gateway, are persisted
   as canonical envelopes, and are then supplied to Pi as typed tool results.
+  For deterministic rendering, the gateway also carries the authorized
+  `TEXT_SOURCE` envelope through Pi's structured `details` field. Only the
+  content-free authorization notice enters the model-visible tool-result
+  content. The media worker validates the envelope's session, message ID,
+  content hash, source kind, and provenance hash before persisting and
+  rendering it; this works whether gateway and worker stores are shared or
+  isolated.
   Tool cancellation propagates from the Radcliffe operation token through Pi’s
   abort signal to the capability worker.
 - Each session receives explicit capability grants: readable roots, writable
   roots, allowed web domains, maximum download sizes, and permitted actions.
+  The control plane monotonically ratchets the active operation generation on
+  authenticated tool calls, refreshes the in-memory grant for a newer
+  generation, and rejects later calls from an older interrupted operation.
 - Filesystem resolution uses safe path containment, symlink policy, and a
   sandboxed tool worker. “Live” mode must still be capability scoped.
 - Destructive writes, downloads, shell execution, or privilege changes require

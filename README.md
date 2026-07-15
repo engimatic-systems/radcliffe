@@ -133,8 +133,9 @@ make check-voice-local
 ```
 
 The current core covers command-level STT WER and vocabulary recall, multiple
-English voices, a natural pause, deterministic noise/echo/frame loss, paused
-microphone suppression, a normal response within five seconds, model-message
+English voices, natural and long clause pauses, deterministic
+noise/echo/frame loss, paused microphone suppression, consecutive responses
+within five seconds, an isolated-store canonical source/tool read, model-message
 publication, interrupt acknowledgement, and audible interruption. It does not
 store private phone microphone audio. Use `make benchmark-stt-local` to compare
 the current turbo model and full large-v3 on the identical generated corpus.
@@ -163,7 +164,8 @@ RADCLIFFE_CONTROL_URL=http://127.0.0.1:8000 \
 ```
 
 The client synthesizes microphone input, proves paused speech does not become a
-turn, requires five consecutive responses within five seconds, verifies binary
-state/message events, and measures both interrupt acknowledgement and the last
-heard audio after interruption. Its isolated database, worker log, generated
-inputs, returned-audio timeline, and report are retained together.
+turn, requires consecutive responses within five seconds, verifies binary
+state/message events, validates an exact canonical source envelope across an
+isolated worker database, and measures both interrupt acknowledgement and the
+last heard audio after interruption. Its isolated database, worker log,
+generated inputs, returned-audio timeline, and report are retained together.

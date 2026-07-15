@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -9,6 +11,7 @@ from time import monotonic
 from typing import Protocol, cast
 from uuid import uuid4
 
+from google.protobuf.message import DecodeError
 from loguru import logger
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
@@ -27,6 +30,7 @@ from radcliffe_domain.session import (
     SessionEngine,
 )
 from radcliffe_domain.store import EventStore
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_media.sidecar import SidecarEvent
 
@@ -208,29 +212,20 @@ class VoicePipeline:
                     buffer += delta
                     buffer = await self._speak_complete_sentences(buffer, operation, turn)
             elif event.type == "tool_end" and not bool(event.payload.get("isError")):
-                source_id = self._source_message_id(event.payload.get("result"))
-                if source_id:
-                    source = next(
-                        (
-                            item
-                            for item in await self.store.replay(self.engine.session_id)
-                            if item.message_id == source_id
-                        ),
-                        None,
-                    )
-                    if source is not None:
-                        if self.engine.state is ConversationState.THINKING:
-                            await self._transition(
-                                ConversationState.READING,
-                                "source authorized",
-                                operation,
-                                turn,
-                            )
-                        if self.events is not None:
-                            await self.events.message(source)
-                        await self._speak_plan(source, operation, turn)
-                        source_rendered = True
-                        buffer = ""
+                source = await self._resolve_source(event.payload.get("result"))
+                if source is not None:
+                    if self.engine.state is ConversationState.THINKING:
+                        await self._transition(
+                            ConversationState.READING,
+                            "source authorized",
+                            operation,
+                            turn,
+                        )
+                    if self.events is not None:
+                        await self.events.message(source)
+                    await self._speak_plan(source, operation, turn)
+                    source_rendered = True
+                    buffer = ""
             elif event.type == "model_complete":
                 turn.model_text = str(event.payload.get("text", turn.model_text))
             elif event.type == "error":
@@ -573,12 +568,85 @@ class VoicePipeline:
         if operation is not None:
             self.engine.assert_current(operation)
 
+    async def _resolve_source(self, result: object) -> MessageEnvelope | None:
+        details = self._tool_details(result)
+        if details is None:
+            return None
+        source_id = self._detail_text(details, "sourceMessageId")
+        if source_id is None:
+            return None
+        encoded = self._detail_text(details, "sourceEnvelopeProtoBase64")
+        if encoded is None:
+            return next(
+                (
+                    item
+                    for item in await self.store.replay(self.engine.session_id)
+                    if item.message_id == source_id
+                ),
+                None,
+            )
+
+        try:
+            wire = base64.b64decode(encoded, validate=True)
+            transferred = MessageEnvelope.from_proto(protocol_pb2.MessageEnvelope.FromString(wire))
+        except (ValueError, KeyError, binascii.Error, DecodeError) as error:
+            raise ValueError("invalid canonical source envelope") from error
+        self._validate_source(transferred, source_id, details)
+
+        existing = next(
+            (
+                item
+                for item in await self.store.replay(self.engine.session_id)
+                if item.message_id == source_id
+            ),
+            None,
+        )
+        if existing is not None:
+            self._validate_source(existing, source_id, details)
+            if existing.content_sha256 != transferred.content_sha256:
+                raise ValueError("canonical source conflicts with persisted envelope")
+            return existing
+
+        async with self._append_lock:
+            proto = transferred.to_proto()
+            proto.sequence = await self.store.next_sequence(self.engine.session_id)
+            imported = MessageEnvelope.from_proto(proto)
+            await self.store.append(imported)
+        return imported
+
     @staticmethod
-    def _source_message_id(result: object) -> str | None:
+    def _tool_details(result: object) -> dict[object, object] | None:
         if not isinstance(result, dict):
             return None
         details = result.get("details")
         if not isinstance(details, dict):
             return None
-        value = details.get("sourceMessageId")
+        return details
+
+    @staticmethod
+    def _detail_text(details: dict[object, object], key: str) -> str | None:
+        value = details.get(key)
         return str(value) if value else None
+
+    def _validate_source(
+        self,
+        source: MessageEnvelope,
+        source_id: str,
+        details: dict[object, object],
+    ) -> None:
+        expected_hash = self._detail_text(details, "contentSha256")
+        expected_locator = self._detail_text(details, "locator")
+        if source.source is not SourceKind.TEXT_SOURCE:
+            raise ValueError("tool result did not carry a canonical text source")
+        if source.session_id != self.engine.session_id:
+            raise ValueError("canonical source belongs to another session")
+        if source.message_id != source_id:
+            raise ValueError("canonical source message ID does not match tool result")
+        if source.content.inline_text is None:
+            raise ValueError("canonical text source must be inline")
+        if expected_hash is None or source.content_sha256.hex() != expected_hash:
+            raise ValueError("canonical source hash does not match tool result")
+        if source.provenance.source_sha256 != source.content_sha256:
+            raise ValueError("canonical source provenance hash does not match content")
+        if expected_locator is not None and source.provenance.locator != expected_locator:
+            raise ValueError("canonical source locator does not match tool result")

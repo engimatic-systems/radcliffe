@@ -43,3 +43,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-14T12:02:23Z**
 
 2026-07-14 conformance hardening added real speech replacement and provider cold-readiness. After explicitly unloading qwen3:8b and restarting the Sidecar, health was withheld until the model was resident; the complete local run then passed first audio at 2.651 s, tap audible stop at 57 ms, and speech-barge audible stop at 208 ms. Report: artifacts/voice-conformance/20260714T120038Z/report.json.
+
+**2026-07-15T03:43:46Z**
+
+2026-07-14 the external LiveKit harness now exercises the real Pi read_source loop across an isolated worker database. The control plane transports the authorized protobuf source envelope through structured non-content tool details; the worker validates session/ID/kind/hash/provenance before local persistence and exact rendering. The passing report proves the 252-byte fixture and both SHA-256 fields, READING state, 2.857s source audio, five sub-5s responses, 8ms tap acknowledgement, and 206ms speech-barge acknowledgement: artifacts/voice-conformance/20260715T034110Z/report.json. The run also caught and fixed stale capability generations after interruption.

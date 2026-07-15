@@ -1,6 +1,10 @@
+import base64
+
 from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
+from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 
 def settings(tmp_path) -> Settings:
@@ -60,6 +64,15 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         body = tool.json()
         assert "Canonical source text" not in body["modelContent"]
         assert body["details"]["sourceMessageId"] == "source:call-1"
+        source = MessageEnvelope.from_proto(
+            protocol_pb2.MessageEnvelope.FromString(
+                base64.b64decode(body["details"]["sourceEnvelopeProtoBase64"], validate=True)
+            )
+        )
+        assert source.source is SourceKind.TEXT_SOURCE
+        assert source.content.inline_text == "# Exact\n\nCanonical source text.\n"
+        assert source.content_sha256.hex() == body["details"]["contentSha256"]
+        assert source.provenance.locator == body["details"]["locator"]
 
         camel_case_tool = client.post(
             "/v1/tool-calls",
@@ -74,3 +87,32 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             },
         )
         assert camel_case_tool.status_code == 200
+
+        next_generation = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "sessionId": "session-1",
+                "generation": 2,
+                "callId": "call-3",
+                "idempotencyKey": "idem-3",
+                "toolName": "read_source",
+                "arguments": {"path": "demo.md"},
+            },
+        )
+        assert next_generation.status_code == 200
+
+        stale_generation = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "sessionId": "session-1",
+                "generation": 1,
+                "callId": "call-4",
+                "idempotencyKey": "idem-4",
+                "toolName": "read_source",
+                "arguments": {"path": "demo.md"},
+            },
+        )
+        assert stale_generation.status_code == 403
+        assert stale_generation.json()["detail"] == "stale operation generation"

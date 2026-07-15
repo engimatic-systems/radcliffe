@@ -40,3 +40,7 @@ First Oxford-derived increment is now executable via make check-voice-local with
 **2026-07-14T12:35:29Z**
 
 The Android checkpoint adds locally automated scenarios for recent-session parsing/paging, loading/empty/offline/expired-auth/retry reducers, stable deduplication, timeline restoration/deduplication, context indicator boundaries, and server-side secret/internal-audit filtering. Live generated-worker dispatch and full acoustic interruption conformance also pass; physical testing remains limited to lifecycle and rendered UI behavior.
+
+**2026-07-15T03:43:46Z**
+
+2026-07-14 exact-source and long-pause increment: the documented Oxford-to-Radcliffe inventory now maps normal conversation, short/long pauses, tap/speech interruption, pause suppression, noise/echo/frame loss, physical speaker echo, durable sessions, context accounting, exact source reads, and failure recovery. A full local-provider external run passed an isolated-store read_source call with exact 252-byte content, canonical provenance hashes/name, READING state, and 2.857s first source audio. Report: artifacts/voice-conformance/20260715T034110Z/report.json.

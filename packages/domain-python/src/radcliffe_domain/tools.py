@@ -197,8 +197,19 @@ class ToolGateway:
             resolved_root = root.resolve(strict=True)
             candidate = (resolved_root / relative).resolve(strict=True)
             if candidate.is_relative_to(resolved_root) and candidate.is_file():
-                return candidate
+                return ToolGateway._canonical_case(candidate)
         raise ToolDeniedError("source is outside the readable roots")
+
+    @staticmethod
+    def _canonical_case(candidate: Path) -> Path:
+        entries = tuple(candidate.parent.iterdir())
+        for entry in entries:
+            if entry.name == candidate.name and entry.samefile(candidate):
+                return entry.resolve(strict=True)
+        for entry in entries:
+            if entry.name.casefold() == candidate.name.casefold() and entry.samefile(candidate):
+                return entry.resolve(strict=True)
+        return candidate
 
     @staticmethod
     def _check_cancelled(cancelled: asyncio.Event | None) -> None:

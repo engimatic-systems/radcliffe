@@ -31,6 +31,7 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
     source_root.mkdir()
     fixture = source_root / "demo.md"
     fixture.write_bytes(b"# Canonical\n\nRead me exactly.\n")
+    requested_path = "DEMO.md" if (source_root / "DEMO.md").exists() else "demo.md"
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
     gateway = ToolGateway(store)
@@ -41,7 +42,7 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
         session_id="s1",
         generation=1,
         grant=grant(source_root),
-        raw_arguments={"path": "demo.md"},
+        raw_arguments={"path": requested_path},
     )
     replay = await gateway.read_source(
         call_id="call-1",
@@ -49,11 +50,12 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
         session_id="s1",
         generation=1,
         grant=grant(source_root),
-        raw_arguments={"path": "demo.md"},
+        raw_arguments={"path": requested_path},
     )
 
     assert result.canonical_bytes == fixture.read_bytes()
     assert result.source_envelope.source is SourceKind.TEXT_SOURCE
+    assert result.source_envelope.provenance.display_name == "demo.md"
     assert result.source_envelope.provenance.source_sha256 == result.source_envelope.content_sha256
     assert (
         "".join(

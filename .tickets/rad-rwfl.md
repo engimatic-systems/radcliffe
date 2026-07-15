@@ -40,3 +40,7 @@ Added a configurable 30s maximum utterance boundary so intermittent noise/echo c
 **2026-07-14T12:02:23Z**
 
 2026-07-14 automated live speech-barge matrix increment passed: the harness interrupted a currently audible long response with a replacement utterance, observed the old Sidecar stream close, stopped old audio in 208 ms, and returned only the replacement answer. Existing acoustic fixtures cover short natural pause, background noise, speaker echo, and frame loss. Remaining acceptance work is the explicit long-pause/echo ownership matrix, so this ticket stays open.
+
+**2026-07-15T03:43:46Z**
+
+2026-07-14 long-pause ownership increment passes locally: a 1.2s intra-request pause produced zero early agent-audio frames, the replacement clause had exactly one model owner, and first audio arrived in 2.038s. Endpoint tests also hold the first owner through the endpoint candidate before replacement. All automated short/long pause, noise, echo, frame-loss, tap, and speech-barge cases now pass. Remaining acceptance is explicit confirmation that the successful Pixel run used the physical speaker route (rather than headphones/Bluetooth), so the ticket remains open.

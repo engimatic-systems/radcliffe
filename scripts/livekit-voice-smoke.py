@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -134,6 +135,24 @@ async def synthesize_utterance(voice: str, text: str) -> Utterance:
     return Utterance(text, speech, speech + b"\x00\x00" * INPUT_RATE)
 
 
+async def synthesize_paused_utterance(
+    voice: str,
+    segments: tuple[str, ...],
+    *,
+    pause_seconds: float,
+) -> Utterance:
+    provider = LocalAppleSpeechProvider(voice=voice)
+    waveforms: list[np.ndarray] = []
+    for index, text in enumerate(segments):
+        pcm_24khz = await provider.synthesize(text)
+        waveforms.append(provider._waveform(pcm_24khz, OUTPUT_RATE, 1))
+        if index < len(segments) - 1:
+            waveforms.append(np.zeros(round(pause_seconds * INPUT_RATE), dtype=np.float32))
+    waveform = np.concatenate(waveforms)
+    speech = np.clip(waveform * 32768, -32768, 32767).astype("<i2").tobytes()
+    return Utterance(" ".join(segments), speech, speech + b"\x00\x00" * INPUT_RATE)
+
+
 async def publish_audio(source: rtc.AudioSource, utterance: Utterance) -> tuple[float, float]:
     started_at = time.monotonic()
     next_frame_at = started_at
@@ -223,6 +242,18 @@ async def run(commit: str) -> int:
         "turn-two": await synthesize_utterance("Moira", "Reply with exactly blue."),
         "turn-three": await synthesize_utterance("Fred", "Reply with exactly seven."),
         "turn-four": await synthesize_utterance("Daniel", "Reply with exactly finished."),
+        "long-pause-replacement": await synthesize_paused_utterance(
+            "Fred",
+            (
+                "Tell me a dirty joke.",
+                "Actually, ignore that. Reply with exactly changed subject.",
+            ),
+            pause_seconds=1.2,
+        ),
+        "read-source": await synthesize_utterance(
+            "Karen",
+            "Use the read source tool to read radcliffe dash demo dot M D word for word.",
+        ),
         "cosmic": await synthesize_utterance(
             "Samantha",
             "Please start your response exactly with dash, bold Cosmic touch, "
@@ -298,6 +329,7 @@ async def run(commit: str) -> int:
     state = SmokeState()
     checks: list[Check] = []
     cancelled_user_message_id: str | None = None
+    run_error: Exception | None = None
 
     async def capture(track: rtc.Track) -> None:
         stream = rtc.AudioStream(track, sample_rate=OUTPUT_RATE, num_channels=1)
@@ -528,6 +560,198 @@ async def run(commit: str) -> int:
                 )
             )
             await wait_for_output_silence(state, after=audio_onset, limit_seconds=30)
+
+        long_pause_index = len(state.events)
+        long_pause_started, long_pause_speech_end = await publish_audio(
+            source,
+            utterances["long-pause-replacement"],
+        )
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    long_pause_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                        and "subject" in event.message.content.inline_text.casefold()
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        long_pause_user = _event_after(
+            state,
+            long_pause_index,
+            lambda event: (
+                event.HasField("message")
+                and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                and "subject" in event.message.content.inline_text.casefold()
+            ),
+        )
+        assert long_pause_user is not None
+        long_pause_user_index = state.events.index(long_pause_user)
+        long_pause_audio = await wait_for_audio_after(state, long_pause_speech_end, 30)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    long_pause_user_index + 1,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        long_pause_models = [
+            item.event.message.content.inline_text.casefold()
+            for item in state.events[long_pause_index:]
+            if item.event.HasField("message")
+            and item.event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+        ]
+        early_long_pause_audio = [
+            item
+            for item in state.output
+            if long_pause_started <= item.received_at < long_pause_speech_end and _active(item.pcm)
+        ]
+        checks.append(
+            Check(
+                "long_pause_does_not_launch_an_early_answer",
+                not early_long_pause_audio,
+                f"heard {len(early_long_pause_audio)} active audio frames before replacement ended",
+            )
+        )
+        checks.append(
+            Check(
+                "long_pause_replacement_has_one_model_owner",
+                len(long_pause_models) == 1
+                and "subject" in long_pause_models[0]
+                and "joke" not in long_pause_models[0],
+                f"model messages after long pause: {long_pause_models!r}",
+            )
+        )
+        long_pause_latency = long_pause_audio - long_pause_speech_end
+        checks.append(
+            Check(
+                "long_pause_replacement_first_audio",
+                long_pause_latency < 5,
+                f"first heard replacement audio {long_pause_latency:.3f}s after speech ended",
+                {"latency_seconds": round(long_pause_latency, 3)},
+            )
+        )
+        await wait_for_output_silence(state, after=long_pause_audio, limit_seconds=30)
+
+        source_index = len(state.events)
+        _, source_speech_end = await publish_audio(source, utterances["read-source"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    source_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_TEXT_SOURCE
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        source_message = _event_after(
+            state,
+            source_index,
+            lambda event: (
+                event.HasField("message")
+                and event.message.source == protocol_pb2.SOURCE_KIND_TEXT_SOURCE
+            ),
+        )
+        assert source_message is not None
+        canonical_source = (ROOT / "fixtures/sources/radcliffe-demo.md").read_bytes()
+        source_envelope = source_message.event.message
+        source_bytes = source_envelope.content.inline_text.encode()
+        source_hash = hashlib.sha256(canonical_source).digest()
+        canonical_envelope_matches = (
+            source_bytes == canonical_source
+            and source_envelope.content_sha256 == source_hash
+            and source_envelope.provenance.source_sha256 == source_hash
+            and source_envelope.provenance.display_name == "radcliffe-demo.md"
+        )
+        checks.append(
+            Check(
+                "source_tool_preserves_canonical_envelope",
+                canonical_envelope_matches,
+                (
+                    "received exact fixture bytes with canonical name and matching hashes"
+                    if canonical_envelope_matches
+                    else "canonical bytes, hashes, or display name did not match the fixture"
+                ),
+                {
+                    "byte_length": len(source_bytes),
+                    "sha256": source_envelope.content_sha256.hex(),
+                    "display_name": source_envelope.provenance.display_name,
+                },
+            )
+        )
+        reading_state = _event_after(
+            state,
+            source_index,
+            lambda event: (
+                event.HasField("state_changed")
+                and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_READING
+            ),
+        )
+        checks.append(
+            Check(
+                "source_tool_enters_reading_state",
+                reading_state is not None,
+                "worker announced deterministic source reading"
+                if reading_state is not None
+                else "worker never entered source reading",
+            )
+        )
+        source_audio = await wait_for_audio_after(state, source_speech_end, 30)
+        source_latency = source_audio - source_speech_end
+        checks.append(
+            Check(
+                "source_tool_first_audio",
+                source_latency < 5,
+                f"first source audio arrived {source_latency:.3f}s after speech ended",
+                {"latency_seconds": round(source_latency, 3)},
+            )
+        )
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    source_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
+                        and event.state_changed.reason == "turn complete"
+                    ),
+                )
+                is not None
+            ),
+            60,
+        )
+        source_models = [
+            item.event.message.content.inline_text
+            for item in state.events[source_index:]
+            if item.event.HasField("message")
+            and item.event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+        ]
+        checks.append(
+            Check(
+                "source_bytes_bypass_model_generation",
+                all(canonical_source.decode() not in text for text in source_models),
+                f"post-tool model messages: {source_models!r}",
+            )
+        )
+        await wait_for_output_silence(state, after=source_audio, limit_seconds=60)
 
         cosmic_index = len(state.events)
         await publish_audio(source, utterances["cosmic"])
@@ -830,6 +1054,15 @@ async def run(commit: str) -> int:
                 f"sidecar cancellation counter advanced {cancelled_before} -> {cancelled_after}",
             )
         )
+    except Exception as error:
+        run_error = error
+        checks.append(
+            Check(
+                "scenario_execution",
+                False,
+                f"{type(error).__name__}: {error}",
+            )
+        )
     finally:
         await room.disconnect()
         for task in state.capture_tasks:
@@ -913,7 +1146,7 @@ async def run(commit: str) -> int:
             indent=2,
         )
     )
-    return 0 if report["passed"] else 1
+    return 0 if report["passed"] and run_error is None else 1
 
 
 def main() -> int:
