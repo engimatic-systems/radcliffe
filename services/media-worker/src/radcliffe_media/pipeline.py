@@ -51,6 +51,15 @@ class _ActiveTurn:
     started_at: float = field(default_factory=monotonic)
     first_model_delta_at: float | None = None
     first_audio_at: float | None = None
+    source_envelope: MessageEnvelope | None = None
+    next_source_boundary: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _PausedSource:
+    envelope: MessageEnvelope
+    turn_id: str
+    operation: Operation
 
 
 class Orchestrator(Protocol):
@@ -64,7 +73,13 @@ class Synthesizer(Protocol):
 
 
 class AudioPublisher(Protocol):
-    async def publish(self, segment_id: str, pcm_audio: bytes) -> int: ...
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int: ...
 
     async def flush(self) -> None: ...
 
@@ -108,6 +123,7 @@ class VoicePipeline:
         self._turn_serial = asyncio.Lock()
         self._append_lock = asyncio.Lock()
         self._latest_submission = 0
+        self._paused_source: _PausedSource | None = None
 
     async def start(self) -> None:
         previous = self.engine.state
@@ -119,8 +135,40 @@ class VoicePipeline:
 
     async def barge_in(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
+        if self.engine.state is ConversationState.PAUSED:
+            previous = self.engine.state
+            self._paused_source = None
+            self.engine.interrupt()
+            await self._notify_state(previous, "interrupted")
 
     async def pause(self) -> None:
+        task: asyncio.Task[None] | None = None
+        paused_source = False
+        previous = self.engine.state
+        operation: Operation | None = None
+        async with self._coordinator:
+            turn = self._active_turn
+            if (
+                self.engine.state is ConversationState.READING
+                and turn is not None
+                and turn.source_envelope is not None
+                and turn.operation is not None
+            ):
+                turn.requested_disposition = "paused"
+                turn.cancelled.set()
+                task = turn.task
+                operation = turn.operation
+                self.engine.pause()
+                paused_source = True
+                if not task.done():
+                    task.cancel()
+        if paused_source:
+            await self.publisher.flush()
+            await self._notify_state(previous, "paused", operation)
+            current = asyncio.current_task()
+            if task is not None and task is not current:
+                await asyncio.gather(task, return_exceptions=True)
+            return
         if self.engine.state is not ConversationState.LISTENING:
             await self.barge_in()
         if self.engine.state is ConversationState.LISTENING:
@@ -131,11 +179,19 @@ class VoicePipeline:
     async def resume(self) -> None:
         if self.engine.state is ConversationState.PAUSED:
             previous = self.engine.state
-            self.engine.resume()
+            target = self.engine.resume()
             await self._notify_state(previous, "resumed")
+            paused = self._paused_source
+            if target is ConversationState.READING and paused is not None:
+                task = asyncio.create_task(
+                    self._resume_source(paused),
+                    name="radcliffe-source-resume",
+                )
+                task.add_done_callback(self._consume_background_task)
 
     async def stop(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
+        self._paused_source = None
         previous = self.engine.state
         self.engine.end()
         if previous is not ConversationState.IDLE:
@@ -320,14 +376,55 @@ class VoicePipeline:
         self, envelope: MessageEnvelope, operation: Operation, turn: _ActiveTurn
     ) -> None:
         plan = render_projection(envelope)
+        turn.source_envelope = envelope
         for segment in plan.segments:
+            if segment.boundary_index < turn.next_source_boundary:
+                continue
             await self._speak(
                 segment.canonical_text,
                 segment.segment_id,
                 segment.boundary_index,
                 operation,
                 turn,
+                wait_for_playback=True,
             )
+            turn.next_source_boundary = segment.boundary_index + 1
+
+    async def _resume_source(self, paused: _PausedSource) -> None:
+        task = cast(asyncio.Task[None], asyncio.current_task())
+        turn = _ActiveTurn(
+            turn_id=paused.turn_id,
+            task=task,
+            cancelled=asyncio.Event(),
+            operation=paused.operation,
+            source_envelope=paused.envelope,
+            next_source_boundary=await self._persisted_source_boundary(paused.envelope),
+        )
+        async with self._coordinator:
+            if self._paused_source != paused or self.engine.state is not ConversationState.READING:
+                return
+            self._paused_source = None
+            self._active_turn = turn
+        try:
+            await self._speak_plan(paused.envelope, paused.operation, turn)
+            await self._finish_completed(turn)
+        except asyncio.CancelledError:
+            await self._finish_cancelled(turn)
+        except Exception:
+            await self._finish_failed(turn)
+            raise
+        finally:
+            async with self._coordinator:
+                if self._active_turn is turn:
+                    self._active_turn = None
+
+    async def _persisted_source_boundary(self, envelope: MessageEnvelope) -> int:
+        plan = render_projection(envelope)
+        boundaries = [
+            await self.store.playback_boundary(self.engine.session_id, segment.segment_id)
+            for segment in plan.segments
+        ]
+        return max(boundaries, default=0)
 
     async def _speak(
         self,
@@ -336,6 +433,8 @@ class VoicePipeline:
         boundary_index: int,
         operation: Operation,
         turn: _ActiveTurn,
+        *,
+        wait_for_playback: bool = False,
     ) -> None:
         self._assert_owner(turn, operation)
         synth_started = monotonic()
@@ -356,9 +455,28 @@ class VoicePipeline:
         )
         self._assert_owner(turn, operation)
         publish_started = monotonic()
+        if turn.first_audio_at is None:
+            turn.first_audio_at = publish_started
+            self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
         try:
-            duration = await self.publisher.publish(segment_id, audio)
+            duration = await self.publisher.publish(
+                segment_id,
+                audio,
+                wait_for_playback=wait_for_playback,
+            )
         except asyncio.CancelledError:
+            await self.engine.acknowledge(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=str(uuid4()),
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=PlaybackStatus.FLUSHED,
+                    position_ms=0,
+                    boundary_index=boundary_index,
+                    occurred_at=datetime.now(UTC),
+                    detail="playback cancelled before boundary completion",
+                )
+            )
             raise
         except Exception as error:
             await self.engine.acknowledge(
@@ -375,9 +493,6 @@ class VoicePipeline:
             )
             raise
         self._log_phase(turn, "publish", monotonic() - publish_started)
-        if turn.first_audio_at is None:
-            turn.first_audio_at = monotonic()
-            self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
         self._assert_owner(turn, operation)
         await self.engine.acknowledge(
             PlaybackAcknowledgement(
@@ -424,12 +539,26 @@ class VoicePipeline:
             self.engine.transition(ConversationState.LISTENING)
             await self._append_disposition(turn, "completed")
             self._active_turn = None
+            self._paused_source = None
             await self._notify_state(previous, "turn complete", turn.operation)
 
     async def _finish_cancelled(self, turn: _ActiveTurn) -> None:
         async with self._coordinator:
             if self._active_turn is not turn:
                 return
+            if (
+                turn.requested_disposition == "paused"
+                and turn.source_envelope is not None
+                and turn.operation is not None
+            ):
+                self._paused_source = _PausedSource(
+                    turn.source_envelope,
+                    turn.turn_id,
+                    turn.operation,
+                )
+                self._active_turn = None
+                return
+            self._paused_source = None
             if turn.rendered_model_text and not turn.model_persisted:
                 await self._persist_model(
                     turn,
@@ -465,6 +594,7 @@ class VoicePipeline:
                     text=turn.rendered_model_text,
                 )
             await self._append_disposition(turn, "failed")
+            self._paused_source = None
             previous = self.engine.state
             if previous in {
                 ConversationState.THINKING,
@@ -540,6 +670,14 @@ class VoicePipeline:
             operation.operation_id if operation is not None else "pending",
             operation.generation if operation is not None else self.engine.generation,
         )
+
+    @staticmethod
+    def _consume_background_task(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error("background source resume failed: {}", error)
 
     async def _append_text(
         self,

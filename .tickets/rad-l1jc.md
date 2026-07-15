@@ -2,7 +2,7 @@
 id: rad-l1jc
 status: in_progress
 deps: [rad-wnwh, rad-8i08, rad-h2lv, rad-ihso, rad-g7di, rad-au20, rad-ghti]
-links: [rad-enbx, rad-rwfl, rad-ghti, rad-9e2z]
+links: [rad-enbx, rad-rwfl, rad-ghti, rad-9e2z, rad-ncdz, rad-lezo]
 created: 2026-07-13T01:37:26Z
 type: task
 priority: 1
@@ -47,3 +47,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-15T03:43:46Z**
 
 2026-07-14 the external LiveKit harness now exercises the real Pi read_source loop across an isolated worker database. The control plane transports the authorized protobuf source envelope through structured non-content tool details; the worker validates session/ID/kind/hash/provenance before local persistence and exact rendering. The passing report proves the 252-byte fixture and both SHA-256 fields, READING state, 2.857s source audio, five sub-5s responses, 8ms tap acknowledgement, and 206ms speech-barge acknowledgement: artifacts/voice-conformance/20260715T034110Z/report.json. The run also caught and fixed stale capability generations after interruption.
+
+**2026-07-15T03:54:21Z**
+
+2026-07-14 resumable source playback now passes the external suite: mid-sentence pause acknowledged in 3ms, audible source stopped in 67ms, resume returned to READING/audio in 535ms, SQLite recorded flushed boundary 0 then completed boundaries 1-4, and neither Pi nor read_source was invoked again. Report: artifacts/voice-conformance/20260715T035142Z/report.json. Physical Pixel source-card and app/media-control verification remains.

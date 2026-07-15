@@ -231,6 +231,15 @@ The server persists this ledger and uses it to:
 - distinguish generated speech from source reading; and
 - provide audio-grounded diagnostics to the acceptance suite.
 
+Until device acknowledgements are wired into the Android audio sink, the local
+foundation profile uses a conservative provisional cursor: canonical source
+segments remain active for their PCM duration, a pause records the unfinished
+sentence as `flushed`, and resume reads the last completed boundary from SQLite
+before replaying. It never marks the whole source complete merely because audio
+was enqueued, and it never invokes the model or source tool again to resume.
+Device-authored acknowledgements replace this provisional timing before the
+production release gate.
+
 ## 7. Message envelopes and the projection seam
 
 This is a mandatory architectural seam, even though the first release will
