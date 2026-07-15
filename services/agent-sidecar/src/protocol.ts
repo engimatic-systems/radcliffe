@@ -60,14 +60,22 @@ export type SidecarEvent =
   | { type: "complete"; requestId: string }
   | { type: "error"; requestId: string; message: string };
 
-export interface ToolExecutionRequest {
+interface ToolExecutionRequestBase {
   sessionId: string;
   generation: number;
   callId: string;
   idempotencyKey: string;
-  toolName: "read_source";
-  arguments: { path: string };
 }
+
+export type ToolExecutionRequest =
+  | (ToolExecutionRequestBase & {
+      toolName: "list_sources";
+      arguments: Record<string, never>;
+    })
+  | (ToolExecutionRequestBase & {
+      toolName: "read_source";
+      arguments: { path: string };
+    });
 
 export interface ToolExecutionResult {
   modelContent: string;

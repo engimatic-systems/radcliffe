@@ -50,9 +50,16 @@ const EMPTY_USAGE = {
 };
 
 export const RADCLIFFE_SYSTEM_PROMPT =
-  "You are Radcliffe. Use read_source for requests to read a file. " +
-  "Convert spoken filename punctuation such as dash, hyphen, and dot M D into path characters. " +
+  "You are Radcliffe. You can discover authorized Markdown filenames with list_sources and read " +
+  "one with read_source. If the user identifies a source informally or the exact authorized path " +
+  "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
+  "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
+  "punctuation such as dash, hyphen, and dot M D into path characters. " +
   "Never recreate source text.";
+export const LIST_SOURCES_DESCRIPTION =
+  "List the bounded catalog of relative Markdown paths authorized for this session. " +
+  "Returns filenames only, never file contents or absolute host paths.";
+export const LIST_SOURCES_PARAMETERS = Type.Object({}, { additionalProperties: false });
 export const READ_SOURCE_DESCRIPTION =
   "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
   "Normalize spoken filename punctuation before passing the path.";
@@ -106,6 +113,11 @@ export function modelContextFromRequest(request: TurnRequest) {
     messages: convertRadcliffeContext(messages),
     tools: [
       {
+        name: "list_sources",
+        description: LIST_SOURCES_DESCRIPTION,
+        parameters: LIST_SOURCES_PARAMETERS,
+      },
+      {
         name: "read_source",
         description: READ_SOURCE_DESCRIPTION,
         parameters: READ_SOURCE_PARAMETERS,
@@ -145,6 +157,41 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
     let modelText = "";
+    const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
+      name: "list_sources",
+      label: "List sources",
+      description: LIST_SOURCES_DESCRIPTION,
+      parameters: LIST_SOURCES_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        _params: object,
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "list_sources",
+          arguments: {},
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
     const readSource: AgentTool<typeof READ_SOURCE_PARAMETERS> = {
       name: "read_source",
       label: "Read source",
@@ -189,7 +236,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         systemPrompt: RADCLIFFE_SYSTEM_PROMPT,
         model: this.model,
         thinkingLevel: "off",
-        tools: [readSource],
+        tools: [listSources, readSource],
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,

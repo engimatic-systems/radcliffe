@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import stat
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
@@ -14,6 +15,9 @@ from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.store import EventStore, ToolAudit
 
 MAX_SOURCE_BYTES = 1024 * 1024
+MAX_SOURCE_CATALOG_ENTRIES = 200
+MAX_SOURCE_CATALOG_DEPTH = 4
+MAX_SOURCE_CATALOG_SCANNED_ENTRIES = 2000
 _SPOKEN_DASH = re.compile(r"\s+(?:dash|hyphen)\s+", re.IGNORECASE)
 _SPOKEN_MARKDOWN_SUFFIX = re.compile(r"\s+dot\s+m\s*d\s*$", re.IGNORECASE)
 
@@ -30,6 +34,10 @@ class ReadSourceArguments(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
+
+
+class ListSourcesArguments(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +57,15 @@ class ReadSourceResult:
     source_envelope: MessageEnvelope
     result_envelope: MessageEnvelope
     canonical_bytes: bytes
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ListSourcesResult:
+    call_envelope: MessageEnvelope
+    result_envelope: MessageEnvelope
+    paths: tuple[str, ...]
+    truncated: bool
     replayed: bool = False
 
 
@@ -85,6 +102,7 @@ class ToolGateway:
         )
         existing = await self.store.create_tool_audit(pending)
         if existing is not None:
+            self._validate_replay(existing, pending)
             return await self._replay(existing)
 
         call_envelope = MessageEnvelope.text(
@@ -104,7 +122,7 @@ class ToolGateway:
 
         async with self._serial:
             try:
-                self._authorize(session_id, generation, grant)
+                self._authorize(session_id, generation, grant, "read_source")
                 path = self._resolve(arguments.path, grant.readable_roots)
                 self._check_cancelled(cancelled)
                 canonical = await asyncio.to_thread(path.read_bytes)
@@ -180,14 +198,193 @@ class ToolGateway:
                 )
                 raise
 
-    def _authorize(self, session_id: str, generation: int, grant: CapabilityGrant) -> None:
+    async def list_sources(
+        self,
+        *,
+        call_id: str,
+        idempotency_key: str,
+        session_id: str,
+        generation: int,
+        grant: CapabilityGrant,
+        raw_arguments: object,
+        cancelled: asyncio.Event | None = None,
+    ) -> ListSourcesResult:
+        arguments = ListSourcesArguments.model_validate(raw_arguments)
+        arguments_json = json.dumps(
+            arguments.model_dump(), sort_keys=True, separators=(",", ":")
+        ).encode()
+        pending = ToolAudit(
+            call_id=call_id,
+            idempotency_key=idempotency_key,
+            session_id=session_id,
+            generation=generation,
+            tool_name="list_sources",
+            arguments_json=arguments_json,
+            grant_id=grant.grant_id,
+            authorization="pending",
+            outcome="requested",
+        )
+        existing = await self.store.create_tool_audit(pending)
+        if existing is not None:
+            self._validate_replay(existing, pending)
+            return await self._replay_catalog(existing)
+
+        call_envelope = MessageEnvelope.text(
+            session_id=session_id,
+            sequence=await self.store.next_sequence(session_id),
+            source=SourceKind.CALL,
+            text=arguments_json.decode(),
+            message_id=f"call:{call_id}",
+            metadata={
+                "tool_name": "list_sources",
+                "call_id": call_id,
+                "grant_id": grant.grant_id,
+                "outcome": "requested",
+            },
+        )
+        await self.store.append(call_envelope)
+
+        async with self._serial:
+            try:
+                self._authorize(session_id, generation, grant, "list_sources")
+                self._check_cancelled(cancelled)
+                paths, truncated = await asyncio.to_thread(
+                    self._catalog, grant.readable_roots, cancelled
+                )
+                self._check_cancelled(cancelled)
+                catalog = json.dumps(
+                    {"paths": paths, "truncated": truncated},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                result_envelope = MessageEnvelope.text(
+                    session_id=session_id,
+                    sequence=await self.store.next_sequence(session_id),
+                    source=SourceKind.CALL,
+                    text=catalog,
+                    message_id=f"call-result:{call_id}",
+                    metadata={
+                        "tool_name": "list_sources",
+                        "call_id": call_id,
+                        "grant_id": grant.grant_id,
+                        "outcome": "succeeded",
+                    },
+                )
+                await self.store.append(result_envelope)
+                result_json = json.dumps(
+                    {
+                        "call_message_id": call_envelope.message_id,
+                        "result_message_id": result_envelope.message_id,
+                        "paths": paths,
+                        "truncated": truncated,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                await self.store.finish_tool_audit(
+                    replace(
+                        pending,
+                        authorization="allowed",
+                        outcome="succeeded",
+                        resolved_path=json.dumps(
+                            [str(root.resolve(strict=True)) for root in grant.readable_roots]
+                        ),
+                        content_sha256=hashlib.sha256(catalog.encode()).digest(),
+                        result_json=result_json,
+                    )
+                )
+                return ListSourcesResult(call_envelope, result_envelope, paths, truncated)
+            except BaseException as exc:
+                outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "denied"
+                await self.store.finish_tool_audit(
+                    replace(pending, authorization="denied", outcome=outcome)
+                )
+                raise
+
+    def _authorize(
+        self,
+        session_id: str,
+        generation: int,
+        grant: CapabilityGrant,
+        tool_name: str,
+    ) -> None:
         now = datetime.now(UTC)
         if grant.revoked or grant.expires_at <= now:
             raise ToolDeniedError("capability grant is stale")
         if grant.session_id != session_id or grant.generation != generation:
             raise ToolDeniedError("capability grant belongs to another session generation")
-        if "read_source" not in grant.allowed_tools:
-            raise ToolDeniedError("read_source is not granted")
+        if tool_name not in grant.allowed_tools:
+            raise ToolDeniedError(f"{tool_name} is not granted")
+
+    @staticmethod
+    def _catalog(
+        roots: tuple[Path, ...],
+        cancelled: asyncio.Event | None,
+    ) -> tuple[tuple[str, ...], bool]:
+        candidates: list[str] = []
+        scanned = 0
+        truncated = False
+        scan_exhausted = False
+
+        def visit(directory: Path, relative_parent: PurePath, depth: int) -> None:
+            nonlocal scanned, scan_exhausted, truncated
+            if scan_exhausted:
+                return
+            entries = sorted(
+                directory.iterdir(), key=lambda entry: (entry.name.casefold(), entry.name)
+            )
+            for entry in entries:
+                ToolGateway._check_cancelled(cancelled)
+                scanned += 1
+                if scanned > MAX_SOURCE_CATALOG_SCANNED_ENTRIES:
+                    scan_exhausted = True
+                    truncated = True
+                    return
+                try:
+                    mode = entry.stat(follow_symlinks=False).st_mode
+                except OSError:
+                    continue
+                if entry.name.startswith(".") or stat.S_ISLNK(mode):
+                    continue
+                relative = relative_parent / entry.name
+                if stat.S_ISDIR(mode):
+                    if depth < MAX_SOURCE_CATALOG_DEPTH:
+                        visit(entry, relative, depth + 1)
+                    continue
+                if not stat.S_ISREG(mode) or entry.suffix.casefold() != ".md":
+                    continue
+                candidates.append(relative.as_posix())
+                if len(candidates) > MAX_SOURCE_CATALOG_ENTRIES:
+                    truncated = True
+
+        for root in roots:
+            resolved_root = root.resolve(strict=True)
+            visit(resolved_root, PurePath(), 1)
+            if scan_exhausted:
+                break
+
+        by_folded_path: dict[str, list[str]] = {}
+        for path in candidates:
+            by_folded_path.setdefault(path.casefold(), []).append(path)
+        unique = sorted(
+            (paths[0] for paths in by_folded_path.values() if len(paths) == 1),
+            key=lambda path: (path.casefold(), path),
+        )
+        if len(unique) > MAX_SOURCE_CATALOG_ENTRIES:
+            truncated = True
+        return tuple(unique[:MAX_SOURCE_CATALOG_ENTRIES]), truncated
+
+    @staticmethod
+    def _validate_replay(existing: ToolAudit, requested: ToolAudit) -> None:
+        immutable_fields = (
+            "session_id",
+            "generation",
+            "tool_name",
+            "arguments_json",
+            "grant_id",
+        )
+        if any(getattr(existing, field) != getattr(requested, field) for field in immutable_fields):
+            raise ToolDeniedError("tool call identifier was reused with different parameters")
 
     @staticmethod
     def _resolve(requested: str, roots: tuple[Path, ...]) -> Path:
@@ -252,4 +449,18 @@ class ToolGateway:
         result = indexed[payload["result_message_id"]]
         return ReadSourceResult(
             call, source, result, payload["canonical_text"].encode(), replayed=True
+        )
+
+    async def _replay_catalog(self, audit: ToolAudit) -> ListSourcesResult:
+        if audit.outcome != "succeeded" or audit.result_json is None:
+            raise ToolDeniedError(f"duplicate call has terminal outcome {audit.outcome}")
+        payload = json.loads(audit.result_json)
+        envelopes = await self.store.replay(audit.session_id)
+        indexed = {envelope.message_id: envelope for envelope in envelopes}
+        return ListSourcesResult(
+            indexed[payload["call_message_id"]],
+            indexed[payload["result_message_id"]],
+            tuple(payload["paths"]),
+            bool(payload["truncated"]),
+            replayed=True,
         )
