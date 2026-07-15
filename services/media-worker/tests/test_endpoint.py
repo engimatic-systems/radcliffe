@@ -5,6 +5,8 @@ import pytest
 from pipecat.frames.frames import UserAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection
 from radcliffe_media.production import EndpointProcessor, EndpointSettings
+from radcliffe_media.speech import Transcription, TranscriptionSegmentEvidence
+from radcliffe_media.speech_activity import SpeechActivityEvidence
 
 
 class FakeSpeech:
@@ -16,6 +18,37 @@ class FakeSpeech:
         self.calls.append(pcm)
         self.transcribed.set()
         return f"transcript-{len(self.calls)}"
+
+
+class DetailedFakeSpeech(FakeSpeech):
+    def __init__(self, transcription: Transcription) -> None:
+        super().__init__()
+        self.transcription = transcription
+
+    async def transcribe_with_evidence(
+        self, pcm: bytes, _sample_rate: int, _channels: int
+    ) -> Transcription:
+        self.calls.append(pcm)
+        self.transcribed.set()
+        return self.transcription
+
+
+class FakeActivity:
+    def __init__(self, *, speech_windows: int, maximum_probability: float) -> None:
+        self.speech_windows = speech_windows
+        self.maximum_probability = maximum_probability
+        self.calls = 0
+
+    async def analyze(
+        self, _pcm: bytes, _sample_rate: int, _channels: int
+    ) -> SpeechActivityEvidence:
+        self.calls += 1
+        return SpeechActivityEvidence(
+            window_count=50,
+            speech_window_count=self.speech_windows,
+            maximum_probability=self.maximum_probability,
+            average_probability=self.maximum_probability / 2,
+        )
 
 
 class FakeVoice:
@@ -42,8 +75,8 @@ class FakeVoice:
         self.barge_ins += 1
 
 
-def audio_frame(*, voiced: bool) -> UserAudioRawFrame:
-    value = 1200 if voiced else 0
+def audio_frame(*, voiced: bool, amplitude: int | None = None) -> UserAudioRawFrame:
+    value = amplitude if amplitude is not None else (1200 if voiced else 0)
     pcm = array("h", [value] * 320).tobytes()
     return UserAudioRawFrame(pcm, 16000, 1)
 
@@ -105,10 +138,29 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_RMS", "700")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "20000")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.07")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "3")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.55")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-0.9")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_MAX_NO_SPEECH_PROBABILITY", "0.65")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_MAX_COMPRESSION_RATIO", "2.2")
 
-    assert EndpointSettings.from_environment() == EndpointSettings(700, 300, 1200, 20000)
+    assert EndpointSettings.from_environment() == EndpointSettings(
+        700,
+        300,
+        1200,
+        20000,
+        0.07,
+        3,
+        0.55,
+        -0.9,
+        0.65,
+        2.2,
+    )
     with pytest.raises(ValueError, match="positive"):
         EndpointSettings(end_silence_ms=0)
+    with pytest.raises(ValueError, match="voice ratio"):
+        EndpointSettings(minimum_maximum_voice_ratio=0)
 
 
 @pytest.mark.asyncio
@@ -136,3 +188,129 @@ async def test_maximum_utterance_bounds_intermittent_noise_that_defeats_silence(
     assert len(speech.calls) == 1
     assert len(speech.calls[0]) == 100 * 640
     assert voice.transcripts == ["transcript-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("amplitude", [0, 400])
+async def test_digital_silence_and_room_tone_never_start_a_turn(amplitude: int) -> None:
+    speech = FakeSpeech()
+    endpoint = EndpointProcessor(speech)
+
+    for _ in range(100):
+        await endpoint.process_frame(
+            audio_frame(voiced=False, amplitude=amplitude),
+            FrameDirection.DOWNSTREAM,
+        )
+
+    assert endpoint.turn_task is None
+    assert speech.calls == []
+
+
+@pytest.mark.asyncio
+async def test_subminimum_noise_burst_resets_after_normal_endpoint_silence() -> None:
+    speech = FakeSpeech()
+    endpoint = EndpointProcessor(speech)
+
+    await feed(endpoint, voiced=True, frames=5)
+    await feed(endpoint, voiced=False, frames=45)
+
+    assert not endpoint.speaking
+    assert endpoint.buffer == b""
+    assert endpoint.turn_task is None
+    assert speech.calls == []
+
+
+@pytest.mark.asyncio
+async def test_thirty_second_sparse_spikes_are_rejected_before_whisper() -> None:
+    speech = FakeSpeech()
+    endpoint = EndpointProcessor(speech, EndpointSettings(maximum_utterance_ms=30000))
+
+    for index in range(1500):
+        await endpoint.process_frame(
+            audio_frame(voiced=index < 15 or index in {400, 800}),
+            FrameDirection.DOWNSTREAM,
+        )
+
+    assert endpoint.turn_task is None
+    assert speech.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sparse_playback_like_bursts_are_rejected_by_speech_activity() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice()
+    activity = FakeActivity(speech_windows=0, maximum_probability=0.08)
+    endpoint = EndpointProcessor(speech, activity=activity)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    for index in range(85):
+        await endpoint.process_frame(
+            audio_frame(voiced=index < 11 or index in range(35, 40)),
+            FrameDirection.DOWNSTREAM,
+        )
+    task = endpoint.turn_task
+    assert task is not None
+    await task
+
+    assert activity.calls == 1
+    assert speech.calls == []
+    assert voice.transcripts == []
+
+
+@pytest.mark.asyncio
+async def test_legitimate_short_speech_survives_activity_and_decoder_gates() -> None:
+    transcription = Transcription(
+        "Stop.",
+        (
+            TranscriptionSegmentEvidence(
+                average_log_probability=-0.75,
+                no_speech_probability=0.02,
+                compression_ratio=0.4,
+            ),
+        ),
+    )
+    speech = DetailedFakeSpeech(transcription)
+    voice = FakeVoice()
+    activity = FakeActivity(speech_windows=4, maximum_probability=0.98)
+    endpoint = EndpointProcessor(speech, activity=activity)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=13)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    task = endpoint.turn_task
+    if task is not None:
+        await task
+
+    assert voice.transcripts == ["Stop."]
+
+
+@pytest.mark.asyncio
+async def test_repetitive_whisper_hallucination_never_reaches_conversation_pipeline() -> None:
+    speech = DetailedFakeSpeech(
+        Transcription(
+            "available " * 100,
+            (
+                TranscriptionSegmentEvidence(
+                    average_log_probability=-0.4,
+                    no_speech_probability=0.01,
+                    compression_ratio=58.5,
+                ),
+            ),
+        )
+    )
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(
+        speech,
+        activity=FakeActivity(speech_windows=4, maximum_probability=0.98),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    task = endpoint.turn_task
+    if task is not None:
+        await task
+
+    assert voice.transcripts == []

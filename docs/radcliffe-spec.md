@@ -353,6 +353,15 @@ superseded without invoking the model. This replacement policy is deliberate:
 Radcliffe does not concatenate separately endpointed transcripts because doing
 so could silently change user intent.
 
+An RMS endpoint is only a speech candidate. Subminimum bursts reset after the
+normal silence window, and sparse maximum-duration candidates are rejected by
+voice occupancy before STT. Remaining local candidates pass a speech-likeness
+model and then a decoder-evidence policy using segment no-speech probability,
+average log probability, compression ratio, and finite-value checks. Rejected
+candidates create no `USER` envelope or model call. The policy is based on
+acoustic and decoder evidence, never a blacklist of transcript phrases, and
+logs only aggregate evidence without retaining microphone audio.
+
 ### Pi Agent Core adapter
 
 `AgentOrchestrator` maps Radcliffe envelopes to Pi custom agent messages and
@@ -468,6 +477,12 @@ Test layers:
    Bluetooth switching, Wi-Fi/cellular transition, and app process recovery.
 6. Security tests for prompt injection, path traversal, symlink escape, SSRF,
    malicious archives, unauthorized tools, and stale-token access.
+
+The retained synthetic STT rejection corpus includes digital silence, seeded
+room tone, post-AEC playback echo, sparse short noise, a 30-second
+maximum-duration spike pattern, and legitimate short speech across supported
+test voices. It gates false `USER` turns independently from ordinary WER and
+keyword-recall benchmarks.
 7. Soak, load, and chaos tests for agent crashes, provider timeouts, TURN-only
    networks, packet loss, and CPU/GPU contention.
 

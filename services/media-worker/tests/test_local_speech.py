@@ -2,7 +2,13 @@ import sys
 
 import numpy as np
 import pytest
-from radcliffe_media.speech import LocalAppleSpeechProvider
+from radcliffe_media.speech import (
+    LocalAppleSpeechProvider,
+    Transcription,
+    TranscriptionSegmentEvidence,
+    assess_transcription,
+)
+from radcliffe_media.speech_activity import SileroSpeechActivityAnalyzer
 
 
 @pytest.mark.asyncio
@@ -47,6 +53,74 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
             "read source, metadata."
         ),
     }
+
+
+@pytest.mark.parametrize(
+    ("segment", "expected_reason"),
+    [
+        (
+            TranscriptionSegmentEvidence(float("nan"), 0.01, 0.5),
+            "non_finite_decoder_evidence",
+        ),
+        (TranscriptionSegmentEvidence(-0.4, 0.01, 31.8), "repetitive_decode"),
+        (TranscriptionSegmentEvidence(-1.7, 0.01, 0.5), "low_log_probability"),
+        (TranscriptionSegmentEvidence(-0.4, 0.8, 0.5), "no_speech_probability"),
+    ],
+)
+def test_whisper_decoder_evidence_rejects_low_information_transcripts(
+    segment: TranscriptionSegmentEvidence,
+    expected_reason: str,
+) -> None:
+    assessment = assess_transcription(Transcription("Thank you.", (segment,)))
+
+    assert not assessment.accepted
+    assert assessment.reason == expected_reason
+
+
+def test_legitimate_thank_you_is_not_phrase_blacklisted() -> None:
+    assessment = assess_transcription(
+        Transcription(
+            "Thank you.",
+            (TranscriptionSegmentEvidence(-0.54, 0.01, 0.56),),
+        )
+    )
+
+    assert assessment.accepted
+    assert assessment.reason == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_silero_rejects_deterministic_room_noise() -> None:
+    random = np.random.default_rng(20260714)
+    noise = (random.normal(0, 0.04, 26400) * 32767).astype("<i2").tobytes()
+
+    evidence = await SileroSpeechActivityAnalyzer().analyze(noise, 16000, 1)
+
+    assert evidence.speech_window_count == 0
+    assert evidence.maximum_probability < 0.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS local voice")
+@pytest.mark.parametrize(
+    ("voice", "phrase"),
+    [
+        ("Samantha", "Go."),
+        ("Daniel", "Stop."),
+        ("Moira", "No."),
+        ("Karen", "Yes."),
+        ("Tessa", "Stop."),
+        ("Fred", "Thank you."),
+    ],
+)
+async def test_silero_retains_legitimate_short_speech(voice: str, phrase: str) -> None:
+    provider = LocalAppleSpeechProvider(voice=voice)
+    audio = await provider.synthesize(phrase)
+
+    evidence = await SileroSpeechActivityAnalyzer().analyze(audio, 24000, 1)
+
+    assert evidence.speech_window_count >= 2
+    assert evidence.maximum_probability >= 0.8
 
 
 def test_local_waveform_rejects_invalid_audio_metadata() -> None:

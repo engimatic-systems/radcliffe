@@ -117,7 +117,14 @@ The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
 `RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 30
-seconds so intermittent noise cannot hold one endpoint open indefinitely.
+seconds, and a subminimum burst now resets after normal endpoint silence rather
+than holding one endpoint open. Maximum-duration candidates must also meet
+`RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO` (default `0.05`). Before Whisper, a
+local Silero pass requires at least two speech-like windows. After decoding,
+generic segment evidence rejects non-finite, repetitive, no-speech, or very
+low-log-probability output. Rejection logs contain only aggregate confidence
+and timing—not transcript text or microphone audio—and no phrase is
+blacklisted.
 Model speech flushes on sentence and completed-line
 boundaries, with `RADCLIFFE_MODEL_CHUNK_CHARS` providing an upper bound for
 punctuation-poor output. Phase logs report endpointing, transcription, first
@@ -136,6 +143,14 @@ Protocol v2 envelopes and state, and writes WAV plus JSON evidence under
 
 ```sh
 make check-voice-local
+```
+
+The focused false-turn corpus is faster and covers digital silence, seeded room
+tone, post-AEC playback echo, a short noise burst, a 30-second sparse-spike
+endpoint, and short legitimate commands across six voices:
+
+```sh
+make check-stt-rejection-local
 ```
 
 The current core covers command-level STT WER and vocabulary recall, multiple

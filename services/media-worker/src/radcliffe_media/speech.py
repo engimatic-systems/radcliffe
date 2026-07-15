@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import tempfile
 import wave
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 
 import httpx
 import mlx_whisper  # type: ignore[import-untyped]
@@ -18,10 +20,57 @@ DEFAULT_WHISPER_INITIAL_PROMPT = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptionSegmentEvidence:
+    average_log_probability: float | None
+    no_speech_probability: float | None
+    compression_ratio: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class Transcription:
+    text: str
+    segments: tuple[TranscriptionSegmentEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptionAssessment:
+    accepted: bool
+    reason: str
+    segment_count: int
+    average_log_probability: float | None
+    maximum_no_speech_probability: float | None
+    maximum_compression_ratio: float | None
+
+
+@runtime_checkable
+class DetailedTranscriber(Protocol):
+    async def transcribe_with_evidence(
+        self, pcm: bytes, sample_rate: int, channels: int
+    ) -> Transcription: ...
+
+
 class SpeechProvider(Protocol):
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str: ...
 
     async def synthesize(self, canonical_text: str) -> bytes: ...
+
+
+def pcm_to_16khz_mono(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
+    if sample_rate <= 0 or channels <= 0:
+        raise ValueError("sample rate and channel count must be positive")
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    complete_samples = samples.size - (samples.size % channels)
+    samples = samples[:complete_samples]
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    samples /= 32768.0
+    if sample_rate != 16000 and samples.size:
+        output_size = max(1, round(samples.size * 16000 / sample_rate))
+        source = np.arange(samples.size, dtype=np.float64)
+        target = np.linspace(0, samples.size - 1, output_size)
+        samples = np.interp(target, source, samples).astype(np.float32)
+    return samples
 
 
 class LocalAppleSpeechProvider:
@@ -39,8 +88,32 @@ class LocalAppleSpeechProvider:
         self.initial_prompt = initial_prompt
 
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
+        return (await self.transcribe_with_evidence(pcm, sample_rate, channels)).text
+
+    async def transcribe_with_evidence(
+        self, pcm: bytes, sample_rate: int, channels: int
+    ) -> Transcription:
         result = await self.transcribe_result(pcm, sample_rate, channels)
-        return str(result["text"]).strip()
+        segments: list[TranscriptionSegmentEvidence] = []
+        raw_segments = result.get("segments")
+        if isinstance(raw_segments, list):
+            for raw_segment in raw_segments:
+                if not isinstance(raw_segment, dict):
+                    continue
+                segments.append(
+                    TranscriptionSegmentEvidence(
+                        average_log_probability=self._optional_float(
+                            raw_segment.get("avg_logprob")
+                        ),
+                        no_speech_probability=self._optional_float(
+                            raw_segment.get("no_speech_prob")
+                        ),
+                        compression_ratio=self._optional_float(
+                            raw_segment.get("compression_ratio")
+                        ),
+                    )
+                )
+        return Transcription(str(result.get("text", "")).strip(), tuple(segments))
 
     async def transcribe_result(
         self, pcm: bytes, sample_rate: int, channels: int
@@ -59,20 +132,13 @@ class LocalAppleSpeechProvider:
 
     @staticmethod
     def _waveform(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
-        if sample_rate <= 0 or channels <= 0:
-            raise ValueError("sample rate and channel count must be positive")
-        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
-        complete_samples = samples.size - (samples.size % channels)
-        samples = samples[:complete_samples]
-        if channels > 1:
-            samples = samples.reshape(-1, channels).mean(axis=1)
-        samples /= 32768.0
-        if sample_rate != 16000 and samples.size:
-            output_size = max(1, round(samples.size * 16000 / sample_rate))
-            source = np.arange(samples.size, dtype=np.float64)
-            target = np.linspace(0, samples.size - 1, output_size)
-            samples = np.interp(target, source, samples).astype(np.float32)
-        return samples
+        return pcm_to_16khz_mono(pcm, sample_rate, channels)
+
+    @staticmethod
+    def _optional_float(value: object) -> float | None:
+        if isinstance(value, int | float):
+            return float(value)
+        return None
 
     async def synthesize(self, canonical_text: str) -> bytes:
         with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:
@@ -162,3 +228,61 @@ class OpenAISpeechProvider:
             )
             response.raise_for_status()
             return response.content
+
+
+def assess_transcription(
+    transcription: Transcription,
+    *,
+    minimum_average_log_probability: float = -1.5,
+    maximum_no_speech_probability: float = 0.6,
+    maximum_compression_ratio: float = 2.4,
+) -> TranscriptionAssessment:
+    segments = transcription.segments
+    log_probabilities = tuple(
+        segment.average_log_probability
+        for segment in segments
+        if segment.average_log_probability is not None
+    )
+    no_speech_probabilities = tuple(
+        segment.no_speech_probability
+        for segment in segments
+        if segment.no_speech_probability is not None
+    )
+    compression_ratios = tuple(
+        segment.compression_ratio for segment in segments if segment.compression_ratio is not None
+    )
+    average_log_probability = (
+        sum(log_probabilities) / len(log_probabilities) if log_probabilities else None
+    )
+    observed_no_speech_probability = (
+        max(no_speech_probabilities) if no_speech_probabilities else None
+    )
+    observed_compression_ratio = max(compression_ratios) if compression_ratios else None
+
+    reason = "accepted"
+    if not transcription.text:
+        reason = "empty_transcript"
+    elif any(not math.isfinite(value) for value in (*log_probabilities, *compression_ratios)):
+        reason = "non_finite_decoder_evidence"
+    elif (
+        observed_compression_ratio is not None
+        and observed_compression_ratio > maximum_compression_ratio
+    ):
+        reason = "repetitive_decode"
+    elif (
+        average_log_probability is not None
+        and average_log_probability < minimum_average_log_probability
+    ):
+        reason = "low_log_probability"
+    elif no_speech_probabilities and all(
+        value >= maximum_no_speech_probability for value in no_speech_probabilities
+    ):
+        reason = "no_speech_probability"
+    return TranscriptionAssessment(
+        accepted=reason == "accepted",
+        reason=reason,
+        segment_count=len(segments),
+        average_log_probability=average_log_probability,
+        maximum_no_speech_probability=observed_no_speech_probability,
+        maximum_compression_ratio=observed_compression_ratio,
+    )

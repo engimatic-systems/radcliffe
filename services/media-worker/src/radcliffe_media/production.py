@@ -27,10 +27,14 @@ from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import (
     DEFAULT_WHISPER_INITIAL_PROMPT,
+    DetailedTranscriber,
     LocalAppleSpeechProvider,
     OpenAISpeechProvider,
     SpeechProvider,
+    Transcription,
+    assess_transcription,
 )
+from radcliffe_media.speech_activity import SileroSpeechActivityAnalyzer, SpeechActivityAnalyzer
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +43,12 @@ class EndpointSettings:
     minimum_voice_ms: float = 250
     end_silence_ms: float = 900
     maximum_utterance_ms: float = 30000
+    minimum_maximum_voice_ratio: float = 0.05
+    minimum_speech_windows: int = 2
+    speech_probability: float = 0.5
+    minimum_average_log_probability: float = -1.5
+    maximum_no_speech_probability: float = 0.6
+    maximum_compression_ratio: float = 2.4
 
     def __post_init__(self) -> None:
         if (
@@ -51,6 +61,16 @@ class EndpointSettings:
             <= 0
         ):
             raise ValueError("endpoint settings must be positive")
+        if not 0 < self.minimum_maximum_voice_ratio <= 1:
+            raise ValueError("maximum-utterance voice ratio must be between zero and one")
+        if self.minimum_speech_windows <= 0:
+            raise ValueError("minimum speech windows must be positive")
+        if not 0 < self.speech_probability < 1:
+            raise ValueError("speech probability must be between zero and one")
+        if not 0 <= self.maximum_no_speech_probability <= 1:
+            raise ValueError("no-speech probability must be between zero and one")
+        if self.maximum_compression_ratio <= 0:
+            raise ValueError("compression ratio must be positive")
 
     @classmethod
     def from_environment(cls) -> EndpointSettings:
@@ -61,14 +81,38 @@ class EndpointSettings:
             maximum_utterance_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "30000")
             ),
+            minimum_maximum_voice_ratio=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.05")
+            ),
+            minimum_speech_windows=int(
+                os.environ.get("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "2")
+            ),
+            speech_probability=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.5")
+            ),
+            minimum_average_log_probability=float(
+                os.environ.get("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-1.5")
+            ),
+            maximum_no_speech_probability=float(
+                os.environ.get("RADCLIFFE_WHISPER_MAX_NO_SPEECH_PROBABILITY", "0.6")
+            ),
+            maximum_compression_ratio=float(
+                os.environ.get("RADCLIFFE_WHISPER_MAX_COMPRESSION_RATIO", "2.4")
+            ),
         )
 
 
 class EndpointProcessor(FrameProcessor):
-    def __init__(self, speech: SpeechProvider, settings: EndpointSettings | None = None) -> None:
+    def __init__(
+        self,
+        speech: SpeechProvider,
+        settings: EndpointSettings | None = None,
+        activity: SpeechActivityAnalyzer | None = None,
+    ) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
         self.settings = settings or EndpointSettings()
+        self.activity = activity
         self.voice: VoicePipeline | None = None
         self.buffer = bytearray()
         self.speaking = False
@@ -104,6 +148,20 @@ class EndpointProcessor(FrameProcessor):
         utterance_ms = len(self.buffer) / (2 * frame.num_channels * frame.sample_rate) * 1000
         silence_endpoint = self.silence_ms >= self.settings.end_silence_ms
         maximum_endpoint = utterance_ms >= self.settings.maximum_utterance_ms
+        voice_ratio = self.voice_ms / utterance_ms if utterance_ms else 0.0
+        if maximum_endpoint and voice_ratio < self.settings.minimum_maximum_voice_ratio:
+            logger.info(
+                "voice endpoint rejected reason=low_maximum_voice_occupancy audio_ms={} "
+                "voice_ms={} voice_ratio={}",
+                round(utterance_ms, 2),
+                round(self.voice_ms, 2),
+                round(voice_ratio, 4),
+            )
+            self.speaking = False
+            self.buffer.clear()
+            self.voice_ms = 0
+            self.silence_ms = 0
+            return
         if (
             silence_endpoint or maximum_endpoint
         ) and self.voice_ms >= self.settings.minimum_voice_ms:
@@ -119,12 +177,18 @@ class EndpointProcessor(FrameProcessor):
             self.speaking = False
             self.buffer.clear()
             self.turn_task = asyncio.create_task(
-                self._complete(audio, frame.sample_rate, frame.num_channels),
+                self._complete(
+                    audio,
+                    frame.sample_rate,
+                    frame.num_channels,
+                    voice_ms=self.voice_ms,
+                    voice_ratio=voice_ratio,
+                ),
                 name="radcliffe-voice-turn",
             )
-        elif maximum_endpoint:
+        elif silence_endpoint or maximum_endpoint:
             logger.info(
-                "voice endpoint discarded insufficient speech audio_ms={} voice_ms={}",
+                "voice endpoint rejected reason=insufficient_rms_speech audio_ms={} voice_ms={}",
                 round(utterance_ms, 2),
                 round(self.voice_ms, 2),
             )
@@ -133,17 +197,78 @@ class EndpointProcessor(FrameProcessor):
             self.voice_ms = 0
             self.silence_ms = 0
 
-    async def _complete(self, pcm: bytes, sample_rate: int, channels: int) -> None:
+    async def _complete(
+        self,
+        pcm: bytes,
+        sample_rate: int,
+        channels: int,
+        *,
+        voice_ms: float,
+        voice_ratio: float,
+    ) -> None:
         started_at = monotonic()
         try:
-            transcript = await self.speech.transcribe(pcm, sample_rate, channels)
+            speech_windows: int | None = None
+            maximum_speech_probability: float | None = None
+            if self.activity is not None:
+                activity = await self.activity.analyze(pcm, sample_rate, channels)
+                speech_windows = activity.speech_window_count
+                maximum_speech_probability = activity.maximum_probability
+                if activity.speech_window_count < self.settings.minimum_speech_windows:
+                    logger.info(
+                        "voice endpoint rejected reason=insufficient_speech_activity "
+                        "audio_ms={} voice_ms={} voice_ratio={} speech_windows={} "
+                        "activity_windows={} maximum_speech_probability={}",
+                        round(len(pcm) / (2 * channels * sample_rate) * 1000, 2),
+                        round(voice_ms, 2),
+                        round(voice_ratio, 4),
+                        activity.speech_window_count,
+                        activity.window_count,
+                        round(activity.maximum_probability, 4),
+                    )
+                    return
+            if isinstance(self.speech, DetailedTranscriber):
+                transcription = await self.speech.transcribe_with_evidence(
+                    pcm, sample_rate, channels
+                )
+            else:
+                transcription = Transcription(
+                    await self.speech.transcribe(pcm, sample_rate, channels)
+                )
+            assessment = assess_transcription(
+                transcription,
+                minimum_average_log_probability=(self.settings.minimum_average_log_probability),
+                maximum_no_speech_probability=(self.settings.maximum_no_speech_probability),
+                maximum_compression_ratio=self.settings.maximum_compression_ratio,
+            )
             logger.info(
-                "voice turn phase complete phase=transcription duration_ms={} audio_ms={}",
+                "voice turn phase complete phase=transcription duration_ms={} audio_ms={} "
+                "accepted={} reason={} voice_ms={} voice_ratio={} speech_windows={} "
+                "maximum_speech_probability={} segment_count={} average_log_probability={} "
+                "maximum_no_speech_probability={} maximum_compression_ratio={}",
                 round((monotonic() - started_at) * 1000, 2),
                 round(len(pcm) / (2 * channels * sample_rate) * 1000, 2),
+                assessment.accepted,
+                assessment.reason,
+                round(voice_ms, 2),
+                round(voice_ratio, 4),
+                speech_windows,
+                round(maximum_speech_probability, 4)
+                if maximum_speech_probability is not None
+                else None,
+                assessment.segment_count,
+                round(assessment.average_log_probability, 4)
+                if assessment.average_log_probability is not None
+                else None,
+                round(assessment.maximum_no_speech_probability, 4)
+                if assessment.maximum_no_speech_probability is not None
+                else None,
+                round(assessment.maximum_compression_ratio, 4)
+                if assessment.maximum_compression_ratio is not None
+                else None,
             )
-            if transcript and self.voice is not None and not self.paused:
-                await self.voice.handle_transcript(transcript)
+            if assessment.accepted and self.voice is not None and not self.paused:
+                await self.voice.handle_transcript(transcription.text)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -248,7 +373,12 @@ async def run() -> None:
         speech = OpenAISpeechProvider(api_key)
     else:
         raise RuntimeError(f"unsupported speech provider: {speech_provider}")
-    endpoint = EndpointProcessor(speech, EndpointSettings.from_environment())
+    endpoint_settings = EndpointSettings.from_environment()
+    endpoint = EndpointProcessor(
+        speech,
+        endpoint_settings,
+        SileroSpeechActivityAnalyzer(speech_probability=endpoint_settings.speech_probability),
+    )
     transport = create_transport(
         LiveKitConnection(
             required["RADCLIFFE_LIVEKIT_URL"] or "",
