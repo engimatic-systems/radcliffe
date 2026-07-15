@@ -1,6 +1,6 @@
 ---
 id: rad-mp26
-status: in_progress
+status: closed
 deps: [rad-tx88, rad-lod5, rad-yk82]
 links: [rad-lod5, rad-yk82, rad-h2lv]
 created: 2026-07-14T02:48:09Z
@@ -40,3 +40,7 @@ Implemented on feat/android-session-home: configuration-only setup, generated se
 **2026-07-15T03:01:07Z**
 
 Pixel v0.3.1 exposed the precise cause: 'The coroutine scope left the composition.' The action-backed LaunchedEffect cleared its own key before its first suspended control request completed, deterministically cancelling itself; cancellation was then rendered as an availability error. v0.3.2 retains the key through the handoff and rethrows genuine CancellationException values rather than converting them to network failures.
+
+**2026-07-15T03:15:48Z**
+
+2026-07-14 Pixel acceptance passed on v0.3.2: created a new conversation, talked and interrupted successfully, closed/restarted the app and resumed the same conversation, and switched to another conversation. This clears the recent-session/generation/timeline-resume functionality checkpoint.

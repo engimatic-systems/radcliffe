@@ -24,3 +24,7 @@ Each session row renders a circular usage indicator from server-provided context
 **2026-07-14T12:35:29Z**
 
 Implemented accessible recent-session context indicators using exact server accounting: normal/warning/near-limit/overflow plus loading/unavailable states, visible non-color glyphs, TalkBack used/remaining/exact-or-estimated labels, progress semantics, dark-mode Material colors, no animation, and narrow two-line rows. Boundary/reducer JVM tests pass. Keep open for physical large-font/dark-mode/TalkBack inspection on the Pixel.
+
+**2026-07-15T03:15:48Z**
+
+2026-07-14 Pixel v0.3.2 session-home functionality was accepted during new/reopened/switched conversation testing. Dedicated TalkBack, large-font, and dark-mode inspection remains outstanding.

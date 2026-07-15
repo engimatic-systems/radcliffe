@@ -36,3 +36,7 @@ Implemented on feat/android-persisted-profile: DataStore stores normalized contr
 **2026-07-14T12:35:29Z**
 
 Android 0.3.0 now removes manual session configuration while preserving encrypted URL/token and selected-session state. The pending generated-session idempotency key survives repository/process recreation and clears only after durable selection. Local tests pass; keep open for upgrade/relaunch/reboot verification on the Pixel.
+
+**2026-07-15T03:15:48Z**
+
+2026-07-14 Pixel v0.3.2 preserved the saved configuration and selected conversation across app close/restart. Device reboot remains the only unverified persistence condition.
