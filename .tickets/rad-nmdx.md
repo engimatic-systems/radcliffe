@@ -2,7 +2,7 @@
 id: rad-nmdx
 status: open
 deps: [rad-2tft]
-links: []
+links: [rad-tx88]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1
