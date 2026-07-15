@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -55,6 +56,16 @@ private data class LoadedSessionPage(
     val items: List<RecentSessionItem>,
     val nextCursor: String?,
 )
+
+private suspend inline fun <T> suspendRunCatching(
+    crossinline block: suspend () -> T,
+): Result<T> = try {
+    Result.success(block())
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Throwable) {
+    Result.failure(error)
+}
 
 class MainActivity : ComponentActivity() {
     private val profiles by lazy { ConnectionProfileRepository.create(this) }
@@ -99,7 +110,7 @@ class MainActivity : ComponentActivity() {
             val profile = storedProfile ?: return@LaunchedEffect
             if (!profile.isConfigured || editing || state != VoiceState.IDLE) return@LaunchedEffect
             homeState = sessionHomeLoading(homeState)
-            runCatching { withContext(Dispatchers.IO) { loadSessionPage(profile) } }
+            suspendRunCatching { withContext(Dispatchers.IO) { loadSessionPage(profile) } }
                 .onSuccess { loaded ->
                     homeState = sessionHomeLoaded(loaded.items, loaded.nextCursor)
                 }
@@ -120,16 +131,18 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(grantedAction) {
             val action = grantedAction ?: return@LaunchedEffect
-            grantedAction = null
+            // This value is the effect key. Consume it only after every suspending handoff;
+            // clearing it here cancels this coroutine before credentials can be returned.
             val profile = storedProfile
             if (profile == null || !profile.isConfigured) {
                 editing = true
                 settingsError = profile?.validationError() ?: "Settings are still loading"
+                grantedAction = null
                 return@LaunchedEffect
             }
             SessionModel.prepare((action as? SessionAction.Open)?.sessionId.orEmpty())
             SessionModel.state(VoiceState.CONNECTING)
-            runCatching {
+            suspendRunCatching {
                 withContext(Dispatchers.IO) {
                     when (action) {
                         SessionAction.Create -> {
@@ -161,7 +174,7 @@ class MainActivity : ComponentActivity() {
                 runCatching { startVoiceService(credentials) }
                     .onSuccess {
                         scope.launch {
-                            runCatching {
+                            suspendRunCatching {
                                 withContext(Dispatchers.IO) {
                                     profiles.selectSession(sessionId)
                                 }
@@ -185,6 +198,7 @@ class MainActivity : ComponentActivity() {
                 SessionModel.state(VoiceState.IDLE)
                 homeState = sessionHomeFailure(homeState, error)
             }
+            if (grantedAction == action) grantedAction = null
         }
 
         fun requestSession(action: SessionAction) {
@@ -233,7 +247,9 @@ class MainActivity : ComponentActivity() {
                             settingsError = validation
                         } else {
                             scope.launch {
-                                runCatching { withContext(Dispatchers.IO) { profiles.save(candidate) } }
+                                suspendRunCatching {
+                                    withContext(Dispatchers.IO) { profiles.save(candidate) }
+                                }
                                     .onSuccess {
                                         settingsError = null
                                         editing = false
@@ -254,7 +270,7 @@ class MainActivity : ComponentActivity() {
                             settingsError = null
                             settingsNotice = "Testing…"
                             scope.launch {
-                                runCatching {
+                                suspendRunCatching {
                                     withContext(Dispatchers.IO) {
                                         SessionApi.testConnection(
                                             candidate.controlUrl,
@@ -273,7 +289,9 @@ class MainActivity : ComponentActivity() {
                     onCancel = { editing = false; settingsError = null; settingsNotice = null },
                     onClear = {
                         scope.launch {
-                            runCatching { withContext(Dispatchers.IO) { profiles.clear() } }
+                            suspendRunCatching {
+                                withContext(Dispatchers.IO) { profiles.clear() }
+                            }
                                 .onSuccess {
                                     controlUrl = ""
                                     bootstrapToken = ""
@@ -315,7 +333,7 @@ class MainActivity : ComponentActivity() {
                             if (homeState.loadingMore) return@SessionHome
                             homeState = sessionHomeLoading(homeState, more = true)
                             scope.launch {
-                                runCatching {
+                                suspendRunCatching {
                                     withContext(Dispatchers.IO) { loadSessionPage(profile, cursor) }
                                 }.onSuccess { loaded ->
                                     homeState = sessionHomePageAppended(

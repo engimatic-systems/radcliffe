@@ -36,3 +36,7 @@ Implemented on feat/android-session-home: configuration-only setup, generated se
 **2026-07-15T02:52:08Z**
 
 2026-07-14 Pixel v0.3.0 regression: create/reopen control requests all returned 200 and the generated worker remained healthy, but no Pixel participant reached LiveKit; the conversation screen flashed and an automatic refresh erased the client error. Fixed for v0.3.1 by moving selected-session persistence after the foreground-service handoff so preference failure cannot block a valid join, preserving preflight failures on screen, and adding credential-contract plus state-transition regressions.
+
+**2026-07-15T03:01:07Z**
+
+Pixel v0.3.1 exposed the precise cause: 'The coroutine scope left the composition.' The action-backed LaunchedEffect cleared its own key before its first suspended control request completed, deterministically cancelling itself; cancellation was then rendered as an availability error. v0.3.2 retains the key through the handoff and rethrows genuine CancellationException values rather than converting them to network failures.
