@@ -104,6 +104,7 @@ class PlaybackAcknowledgement:
     boundary_index: int
     occurred_at: datetime
     detail: str = ""
+    playback_id: str = ""
 
 
 class InvalidTransitionError(ValueError):
@@ -205,4 +206,5 @@ class SessionEngine:
             boundary_index=ack.boundary_index,
             occurred_at=ack.occurred_at.astimezone(UTC),
             detail=ack.detail,
+            playback_id=ack.playback_id,
         )

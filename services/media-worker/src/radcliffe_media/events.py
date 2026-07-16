@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from google.protobuf.timestamp_pb2 import Timestamp
-from radcliffe_domain.envelope import MessageEnvelope
+from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.session import ConversationState, Operation
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
@@ -17,6 +17,14 @@ _STATE_TO_PROTO = {
     ConversationState.PAUSED: protocol_pb2.CONVERSATION_STATE_PAUSED,
     ConversationState.RECONNECTING: protocol_pb2.CONVERSATION_STATE_RECONNECTING,
     ConversationState.FAILED: protocol_pb2.CONVERSATION_STATE_FAILED,
+}
+
+_SOURCE_TO_PROTO = {
+    SourceKind.SYSTEM: protocol_pb2.SOURCE_KIND_SYSTEM,
+    SourceKind.USER: protocol_pb2.SOURCE_KIND_USER,
+    SourceKind.MODEL: protocol_pb2.SOURCE_KIND_MODEL,
+    SourceKind.CALL: protocol_pb2.SOURCE_KIND_CALL,
+    SourceKind.TEXT_SOURCE: protocol_pb2.SOURCE_KIND_TEXT_SOURCE,
 }
 
 
@@ -53,6 +61,35 @@ class LiveKitEventSink:
                 current=_STATE_TO_PROTO[current],
                 reason=reason,
                 occurred_at=occurred_at,
+            ),
+        )
+        await self._send(event)
+
+    async def playback_segment(
+        self,
+        operation: Operation,
+        playback_id: str,
+        segment_id: str,
+        boundary_index: int,
+        duration_ms: int,
+        canonical_sha256: bytes,
+        source: SourceKind,
+    ) -> None:
+        event = protocol_pb2.ServerEvent(
+            protocol_version=2,
+            playback_segment=protocol_pb2.PlaybackSegment(
+                operation=protocol_pb2.OperationRef(
+                    session_id=operation.session_id,
+                    generation=operation.generation,
+                    operation_id=operation.operation_id,
+                    cancellation_id=operation.cancellation_id,
+                ),
+                playback_id=playback_id,
+                segment_id=segment_id,
+                boundary_index=boundary_index,
+                duration_ms=duration_ms,
+                canonical_sha256=canonical_sha256,
+                source=_SOURCE_TO_PROTO[source],
             ),
         )
         await self._send(event)

@@ -13,8 +13,8 @@ android {
         applicationId = "works.ravd.radcliffe"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.3.3"
+        versionCode = 8
+        versionName = "0.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -1,6 +1,8 @@
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
+from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import rtc
 from radcliffe_media.control import ClientControlHandler
 from radcliffe_media.livekit_adapter import RadcliffeLiveKitTransport
@@ -10,6 +12,7 @@ from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 class FakeControlTarget:
     def __init__(self) -> None:
         self.actions: list[str] = []
+        self.acknowledgements = []
 
     async def interrupt(self) -> None:
         self.actions.append("interrupt")
@@ -22,6 +25,9 @@ class FakeControlTarget:
 
     async def stop(self) -> None:
         self.actions.append("stop")
+
+    async def playback_acknowledgement(self, acknowledgement) -> None:
+        self.acknowledgements.append(acknowledgement)
 
 
 def command(kind: int) -> bytes:
@@ -46,6 +52,39 @@ async def test_protocol_v2_binary_controls_are_dispatched() -> None:
 
     assert target.actions == ["interrupt", "pause", "resume", "stop"]
     assert not await handler.handle(b"not protobuf")
+
+
+@pytest.mark.asyncio
+async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
+    target = FakeControlTarget()
+    handler = ClientControlHandler(target)
+    occurred_at = Timestamp()
+    occurred_at.FromDatetime(datetime.now(UTC))
+    event = protocol_pb2.ClientEvent(
+        protocol_version=2,
+        playback_acknowledgement=protocol_pb2.PlaybackAcknowledgement(
+            acknowledgement_id="ack-1",
+            playback_id="playback-1",
+            operation=protocol_pb2.OperationRef(
+                session_id="s1",
+                generation=1,
+                operation_id="operation-1",
+                cancellation_id="cancel-1",
+            ),
+            segment_id="segment-1",
+            status=protocol_pb2.PLAYBACK_STATUS_COMPLETED,
+            position_ms=1200,
+            boundary_index=2,
+            occurred_at=occurred_at,
+        ),
+    )
+
+    assert await handler.handle(event.SerializeToString(deterministic=True))
+    acknowledgement = target.acknowledgements[0]
+    assert acknowledgement.playback_id == "playback-1"
+    assert acknowledgement.segment_id == "segment-1"
+    assert acknowledgement.position_ms == 1200
+    assert acknowledgement.boundary_index == 2
 
 
 @pytest.mark.asyncio

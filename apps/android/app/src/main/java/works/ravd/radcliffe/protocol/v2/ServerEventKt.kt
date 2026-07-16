@@ -189,6 +189,30 @@ public object ServerEventKt {
     public fun hasError(): kotlin.Boolean {
       return _builder.hasError()
     }
+
+    /**
+     * `.radcliffe.v2.PlaybackSegment playback_segment = 8;`
+     */
+    public var playbackSegment: works.ravd.radcliffe.protocol.v2.PlaybackSegment
+      @kotlin.jvm.JvmName("getPlaybackSegment")
+        get() = _builder.playbackSegment
+      @kotlin.jvm.JvmName("setPlaybackSegment")
+        set(value) {
+        _builder.playbackSegment = value
+      }
+    /**
+     * `.radcliffe.v2.PlaybackSegment playback_segment = 8;`
+     */
+    public fun clearPlaybackSegment() {
+      _builder.clearPlaybackSegment()
+    }
+    /**
+     * `.radcliffe.v2.PlaybackSegment playback_segment = 8;`
+     * @return Whether the playbackSegment field is set.
+     */
+    public fun hasPlaybackSegment(): kotlin.Boolean {
+      return _builder.hasPlaybackSegment()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -218,3 +242,6 @@ public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.toolResultOrNul
 
 public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.errorOrNull: works.ravd.radcliffe.protocol.v2.ProtocolError?
   get() = if (hasError()) getError() else null
+
+public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.playbackSegmentOrNull: works.ravd.radcliffe.protocol.v2.PlaybackSegment?
+  get() = if (hasPlaybackSegment()) getPlaybackSegment() else null

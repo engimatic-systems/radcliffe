@@ -191,6 +191,23 @@ public object PlaybackAcknowledgementKt {
     public fun clearDetail() {
       _builder.clearDetail()
     }
+
+    /**
+     * `string playback_id = 9;`
+     */
+    public var playbackId: kotlin.String
+      @kotlin.jvm.JvmName("getPlaybackId")
+        get() = _builder.playbackId
+      @kotlin.jvm.JvmName("setPlaybackId")
+        set(value) {
+        _builder.playbackId = value
+      }
+    /**
+     * `string playback_id = 9;`
+     */
+    public fun clearPlaybackId() {
+      _builder.clearPlaybackId()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement.copy(block: `works.ravd.radcliffe.protocol.v2`.PlaybackAcknowledgementKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement =

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -62,6 +63,19 @@ class _PausedSource:
     operation: Operation
 
 
+@dataclass(slots=True)
+class _PendingPlayback:
+    operation: Operation
+    playback_id: str
+    segment_id: str
+    boundary_index: int
+    duration_ms: int
+    terminal: asyncio.Event = field(default_factory=asyncio.Event)
+    started: bool = False
+    latest_position_ms: int = 0
+    terminal_status: PlaybackStatus | None = None
+
+
 class Orchestrator(Protocol):
     def turn(
         self, request: dict[str, object], cancelled: object | None = None
@@ -73,6 +87,8 @@ class Synthesizer(Protocol):
 
 
 class AudioPublisher(Protocol):
+    def duration_ms(self, pcm_audio: bytes) -> int: ...
+
     async def publish(
         self,
         segment_id: str,
@@ -96,6 +112,17 @@ class VoiceEventSink(Protocol):
         operation: Operation | None = None,
     ) -> None: ...
 
+    async def playback_segment(
+        self,
+        operation: Operation,
+        playback_id: str,
+        segment_id: str,
+        boundary_index: int,
+        duration_ms: int,
+        canonical_sha256: bytes,
+        source: SourceKind,
+    ) -> None: ...
+
 
 class VoicePipeline:
     def __init__(
@@ -108,9 +135,13 @@ class VoicePipeline:
         events: VoiceEventSink | None = None,
         *,
         model_chunk_chars: int = 240,
+        client_playback_acknowledgements: bool = False,
+        playback_ack_timeout_seconds: float = 2.0,
     ) -> None:
         if model_chunk_chars <= 0:
             raise ValueError("model chunk size must be positive")
+        if playback_ack_timeout_seconds <= 0:
+            raise ValueError("playback acknowledgement timeout must be positive")
         self.store = store
         self.engine = SessionEngine(session_id, store)
         self.orchestrator = orchestrator
@@ -118,12 +149,16 @@ class VoicePipeline:
         self.publisher = publisher
         self.events = events
         self.model_chunk_chars = model_chunk_chars
+        self.client_playback_acknowledgements = client_playback_acknowledgements
+        self.playback_ack_timeout_seconds = playback_ack_timeout_seconds
         self._active_turn: _ActiveTurn | None = None
         self._coordinator = asyncio.Lock()
         self._turn_serial = asyncio.Lock()
         self._append_lock = asyncio.Lock()
         self._latest_submission = 0
         self._paused_source: _PausedSource | None = None
+        self._pending_playback: dict[str, _PendingPlayback] = {}
+        self._playback_lock = asyncio.Lock()
 
     async def start(self) -> None:
         previous = self.engine.state
@@ -341,6 +376,7 @@ class VoicePipeline:
             boundary,
             operation,
             turn,
+            source=SourceKind.MODEL,
         )
         turn.rendered_model_text += canonical_text
         turn.next_model_boundary += 1
@@ -386,6 +422,7 @@ class VoicePipeline:
                 segment.boundary_index,
                 operation,
                 turn,
+                source=SourceKind.TEXT_SOURCE,
                 wait_for_playback=True,
             )
             turn.next_source_boundary = segment.boundary_index + 1
@@ -434,77 +471,170 @@ class VoicePipeline:
         operation: Operation,
         turn: _ActiveTurn,
         *,
+        source: SourceKind,
         wait_for_playback: bool = False,
     ) -> None:
         self._assert_owner(turn, operation)
         synth_started = monotonic()
         audio = await self.synthesizer.synthesize(canonical_text)
+        duration = self.publisher.duration_ms(audio)
+        playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)
         self._assert_owner(turn, operation)
-        now = datetime.now(UTC)
-        await self.engine.acknowledge(
-            PlaybackAcknowledgement(
-                acknowledgement_id=str(uuid4()),
-                operation=operation,
-                segment_id=segment_id,
-                status=PlaybackStatus.STARTED,
-                position_ms=0,
-                boundary_index=boundary_index,
-                occurred_at=now,
+        pending: _PendingPlayback | None = None
+        if self.client_playback_acknowledgements:
+            if self.events is None:
+                raise RuntimeError("client playback authority requires an event sink")
+            pending = _PendingPlayback(
+                operation,
+                playback_id,
+                segment_id,
+                boundary_index,
+                duration,
             )
-        )
+            async with self._playback_lock:
+                self._pending_playback[playback_id] = pending
+            await self.events.playback_segment(
+                operation,
+                playback_id,
+                segment_id,
+                boundary_index,
+                duration,
+                hashlib.sha256(canonical_text.encode()).digest(),
+                source,
+            )
+        else:
+            await self.engine.acknowledge(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=str(uuid4()),
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=PlaybackStatus.STARTED,
+                    position_ms=0,
+                    boundary_index=boundary_index,
+                    occurred_at=datetime.now(UTC),
+                    playback_id=playback_id,
+                )
+            )
         self._assert_owner(turn, operation)
         publish_started = monotonic()
         if turn.first_audio_at is None:
             turn.first_audio_at = publish_started
             self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
         try:
-            duration = await self.publisher.publish(
+            published_duration = await self.publisher.publish(
                 segment_id,
                 audio,
                 wait_for_playback=wait_for_playback,
             )
         except asyncio.CancelledError:
-            await self.engine.acknowledge(
-                PlaybackAcknowledgement(
-                    acknowledgement_id=str(uuid4()),
-                    operation=operation,
-                    segment_id=segment_id,
-                    status=PlaybackStatus.FLUSHED,
-                    position_ms=0,
-                    boundary_index=boundary_index,
-                    occurred_at=datetime.now(UTC),
-                    detail="playback cancelled before boundary completion",
+            if not self.client_playback_acknowledgements:
+                await self.engine.acknowledge(
+                    PlaybackAcknowledgement(
+                        acknowledgement_id=str(uuid4()),
+                        operation=operation,
+                        segment_id=segment_id,
+                        status=PlaybackStatus.FLUSHED,
+                        position_ms=0,
+                        boundary_index=boundary_index,
+                        occurred_at=datetime.now(UTC),
+                        detail="playback cancelled before boundary completion",
+                        playback_id=playback_id,
+                    )
                 )
-            )
             raise
         except Exception as error:
-            await self.engine.acknowledge(
-                PlaybackAcknowledgement(
-                    acknowledgement_id=str(uuid4()),
-                    operation=operation,
-                    segment_id=segment_id,
-                    status=PlaybackStatus.FAILED,
-                    position_ms=0,
-                    boundary_index=boundary_index,
-                    occurred_at=datetime.now(UTC),
-                    detail=type(error).__name__,
+            if not self.client_playback_acknowledgements:
+                await self.engine.acknowledge(
+                    PlaybackAcknowledgement(
+                        acknowledgement_id=str(uuid4()),
+                        operation=operation,
+                        segment_id=segment_id,
+                        status=PlaybackStatus.FAILED,
+                        position_ms=0,
+                        boundary_index=boundary_index,
+                        occurred_at=datetime.now(UTC),
+                        detail=type(error).__name__,
+                        playback_id=playback_id,
+                    )
                 )
-            )
             raise
         self._log_phase(turn, "publish", monotonic() - publish_started)
         self._assert_owner(turn, operation)
-        await self.engine.acknowledge(
-            PlaybackAcknowledgement(
-                acknowledgement_id=str(uuid4()),
-                operation=operation,
-                segment_id=segment_id,
-                status=PlaybackStatus.COMPLETED,
-                position_ms=duration,
-                boundary_index=boundary_index + 1,
-                occurred_at=datetime.now(UTC),
+        if published_duration != duration:
+            raise RuntimeError("published audio duration changed after playback announcement")
+        if self.client_playback_acknowledgements:
+            if wait_for_playback and pending is not None:
+                try:
+                    await asyncio.wait_for(
+                        pending.terminal.wait(),
+                        timeout=self.playback_ack_timeout_seconds,
+                    )
+                except TimeoutError as error:
+                    raise RuntimeError(
+                        f"client did not acknowledge playback segment {segment_id}"
+                    ) from error
+                if pending.terminal_status is not PlaybackStatus.COMPLETED:
+                    raise asyncio.CancelledError
+        else:
+            await self.engine.acknowledge(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=str(uuid4()),
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=PlaybackStatus.COMPLETED,
+                    position_ms=duration,
+                    boundary_index=boundary_index + 1,
+                    occurred_at=datetime.now(UTC),
+                    playback_id=playback_id,
+                )
             )
-        )
+
+    async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> bool:
+        async with self._playback_lock:
+            if not acknowledgement.playback_id:
+                raise ValueError("playback acknowledgement omitted the playback attempt")
+            pending = self._pending_playback.get(acknowledgement.playback_id)
+            if pending is None:
+                raise ValueError("playback acknowledgement refers to an unknown attempt")
+            if acknowledgement.segment_id != pending.segment_id:
+                raise ValueError("playback acknowledgement refers to another segment")
+            if acknowledgement.operation != pending.operation:
+                raise ValueError("playback acknowledgement belongs to another operation")
+            expected_boundary = pending.boundary_index + (
+                1 if acknowledgement.status is PlaybackStatus.COMPLETED else 0
+            )
+            if acknowledgement.boundary_index != expected_boundary:
+                raise ValueError("playback acknowledgement has an invalid boundary")
+            if acknowledgement.position_ms < pending.latest_position_ms:
+                raise ValueError("playback acknowledgement position moved backwards")
+            if acknowledgement.position_ms > pending.duration_ms:
+                raise ValueError("playback acknowledgement exceeds the announced duration")
+            if pending.terminal_status is not None:
+                if acknowledgement.status is not pending.terminal_status:
+                    raise ValueError("playback acknowledgement followed a terminal status")
+            elif acknowledgement.status is PlaybackStatus.STARTED:
+                if pending.started or acknowledgement.position_ms != 0:
+                    raise ValueError("playback started acknowledgement is invalid")
+                pending.started = True
+            elif acknowledgement.status is PlaybackStatus.POSITION:
+                if not pending.started:
+                    raise ValueError("playback position arrived before playback started")
+            elif acknowledgement.status is PlaybackStatus.COMPLETED:
+                if not pending.started:
+                    raise ValueError("playback completion arrived before playback started")
+                if acknowledgement.position_ms < pending.duration_ms:
+                    raise ValueError("playback completed before the announced duration")
+                pending.terminal_status = acknowledgement.status
+            elif acknowledgement.status in {PlaybackStatus.FLUSHED, PlaybackStatus.FAILED}:
+                pending.terminal_status = acknowledgement.status
+            else:
+                raise ValueError("unsupported playback acknowledgement status")
+            pending.latest_position_ms = acknowledgement.position_ms
+            persisted = await self.engine.acknowledge(acknowledgement)
+            if pending.terminal_status is not None:
+                pending.terminal.set()
+            return persisted
 
     async def _begin_submission(self) -> int:
         async with self._coordinator:

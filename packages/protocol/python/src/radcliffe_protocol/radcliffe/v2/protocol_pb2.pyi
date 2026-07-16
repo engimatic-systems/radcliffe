@@ -207,7 +207,7 @@ class StateChanged(_message.Message):
     def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., previous: _Optional[_Union[ConversationState, str]] = ..., current: _Optional[_Union[ConversationState, str]] = ..., reason: _Optional[str] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class PlaybackAcknowledgement(_message.Message):
-    __slots__ = ("acknowledgement_id", "operation", "segment_id", "status", "position_ms", "boundary_index", "occurred_at", "detail")
+    __slots__ = ("acknowledgement_id", "operation", "segment_id", "status", "position_ms", "boundary_index", "occurred_at", "detail", "playback_id")
     ACKNOWLEDGEMENT_ID_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -216,6 +216,7 @@ class PlaybackAcknowledgement(_message.Message):
     BOUNDARY_INDEX_FIELD_NUMBER: _ClassVar[int]
     OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
     DETAIL_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_ID_FIELD_NUMBER: _ClassVar[int]
     acknowledgement_id: str
     operation: OperationRef
     segment_id: str
@@ -224,7 +225,26 @@ class PlaybackAcknowledgement(_message.Message):
     boundary_index: int
     occurred_at: _timestamp_pb2.Timestamp
     detail: str
-    def __init__(self, acknowledgement_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., status: _Optional[_Union[PlaybackStatus, str]] = ..., position_ms: _Optional[int] = ..., boundary_index: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., detail: _Optional[str] = ...) -> None: ...
+    playback_id: str
+    def __init__(self, acknowledgement_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., status: _Optional[_Union[PlaybackStatus, str]] = ..., position_ms: _Optional[int] = ..., boundary_index: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., detail: _Optional[str] = ..., playback_id: _Optional[str] = ...) -> None: ...
+
+class PlaybackSegment(_message.Message):
+    __slots__ = ("operation", "segment_id", "boundary_index", "duration_ms", "canonical_sha256", "source", "playback_id")
+    OPERATION_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    BOUNDARY_INDEX_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    CANONICAL_SHA256_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_ID_FIELD_NUMBER: _ClassVar[int]
+    operation: OperationRef
+    segment_id: str
+    boundary_index: int
+    duration_ms: int
+    canonical_sha256: bytes
+    source: SourceKind
+    playback_id: str
+    def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., boundary_index: _Optional[int] = ..., duration_ms: _Optional[int] = ..., canonical_sha256: _Optional[bytes] = ..., source: _Optional[_Union[SourceKind, str]] = ..., playback_id: _Optional[str] = ...) -> None: ...
 
 class CapabilityGrant(_message.Message):
     __slots__ = ("grant_id", "session_id", "readable_roots", "allowed_tools", "expires_at")
@@ -351,7 +371,7 @@ class ClientEvent(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., session_start: _Optional[_Union[SessionStart, _Mapping]] = ..., reconnect: _Optional[_Union[Reconnect, _Mapping]] = ..., playback_acknowledgement: _Optional[_Union[PlaybackAcknowledgement, _Mapping]] = ..., control_command: _Optional[_Union[ControlCommand, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ...) -> None: ...
 
 class ServerEvent(_message.Message):
-    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error")
+    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error", "playback_segment")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     SESSION_READY_FIELD_NUMBER: _ClassVar[int]
     STATE_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -359,6 +379,7 @@ class ServerEvent(_message.Message):
     TOOL_PROGRESS_FIELD_NUMBER: _ClassVar[int]
     TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_SEGMENT_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     session_ready: SessionReady
     state_changed: StateChanged
@@ -366,4 +387,5 @@ class ServerEvent(_message.Message):
     tool_progress: ToolProgress
     tool_result: ToolResult
     error: ProtocolError
-    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ...) -> None: ...
+    playback_segment: PlaybackSegment
+    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ..., playback_segment: _Optional[_Union[PlaybackSegment, _Mapping]] = ...) -> None: ...

@@ -214,8 +214,10 @@ The client synthesizes microphone input, proves paused speech does not become a
 turn, requires consecutive responses within five seconds, verifies binary
 state/message events, validates an exact canonical source envelope across an
 isolated worker database, and measures both interrupt acknowledgement and the
-last heard audio after interruption. Its isolated database, worker log,
+last heard audio after interruption. It also acknowledges playback only after
+the subscribed LiveKit track yields audible decoded PCM, then proves those exact
+attempt IDs were persisted by the worker. Its isolated database, worker log,
 generated inputs, returned-audio timeline, and report are retained together.
-The source scenario also pauses mid-sentence, verifies audible silence, resumes
-without another model/tool call, and audits flushed and completed sentence
-boundaries in SQLite.
+The source scenario pauses mid-sentence, verifies audible silence, resumes
+without another model/tool call, and audits device-authored flushed and
+completed sentence boundaries in SQLite.

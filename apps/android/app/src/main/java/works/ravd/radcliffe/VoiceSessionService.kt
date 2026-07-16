@@ -15,6 +15,7 @@ import androidx.media3.session.MediaSessionService
 import io.livekit.android.LiveKit
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.room.Room
+import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.DataPublishReliability
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,8 +26,10 @@ import works.ravd.radcliffe.protocol.v2.ClientEvent
 import works.ravd.radcliffe.protocol.v2.ControlCommand
 import works.ravd.radcliffe.protocol.v2.ConversationState
 import works.ravd.radcliffe.protocol.v2.OperationRef
+import works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement
 import works.ravd.radcliffe.protocol.v2.ServerEvent
 import works.ravd.radcliffe.protocol.v2.SourceKind
+import livekit.org.webrtc.AudioTrackSink
 
 class VoiceSessionService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -34,6 +37,8 @@ class VoiceSessionService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
     private var sessionId: String = ""
+    private val playbackTracker = DevicePlaybackTracker()
+    private val playbackSinks = mutableMapOf<RemoteAudioTrack, AudioTrackSink>()
 
     override fun onCreate() {
         super.onCreate()
@@ -53,7 +58,7 @@ class VoiceSessionService : MediaSessionService() {
             ACTION_INTERRUPT -> interrupt()
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
-            ACTION_STOP -> stopSession()
+            ACTION_STOP -> requestStop()
         }
         return START_NOT_STICKY
     }
@@ -107,6 +112,12 @@ class VoiceSessionService : MediaSessionService() {
 
     private fun sendControl(kind: ControlCommand.Kind) {
         val activeRoom = room ?: return
+        val playbackAcknowledgements = when (kind) {
+            ControlCommand.Kind.KIND_INTERRUPT -> playbackTracker.flush("interrupted on device")
+            ControlCommand.Kind.KIND_PAUSE -> playbackTracker.flush("paused on device")
+            ControlCommand.Kind.KIND_STOP -> playbackTracker.flush("stopped on device")
+            else -> emptyList()
+        }
         val operation = OperationRef.newBuilder()
             .setSessionId(sessionId)
             .setGeneration(1)
@@ -121,7 +132,43 @@ class VoiceSessionService : MediaSessionService() {
             .build()
         val event = ClientEvent.newBuilder().setProtocolVersion(2).setControlCommand(command).build()
         scope.launch {
+            playbackAcknowledgements.forEach { publishPlaybackAcknowledgement(activeRoom, it) }
             activeRoom.localParticipant.publishData(event.toByteArray(), DataPublishReliability.RELIABLE)
+        }
+    }
+
+    private fun requestStop() {
+        room?.setSpeakerMute(true)
+        val activeRoom = room
+        if (activeRoom == null) {
+            stopSession()
+            return
+        }
+        val playbackAcknowledgements = playbackTracker.flush("stopped on device")
+        val operation = OperationRef.newBuilder()
+            .setSessionId(sessionId)
+            .setGeneration(1)
+            .setOperationId("android-control")
+            .setCancellationId("android-control")
+            .build()
+        val command = ControlCommand.newBuilder()
+            .setCommandId(java.util.UUID.randomUUID().toString())
+            .setKind(ControlCommand.Kind.KIND_STOP)
+            .setOperation(operation)
+            .setIdempotencyKey(java.util.UUID.randomUUID().toString())
+            .build()
+        val event = ClientEvent.newBuilder().setProtocolVersion(2).setControlCommand(command).build()
+        scope.launch {
+            runCatching {
+                playbackAcknowledgements.forEach {
+                    publishPlaybackAcknowledgement(activeRoom, it)
+                }
+                activeRoom.localParticipant.publishData(
+                    event.toByteArray(),
+                    DataPublishReliability.RELIABLE,
+                )
+            }
+            stopSession()
         }
     }
 
@@ -131,6 +178,8 @@ class VoiceSessionService : MediaSessionService() {
                 when (event) {
                     is RoomEvent.Reconnecting -> SessionModel.state(VoiceState.RECONNECTING)
                     is RoomEvent.Reconnected -> SessionModel.state(VoiceState.LISTENING)
+                    is RoomEvent.TrackSubscribed -> attachPlaybackSink(event.track)
+                    is RoomEvent.TrackUnsubscribed -> detachPlaybackSink(event.track)
                     is RoomEvent.DataReceived -> runCatching { ServerEvent.parseFrom(event.data) }
                         .onSuccess(::handleServerEvent)
                     else -> Unit
@@ -141,6 +190,7 @@ class VoiceSessionService : MediaSessionService() {
 
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
+        if (event.hasPlaybackSegment()) playbackTracker.announce(event.playbackSegment)
         if (event.hasStateChanged()) {
             SessionModel.state(when (event.stateChanged.current) {
                 ConversationState.CONVERSATION_STATE_CONNECTING -> VoiceState.CONNECTING
@@ -171,6 +221,54 @@ class VoiceSessionService : MediaSessionService() {
                 ),
             )
         }
+    }
+
+    private fun attachPlaybackSink(track: io.livekit.android.room.track.Track) {
+        val audioTrack = track as? RemoteAudioTrack ?: return
+        if (playbackSinks.containsKey(audioTrack)) return
+        val sink = AudioTrackSink { audioData, bitsPerSample, sampleRate, _, numberOfFrames, _ ->
+            val acknowledgements = playbackTracker.onAudioFrame(
+                sampleRate = sampleRate,
+                numberOfFrames = numberOfFrames,
+                audible = DevicePlaybackTracker.isAudible(audioData, bitsPerSample),
+            )
+            val activeRoom = room
+            if (activeRoom != null && acknowledgements.isNotEmpty()) {
+                scope.launch {
+                    acknowledgements.forEach {
+                        publishPlaybackAcknowledgement(activeRoom, it)
+                    }
+                }
+            }
+        }
+        playbackSinks[audioTrack] = sink
+        audioTrack.addSink(sink)
+    }
+
+    private fun detachPlaybackSink(track: io.livekit.android.room.track.Track) {
+        val audioTrack = track as? RemoteAudioTrack ?: return
+        playbackSinks.remove(audioTrack)?.let(audioTrack::removeSink)
+        val activeRoom = room ?: return
+        val failed = playbackTracker.fail("remote audio track unsubscribed")
+        if (failed.isNotEmpty()) {
+            scope.launch {
+                failed.forEach { publishPlaybackAcknowledgement(activeRoom, it) }
+            }
+        }
+    }
+
+    private suspend fun publishPlaybackAcknowledgement(
+        activeRoom: Room,
+        acknowledgement: PlaybackAcknowledgement,
+    ) {
+        val event = ClientEvent.newBuilder()
+            .setProtocolVersion(2)
+            .setPlaybackAcknowledgement(acknowledgement)
+            .build()
+        activeRoom.localParticipant.publishData(
+            event.toByteArray(),
+            DataPublishReliability.RELIABLE,
+        )
     }
 
     private fun stopSession(resetState: Boolean = true) {
@@ -210,6 +308,8 @@ class VoiceSessionService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        playbackSinks.toMap().forEach { (track, sink) -> track.removeSink(sink) }
+        playbackSinks.clear()
         room?.disconnect()
         room?.release()
         mediaSession.release()
