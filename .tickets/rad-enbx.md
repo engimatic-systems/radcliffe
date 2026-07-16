@@ -1,6 +1,6 @@
 ---
 id: rad-enbx
-status: open
+status: closed
 deps: [rad-214n, rad-rwfl, rad-mp26, rad-4myy]
 links: [rad-l1jc, rad-rwfl, rad-ghti, rad-9e2z, rad-fvx9]
 created: 2026-07-14T02:48:09Z
@@ -44,3 +44,7 @@ The Android checkpoint adds locally automated scenarios for recent-session parsi
 **2026-07-15T03:43:46Z**
 
 2026-07-14 exact-source and long-pause increment: the documented Oxford-to-Radcliffe inventory now maps normal conversation, short/long pauses, tap/speech interruption, pause suppression, noise/echo/frame loss, physical speaker echo, durable sessions, context accounting, exact source reads, and failure recovery. A full local-provider external run passed an isolated-store read_source call with exact 252-byte content, canonical provenance hashes/name, READING state, and 2.857s first source audio. Report: artifacts/voice-conformance/20260715T034110Z/report.json.
+
+**2026-07-16T21:55:56Z**
+
+2026-07-16 completed the Oxford-derived external suite. New scripts/session-conformance.py starts an isolated real control-plane process and generated SQLite/source workspace, then proves authenticated/idempotent session creation, newest-first pagination, resume/reordering, safe source discovery, traversal denial plus recovery, exact canonical envelope/provenance, exact local context accounting, process restart, restored timeline/credentials/tool idempotency, and archive filtering. Evidence: artifacts/session-conformance/20260716T215320Z/report.json (24/24). make check-conformance-local also passed endpoint rejection 14/14, production STT 13/13 at macro WER 0.0, and real LiveKit/local-provider voice 34/34 in artifacts/voice-conformance/20260716T215340Z/report.json. The review dashboard now indexes 85 green checks. The inventory explicitly excludes unrestricted file mutation, self-changing settings, and automatic paid frontier probes because those conflict with current Radcliffe policy rather than representing hidden harness gaps.

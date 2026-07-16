@@ -154,6 +154,34 @@ def _stt_suite(report_path: Path, report: dict[str, Any], assets: Path) -> dict[
     }
 
 
+def _session_suite(_report_path: Path, report: dict[str, Any], _assets: Path) -> dict[str, Any]:
+    tests = []
+    for check in report.get("checks", []):
+        tests.append(
+            {
+                "id": str(check.get("name", "unnamed-check")),
+                "passed": bool(check.get("passed")),
+                "detail": str(check.get("detail", "")),
+                "measured": check.get("measured", {}),
+                "audio": None,
+                "audio_label": None,
+            }
+        )
+    return {
+        "id": "sessions",
+        "title": "Durable sessions and safe tools",
+        "created_at": report.get("created_at"),
+        "commit": report.get("commit"),
+        "passed": bool(report.get("passed")),
+        "note": (
+            "Black-box HTTP checks against an isolated real control-plane process and SQLite "
+            "store, including restart, resume, context accounting, and tool recovery."
+        ),
+        "stream": None,
+        "tests": tests,
+    }
+
+
 def _history(artifacts: Path, suite: str) -> list[dict[str, Any]]:
     result = []
     for path in sorted((artifacts / suite).glob("*/report.json"), reverse=True):
@@ -180,7 +208,7 @@ PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Radcliffe voice test review</title>
+  <title>Radcliffe conformance review</title>
   <style>
     :root { color-scheme: dark; --bg:#0b1013; --panel:#141c21; --ink:#f3f7f8;
       --muted:#9fb0b9; --line:#2a3941; --pass:#56d69a; --fail:#ff7d79; --accent:#79b8ff; }
@@ -209,8 +237,8 @@ PAGE = """<!doctype html>
   </style>
 </head>
 <body><main>
-  <h1>Radcliffe voice test review</h1>
-  <p class="lede">Listen to the exact audio fixtures and the complete full-duplex voice run, then open any check for its result and measurements.</p>
+  <h1>Radcliffe conformance review</h1>
+  <p class="lede">Listen to the exact audio fixtures and full-duplex voice run, review durable-session checks, then open any result for its evidence and measurements.</p>
   <section class="summary" id="summary"></section>
   <div class="toolbar"><input id="search" type="search" placeholder="Filter tests…"><select id="status"><option value="all">All results</option><option value="fail">Failures</option><option value="pass">Passes</option></select></div>
   <div id="suites"></div>
@@ -247,6 +275,7 @@ def run(args: argparse.Namespace) -> int:
         ("voice-conformance", _voice_suite),
         ("stt-rejection", _rejection_suite),
         ("stt-conformance", _stt_suite),
+        ("session-conformance", _session_suite),
     )
     for suite_name, builder in builders:
         latest = _latest_report(artifacts, suite_name)
