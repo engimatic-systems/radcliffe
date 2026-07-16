@@ -55,3 +55,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-16T20:30:03Z**
 
 2026-07-16 added a generated static voice review dashboard. make build-voice-dashboard indexes latest full LiveKit, false-turn, and STT suites, hard-links playable artifacts, exposes per-check pass/fail evidence and history, and publishes a 98.72s stereo review stream (microphone left, assistant right) at ~/agent-share/radcliffe/voice-tests/index.html. Latest dashboard contains 55 green checks across three suites.
+
+**2026-07-16T21:45:39Z**
+
+2026-07-16 latest local acceptance evidence: production STT corpus passes 13/13 at macro WER 0.0 (artifacts/stt-conformance/20260716T214311Z/report.json); endpoint rejection corpus passes 14/14 including quiet-onset 'OK', babble, echo, silence, and short commands (artifacts/stt-rejection/20260716T214212Z/report.json); full LiveKit/Whisper/Ollama/TTS run passes 34/34 including babble preservation, speech barge-in, abandoned-turn exclusion, exact source bytes, persisted source resume, and no model emoji (artifacts/voice-conformance/20260716T214321Z/report.json). Dashboard republished under ~/agent-share/radcliffe/voice-tests/.

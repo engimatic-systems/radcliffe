@@ -40,6 +40,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dot M D");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dash");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("list_sources first");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {

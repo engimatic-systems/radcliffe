@@ -139,6 +139,7 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SILENCE_MS", "1200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_RMS", "700")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_PRE_ROLL_MS", "360")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1900")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "180")
@@ -155,6 +156,7 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
 
     assert EndpointSettings.from_environment() == EndpointSettings(
         rms_threshold=700,
+        pre_roll_ms=360,
         foreground_rms_threshold=1300,
         barge_in_rms_threshold=1900,
         minimum_voice_ms=300,
@@ -177,6 +179,25 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         EndpointSettings(minimum_maximum_voice_ratio=0)
     with pytest.raises(ValueError, match="foreground RMS"):
         EndpointSettings(foreground_rms_threshold=500)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_preserves_quiet_word_onset_in_bounded_pre_roll() -> None:
+    speech = FakeSpeech()
+    endpoint = EndpointProcessor(speech, EndpointSettings(pre_roll_ms=100))
+
+    for _ in range(8):
+        await endpoint.process_frame(
+            audio_frame(voiced=False, amplitude=500),
+            FrameDirection.DOWNSTREAM,
+        )
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+
+    quiet_frame = array("h", [500] * 320).tobytes()
+    assert speech.calls[0].startswith(quiet_frame * 5)
+    assert len(speech.calls[0]) == (5 + 15 + 45) * 640
 
 
 @pytest.mark.asyncio

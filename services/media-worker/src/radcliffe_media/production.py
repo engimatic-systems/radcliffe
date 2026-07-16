@@ -40,6 +40,7 @@ from radcliffe_media.speech_activity import SileroSpeechActivityAnalyzer, Speech
 @dataclass(frozen=True, slots=True)
 class EndpointSettings:
     rms_threshold: float = 600
+    pre_roll_ms: float = 600
     foreground_rms_threshold: float = 1200
     barge_in_rms_threshold: float = 1800
     minimum_voice_ms: float = 250
@@ -60,6 +61,7 @@ class EndpointSettings:
         if (
             min(
                 self.rms_threshold,
+                self.pre_roll_ms,
                 self.foreground_rms_threshold,
                 self.barge_in_rms_threshold,
                 self.minimum_voice_ms,
@@ -94,6 +96,7 @@ class EndpointSettings:
     def from_environment(cls) -> EndpointSettings:
         return cls(
             rms_threshold=float(os.environ.get("RADCLIFFE_ENDPOINT_RMS", "600")),
+            pre_roll_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_PRE_ROLL_MS", "600")),
             foreground_rms_threshold=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1200")
             ),
@@ -149,6 +152,7 @@ class EndpointProcessor(FrameProcessor):
         self.activity = activity
         self.voice: VoicePipeline | None = None
         self.buffer = bytearray()
+        self.idle_buffer = bytearray()
         self.speaking = False
         self.silence_ms = 0.0
         self.voice_ms = 0.0
@@ -179,12 +183,16 @@ class EndpointProcessor(FrameProcessor):
         foreground_voiced = rms >= self.settings.foreground_rms_threshold
         barge_in_voiced = rms >= self.settings.barge_in_rms_threshold
         if voiced and not self.speaking:
+            pre_roll = bytes(self.idle_buffer)
+            self.idle_buffer.clear()
             self.speaking = True
             self._reset_candidate(preserve_speaking=True)
+            self.buffer.extend(pre_roll)
             self.started_during_active_turn = (
                 self.turn_task is not None and not self.turn_task.done()
             )
         if not self.speaking:
+            self._remember_idle_audio(frame.audio, frame.sample_rate, frame.num_channels)
             return
         self.buffer.extend(frame.audio)
         self.voice_ms += duration_ms if voiced else 0
@@ -349,6 +357,12 @@ class EndpointProcessor(FrameProcessor):
         self.started_during_active_turn = False
         self.barge_in_confirmed = False
 
+    def _remember_idle_audio(self, pcm: bytes, sample_rate: int, channels: int) -> None:
+        maximum_bytes = round(self.settings.pre_roll_ms / 1000 * sample_rate * channels * 2)
+        self.idle_buffer.extend(pcm)
+        if len(self.idle_buffer) > maximum_bytes:
+            del self.idle_buffer[: len(self.idle_buffer) - maximum_bytes]
+
     async def _complete(
         self,
         pcm: bytes,
@@ -448,6 +462,7 @@ class EndpointProcessor(FrameProcessor):
     async def pause(self) -> None:
         self.paused = True
         self._reset_candidate()
+        self.idle_buffer.clear()
         if self.voice is not None:
             await self.voice.pause()
         turn_task = self.turn_task

@@ -85,6 +85,16 @@ def _cap_frame_rms(samples: np.ndarray, maximum_rms: float) -> np.ndarray:
     return result
 
 
+def _trim_speech(samples: np.ndarray) -> np.ndarray:
+    active = np.flatnonzero(np.abs(samples) > 0.001)
+    if not active.size:
+        return samples
+    padding = round(SAMPLE_RATE * 0.01)
+    start = max(0, int(active[0]) - padding)
+    end = min(len(samples), int(active[-1]) + padding + 1)
+    return samples[start:end]
+
+
 async def _corpus() -> tuple[CorpusCase, ...]:
     random = np.random.default_rng(20260714)
     room_tone = random.normal(0, 0.002, SAMPLE_RATE * 2).astype(np.float32)
@@ -121,6 +131,16 @@ async def _corpus() -> tuple[CorpusCase, ...]:
     foreground_over_babble = babble[: len(foreground) + SAMPLE_RATE * 3].copy()
     foreground_over_babble[: len(foreground)] += foreground
 
+    acknowledgement_provider = LocalAppleSpeechProvider(voice="Reed (English (US))")
+    acknowledgement_pcm = await acknowledgement_provider.synthesize("OK.")
+    acknowledgement = _trim_speech(
+        acknowledgement_provider._waveform(acknowledgement_pcm, 24000, 1)
+    )
+    quiet_acknowledgement = _cap_frame_rms(acknowledgement, 550 / 32767)
+    count_pcm = await acknowledgement_provider.synthesize("Count from one to fifty.")
+    count_command = _trim_speech(acknowledgement_provider._waveform(count_pcm, 24000, 1))
+    quiet_onset_command = np.concatenate([quiet_acknowledgement, count_command])
+
     cases: list[CorpusCase] = [
         CorpusCase("digital-silence", np.zeros(SAMPLE_RATE * 2, dtype=np.float32), False),
         CorpusCase("room-tone", room_tone, False),
@@ -132,12 +152,18 @@ async def _corpus() -> tuple[CorpusCase, ...]:
             True,
             "Reply with exactly noise handled.",
         ),
+        CorpusCase(
+            "quiet-onset-ok-us-male",
+            quiet_onset_command,
+            True,
+            "Okay",
+        ),
         CorpusCase("sparse-noise-short", sparse_short, False),
         CorpusCase("sparse-spikes-30s", sparse_maximum, False),
     ]
     for voice, phrase in (
         ("Samantha", "Go."),
-        ("Daniel", "Stop."),
+        ("Fred", "Stop."),
         ("Moira", "No."),
         ("Karen", "Yes."),
         ("Tessa", "Stop."),

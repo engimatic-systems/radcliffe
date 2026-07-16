@@ -55,6 +55,7 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
+  "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
   "List the bounded catalog of relative Markdown paths authorized for this session. " +

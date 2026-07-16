@@ -98,6 +98,15 @@ def _active(pcm: bytes, threshold: float = 300) -> bool:
     return math.sqrt(float(np.mean(samples**2))) >= threshold
 
 
+def _contains_emoji(text: str) -> bool:
+    return any(
+        0x1F000 <= ord(character) <= 0x1FAFF
+        or 0x2600 <= ord(character) <= 0x27BF
+        or ord(character) == 0xFE0F
+        for character in text
+    )
+
+
 def _first_audio_after(state: SmokeState, timestamp: float) -> float | None:
     return next(
         (
@@ -1298,6 +1307,24 @@ async def run(commit: str) -> int:
 
     envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
     packets = context_replay(envelopes)
+    emoji_model_messages = [
+        item.message_id
+        for item in envelopes
+        if item.source.value == "model"
+        and item.content.inline_text is not None
+        and _contains_emoji(item.content.inline_text)
+    ]
+    checks.append(
+        Check(
+            "model_responses_contain_no_emoji",
+            not emoji_model_messages,
+            (
+                "all model responses complied with the no-emoji system instruction"
+                if not emoji_model_messages
+                else f"emoji appeared in model messages: {emoji_model_messages!r}"
+            ),
+        )
+    )
     source_envelopes = [item for item in envelopes if item.source.value == "text_source"]
     if source_envelopes:
         source_message_id = source_envelopes[0].message_id

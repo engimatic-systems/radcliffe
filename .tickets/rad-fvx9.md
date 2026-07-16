@@ -1,6 +1,6 @@
 ---
 id: rad-fvx9
-status: in_progress
+status: closed
 deps: [rad-9e2z]
 links: [rad-rwfl, rad-enbx, rad-ghti]
 created: 2026-07-15T04:08:39Z
@@ -32,3 +32,7 @@ Implemented layered false-turn admission on 2026-07-14: subminimum RMS bursts no
 **2026-07-16T20:30:03Z**
 
 2026-07-16 noisy-room follow-up: two Pixel runs showed RMS background candidates lasting 4-12s and harmless candidates cancelling audible output before Silero rejection. Implemented dual candidate/foreground endpoint thresholds, a separate higher near-field barge-in threshold, sustained debounce plus Silero evidence before flush, a 2s unconfirmed-background bound, foreground-based trailing silence, deterministic Whisper temperature, and aggregate RMS telemetry. Synthetic report artifacts/stt-rejection/20260716T201840Z/report.json passes nearby babble rejection and foreground speech over continuing babble. Full report artifacts/voice-conformance/20260716T202552Z/report.json passes: 2.0s babble created no interruption/user envelope and preserved 92 active output frames with one active sidecar turn; deliberate speech acknowledged in 0.389s and old audio stopped in 0.250s. Remaining gate: physical Pixel speaker and earbud verification.
+
+**2026-07-16T21:45:39Z**
+
+2026-07-16 physical Pixel acceptance: the tester ran speaker and earbud follow-ups after the babble/debounce change and reported that interruption works, with no unsolicited silence/Thank-you turn reported. A subsequent short-acknowledgement regression added 600 ms bounded endpoint pre-roll; the retained quiet-onset US-male command decodes as 'Okay, count from 1 to 50.' while silence, room tone, echo, babble, and sparse noise remain rejected. Evidence: artifacts/stt-rejection/20260716T214212Z/report.json and artifacts/voice-conformance/20260716T214321Z/report.json.
