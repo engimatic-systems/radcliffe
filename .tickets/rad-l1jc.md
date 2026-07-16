@@ -51,3 +51,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-15T03:54:21Z**
 
 2026-07-14 resumable source playback now passes the external suite: mid-sentence pause acknowledged in 3ms, audible source stopped in 67ms, resume returned to READING/audio in 535ms, SQLite recorded flushed boundary 0 then completed boundaries 1-4, and neither Pi nor read_source was invoked again. Report: artifacts/voice-conformance/20260715T035142Z/report.json. Physical Pixel source-card and app/media-control verification remains.
+
+**2026-07-16T20:30:03Z**
+
+2026-07-16 added a generated static voice review dashboard. make build-voice-dashboard indexes latest full LiveKit, false-turn, and STT suites, hard-links playable artifacts, exposes per-check pass/fail evidence and history, and publishes a 98.72s stereo review stream (microphone left, assistant right) at ~/agent-share/radcliffe/voice-tests/index.html. Latest dashboard contains 55 green checks across three suites.

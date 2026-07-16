@@ -124,6 +124,7 @@ class LocalAppleSpeechProvider:
             "language": self.language,
             "condition_on_previous_text": False,
             "no_speech_threshold": 0.7,
+            "temperature": 0.0,
         }
         if self.initial_prompt:
             options["initial_prompt"] = self.initial_prompt

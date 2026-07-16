@@ -48,6 +48,7 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
         "language": "en",
         "condition_on_previous_text": False,
         "no_speech_threshold": 0.7,
+        "temperature": 0.0,
         "initial_prompt": (
             "Radcliffe vocabulary: dash, bold, Markdown, Cosmic touch, voice controls work, "
             "read source, metadata."

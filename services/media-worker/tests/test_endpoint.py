@@ -76,7 +76,7 @@ class FakeVoice:
 
 
 def audio_frame(*, voiced: bool, amplitude: int | None = None) -> UserAudioRawFrame:
-    value = amplitude if amplitude is not None else (1200 if voiced else 0)
+    value = amplitude if amplitude is not None else (3000 if voiced else 0)
     pcm = array("h", [value] * 320).tobytes()
     return UserAudioRawFrame(pcm, 16000, 1)
 
@@ -122,9 +122,11 @@ async def test_new_speech_cancels_and_awaits_the_previous_endpoint_task() -> Non
     await feed(endpoint, voiced=False, frames=15)
     assert voice.active == 1
 
+    await feed(endpoint, voiced=True, frames=5)
+    assert voice.active == 1
     await feed(endpoint, voiced=True, frames=1)
     assert voice.active == 0
-    await feed(endpoint, voiced=True, frames=14)
+    await feed(endpoint, voiced=True, frames=9)
     await feed(endpoint, voiced=False, frames=45)
     await asyncio.sleep(0)
 
@@ -137,7 +139,13 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SILENCE_MS", "1200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_RMS", "700")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1300")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1900")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "180")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_CONFIRMATION_MS", "340")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "140")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "20000")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.07")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "3")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.55")
@@ -146,21 +154,102 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_WHISPER_MAX_COMPRESSION_RATIO", "2.2")
 
     assert EndpointSettings.from_environment() == EndpointSettings(
-        700,
-        300,
-        1200,
-        20000,
-        0.07,
-        3,
-        0.55,
-        -0.9,
-        0.65,
-        2.2,
+        rms_threshold=700,
+        foreground_rms_threshold=1300,
+        barge_in_rms_threshold=1900,
+        minimum_voice_ms=300,
+        minimum_foreground_voice_ms=180,
+        barge_in_confirmation_ms=340,
+        barge_in_release_ms=140,
+        end_silence_ms=1200,
+        maximum_unconfirmed_ms=2200,
+        maximum_utterance_ms=20000,
+        minimum_maximum_voice_ratio=0.07,
+        minimum_speech_windows=3,
+        speech_probability=0.55,
+        minimum_average_log_probability=-0.9,
+        maximum_no_speech_probability=0.65,
+        maximum_compression_ratio=2.2,
     )
     with pytest.raises(ValueError, match="positive"):
         EndpointSettings(end_silence_ms=0)
     with pytest.raises(ValueError, match="voice ratio"):
         EndpointSettings(minimum_maximum_voice_ratio=0)
+    with pytest.raises(ValueError, match="foreground RMS"):
+        EndpointSettings(foreground_rms_threshold=500)
+
+
+@pytest.mark.asyncio
+async def test_background_babble_does_not_barge_in_or_become_a_turn() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+
+    for _ in range(150):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=850),
+            FrameDirection.DOWNSTREAM,
+        )
+    await feed(endpoint, voiced=False, frames=45)
+
+    assert voice.active == 1
+    assert voice.barge_ins == 0
+    assert voice.transcripts == ["transcript-1"]
+    assert len(speech.calls) == 1
+
+    endpoint.activity = FakeActivity(speech_windows=8, maximum_probability=0.99)
+    await feed(endpoint, voiced=True, frames=15)
+
+    assert voice.active == 0
+    assert voice.barge_ins == 1
+
+
+@pytest.mark.asyncio
+async def test_loud_non_speech_must_pass_activity_gate_before_barge_in() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    endpoint.activity = FakeActivity(speech_windows=0, maximum_probability=0.12)
+
+    await feed(endpoint, voiced=True, frames=30)
+    await feed(endpoint, voiced=False, frames=45)
+
+    assert voice.active == 1
+    assert voice.barge_ins == 0
+    assert voice.transcripts == ["transcript-1"]
+    assert len(speech.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_foreground_endpoint_ignores_continuing_low_level_babble() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=20)
+    for _ in range(150):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=850),
+            FrameDirection.DOWNSTREAM,
+        )
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert len(speech.calls) == 1
+    # 400 ms foreground plus roughly 900 ms of lower-level background, not all 3 seconds.
+    assert len(speech.calls[0]) <= 70 * 640
+    assert voice.transcripts == ["transcript-1"]
 
 
 @pytest.mark.asyncio
@@ -227,7 +316,7 @@ async def test_thirty_second_sparse_spikes_are_rejected_before_whisper() -> None
 
     for index in range(1500):
         await endpoint.process_frame(
-            audio_frame(voiced=index < 15 or index in {400, 800}),
+            audio_frame(voiced=index % 40 == 0),
             FrameDirection.DOWNSTREAM,
         )
 

@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import re
 import subprocess
 import wave
@@ -71,6 +72,19 @@ def _normalize(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
 
 
+def _cap_frame_rms(samples: np.ndarray, maximum_rms: float) -> np.ndarray:
+    """Keep a realistic waveform while placing every frame below a foreground mic level."""
+    result = samples.astype(np.float32).copy()
+    for start in range(0, len(result), FRAME_SAMPLES):
+        frame = result[start : start + FRAME_SAMPLES]
+        if not frame.size:
+            continue
+        rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+        if rms > maximum_rms:
+            frame *= maximum_rms / rms
+    return result
+
+
 async def _corpus() -> tuple[CorpusCase, ...]:
     random = np.random.default_rng(20260714)
     room_tone = random.normal(0, 0.002, SAMPLE_RATE * 2).astype(np.float32)
@@ -92,10 +106,32 @@ async def _corpus() -> tuple[CorpusCase, ...]:
     echo = echo_provider._waveform(echo_pcm, 24000, 1) * 0.06
     echo += random.normal(0, 0.001, len(echo)).astype(np.float32)
 
+    babble_provider = LocalAppleSpeechProvider(voice="Samantha")
+    babble_pcm = await babble_provider.synthesize(
+        "Ba ba da da. Ma ma ba ba. Da ba ma da. Ba da ba ma."
+    )
+    babble = babble_provider._waveform(babble_pcm, 24000, 1)
+    babble = _cap_frame_rms(babble, 850 / 32767)
+    babble = np.tile(babble, math.ceil(SAMPLE_RATE * 6 / len(babble)))[: SAMPLE_RATE * 6]
+    babble += random.normal(0, 0.001, len(babble)).astype(np.float32)
+
+    foreground_provider = LocalAppleSpeechProvider(voice="Karen")
+    foreground_pcm = await foreground_provider.synthesize("Reply with exactly noise handled.")
+    foreground = foreground_provider._waveform(foreground_pcm, 24000, 1)
+    foreground_over_babble = babble[: len(foreground) + SAMPLE_RATE * 3].copy()
+    foreground_over_babble[: len(foreground)] += foreground
+
     cases: list[CorpusCase] = [
         CorpusCase("digital-silence", np.zeros(SAMPLE_RATE * 2, dtype=np.float32), False),
         CorpusCase("room-tone", room_tone, False),
         CorpusCase("post-aec-playback-echo", echo.astype(np.float32), False),
+        CorpusCase("nearby-background-babble", babble, False),
+        CorpusCase(
+            "foreground-speech-over-continuing-babble",
+            foreground_over_babble,
+            True,
+            "Reply with exactly noise handled.",
+        ),
         CorpusCase("sparse-noise-short", sparse_short, False),
         CorpusCase("sparse-spikes-30s", sparse_maximum, False),
     ]
@@ -105,7 +141,7 @@ async def _corpus() -> tuple[CorpusCase, ...]:
         ("Moira", "No."),
         ("Karen", "Yes."),
         ("Tessa", "Stop."),
-        ("Fred", "Thank you."),
+        ("Samantha", "Thank you."),
     ):
         provider = LocalAppleSpeechProvider(voice=voice)
         audio = await provider.synthesize(phrase)

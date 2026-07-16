@@ -146,12 +146,24 @@ make check-voice-local
 ```
 
 The focused false-turn corpus is faster and covers digital silence, seeded room
-tone, post-AEC playback echo, a short noise burst, a 30-second sparse-spike
-endpoint, and short legitimate commands across six voices:
+tone, post-AEC playback echo, nearby speech-like babble, foreground speech over
+continuing babble, a short noise burst, a 30-second sparse-spike endpoint, and
+short legitimate commands across multiple voices:
 
 ```sh
 make check-stt-rejection-local
 ```
+
+Publish a static, mobile-friendly review page with the latest test inputs, the
+full-duplex LiveKit run, per-check evidence, and indexed run history:
+
+```sh
+make build-voice-dashboard
+```
+
+By default it writes `~/agent-share/radcliffe/voice-tests/index.html`. The
+full-duplex player puts the synthetic microphone on the left channel and the
+assistant on the right.
 
 The current core covers command-level STT WER and vocabulary recall, multiple
 English voices, natural and long clause pauses, deterministic
