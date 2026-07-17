@@ -304,6 +304,15 @@ MessageEnvelope
 - Projection rules are pure policy/data transformations; they do not execute
   arbitrary tool code. If a model creates a summary or interpretation, that is
   recorded as a new `MODEL` envelope rather than hidden inside a projection.
+- Provider output is canonicalized before it can become a `MODEL` envelope or
+  reach TTS. The initial policy removes emoji deterministically even when a
+  provider ignores the system instruction; later content rules belong at this
+  same provider-independent boundary.
+- A successful canonical `read_source` handoff is terminal for that assistant
+  turn. The `TEXT_SOURCE` envelope is rendered directly, while later provider
+  model deltas or postambles are discarded rather than entering TTS, UI, or
+  future context. The tool request, result, and source provenance remain
+  auditable.
 - The seam must be independent of the WebRTC transport, TTS provider, model
   provider, and mutable live-session state. New rules must be deployable
   without rewriting stored history or the conversation engine.
