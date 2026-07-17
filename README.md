@@ -67,10 +67,12 @@ For the physical M1 gate:
    `uv run python -m radcliffe_media.production`. The first transcription
    downloads the MLX Whisper checkpoint; subsequent speech stays local.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
-   token once, and save the profile. Later launches load the saved profile and
-   recent conversations. Tap New conversation for a server-generated session,
-   or choose an existing conversation to restore its timeline before joining;
-   use Settings only when the endpoint or credential changes.
+   token once, and save the profile. The app generates and persists its own
+   installation credential, enrolls idempotently, then deletes the saved
+   bootstrap ciphertext. Later launches authenticate as that revocable device
+   and load recent conversations. Tap New conversation for a server-generated
+   session, or choose an existing conversation to restore its timeline before
+   joining; use Settings only when the endpoint or enrollment changes.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
    candidate report. The LiveKit and Android tickets remain open until direct
    UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.

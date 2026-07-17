@@ -47,6 +47,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private sealed interface SessionAction {
@@ -71,6 +74,7 @@ private suspend inline fun <T> suspendRunCatching(
 
 class MainActivity : ComponentActivity() {
     private val profiles by lazy { ConnectionProfileRepository.create(this) }
+    private val enrollmentMutex = Mutex()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,7 +112,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(storedProfile?.controlUrl, storedProfile?.bootstrapToken, refreshKey) {
+        LaunchedEffect(
+            storedProfile?.controlUrl,
+            storedProfile?.bootstrapToken,
+            storedProfile?.deviceCredential,
+            refreshKey,
+        ) {
             val profile = storedProfile ?: return@LaunchedEffect
             if (!profile.isConfigured || editing || state != VoiceState.IDLE) return@LaunchedEffect
             homeState = sessionHomeLoading(homeState)
@@ -116,7 +125,13 @@ class MainActivity : ComponentActivity() {
                 .onSuccess { loaded ->
                     homeState = sessionHomeLoaded(loaded.items, loaded.nextCursor)
                 }
-                .onFailure { error -> homeState = sessionHomeFailure(homeState, error) }
+                .onFailure { error ->
+                    homeState = sessionHomeFailure(homeState, error)
+                    if (error is ControlApiException && error.statusCode == 401 && profile.isEnrolled) {
+                        withContext(Dispatchers.IO) { profiles.invalidateEnrollment() }
+                        settingsError = "Device credential was rejected. Enter the bootstrap token to re-enroll."
+                    }
+                }
         }
 
         LaunchedEffect(state) {
@@ -146,25 +161,26 @@ class MainActivity : ComponentActivity() {
             SessionModel.state(VoiceState.CONNECTING)
             suspendRunCatching {
                 withContext(Dispatchers.IO) {
+                    val enrolledProfile = ensureEnrolled(profile)
                     when (action) {
                         SessionAction.Create -> {
                             val idempotencyKey = profiles.beginSessionCreation()
                             val credentials = SessionApi.createGenerated(
-                                profile.controlUrl,
-                                profile.bootstrapToken,
+                                enrolledProfile.controlUrl,
+                                enrolledProfile.deviceCredential,
                                 idempotencyKey,
                             )
                             Triple(credentials, emptyList(), credentials.roomName)
                         }
                         is SessionAction.Open -> {
                             val timeline = SessionApi.timeline(
-                                profile.controlUrl,
-                                profile.bootstrapToken,
+                                enrolledProfile.controlUrl,
+                                enrolledProfile.deviceCredential,
                                 action.sessionId,
                             )
                             val credentials = SessionApi.reopen(
-                                profile.controlUrl,
-                                profile.bootstrapToken,
+                                enrolledProfile.controlUrl,
+                                enrolledProfile.deviceCredential,
                                 action.sessionId,
                             )
                             Triple(credentials, timeline, action.sessionId)
@@ -199,6 +215,13 @@ class MainActivity : ComponentActivity() {
             }.onFailure { error ->
                 SessionModel.state(VoiceState.IDLE)
                 homeState = sessionHomeFailure(homeState, error)
+                if (error is ControlApiException && error.statusCode == 401 && profile.isEnrolled) {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { profiles.invalidateEnrollment() }
+                        settingsError =
+                            "Device credential was rejected. Enter the bootstrap token to re-enroll."
+                    }
+                }
             }
             if (grantedAction == action) grantedAction = null
         }
@@ -274,9 +297,11 @@ class MainActivity : ComponentActivity() {
                             scope.launch {
                                 suspendRunCatching {
                                     withContext(Dispatchers.IO) {
+                                        profiles.save(candidate)
+                                        val enrolled = ensureEnrolled(candidate)
                                         SessionApi.testConnection(
-                                            candidate.controlUrl,
-                                            candidate.bootstrapToken,
+                                            enrolled.controlUrl,
+                                            enrolled.deviceCredential,
                                         )
                                     }
                                 }.onSuccess {
@@ -315,7 +340,10 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 Text("Local control plane", style = MaterialTheme.typography.titleSmall)
                                 Text(profile.controlUrl, style = MaterialTheme.typography.bodySmall)
-                                Text("Credential saved securely", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    if (profile.isEnrolled) "Device enrolled securely" else "Enrollment pending",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
                             }
                             TextButton(onClick = {
                                 controlUrl = profile.controlUrl
@@ -492,9 +520,10 @@ class MainActivity : ComponentActivity() {
         profile: ConnectionProfile,
         cursor: String? = null,
     ): LoadedSessionPage = coroutineScope {
+        val enrolledProfile = ensureEnrolled(profile)
         val page = SessionApi.list(
-            profile.controlUrl,
-            profile.bootstrapToken,
+            enrolledProfile.controlUrl,
+            enrolledProfile.deviceCredential,
             cursor = cursor,
         )
         LoadedSessionPage(
@@ -502,8 +531,8 @@ class MainActivity : ComponentActivity() {
                 async {
                     val usage = runCatching {
                         SessionApi.contextUsage(
-                            profile.controlUrl,
-                            profile.bootstrapToken,
+                            enrolledProfile.controlUrl,
+                            enrolledProfile.deviceCredential,
                             summary.sessionId,
                         )
                     }.fold(
@@ -516,6 +545,23 @@ class MainActivity : ComponentActivity() {
             nextCursor = page.nextCursor,
         )
     }
+
+    private suspend fun ensureEnrolled(profile: ConnectionProfile): ConnectionProfile =
+        enrollmentMutex.withLock {
+            val current = profiles.profile.first()
+            if (current.isEnrolled && current.controlUrl == profile.controlUrl) return@withLock current
+            val prepared = profiles.prepareEnrollment()
+            require(prepared.bootstrapToken.isNotBlank()) { "Bootstrap token is required to enroll" }
+            val enrollment = SessionApi.enroll(
+                prepared.controlUrl,
+                prepared.bootstrapToken,
+                prepared.installationId,
+                android.os.Build.MODEL.ifBlank { "Android device" },
+                prepared.deviceCredential,
+            )
+            profiles.completeEnrollment(enrollment.deviceId, enrollment.participantIdentity)
+            profiles.profile.first()
+        }
 
     private fun startVoiceService(credentials: SessionCredentials) {
         val intent = Intent(this, VoiceSessionService::class.java)
