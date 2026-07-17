@@ -1,7 +1,7 @@
 ---
 id: rad-7ur1
 status: in_progress
-deps: [rad-mp26, rad-4myy]
+deps: [rad-mp26, rad-4myy, rad-aly1]
 links: []
 created: 2026-07-14T02:48:09Z
 type: feature
@@ -28,3 +28,7 @@ Implemented accessible recent-session context indicators using exact server acco
 **2026-07-15T03:15:48Z**
 
 2026-07-14 Pixel v0.3.2 session-home functionality was accepted during new/reopened/switched conversation testing. Dedicated TalkBack, large-font, and dark-mode inspection remains outstanding.
+
+**2026-07-17T23:28:54Z**
+
+2026-07-17 Pixel review: context donuts appeared normal and sessions/configuration survived reboot. The Pixel was already in system dark mode, but Radcliffe still rendered a light theme; tracked as blocking bug rad-aly1. Large-font and TalkBack inspection was not performed because those Android system accessibility controls were mistaken for in-app settings; keep those physical gates open.
