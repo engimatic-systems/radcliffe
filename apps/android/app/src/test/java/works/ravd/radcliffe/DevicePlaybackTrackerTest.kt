@@ -44,6 +44,7 @@ class DevicePlaybackTrackerTest {
         assertEquals(listOf(0L, 250L, 500L), acknowledgements.map { it.positionMs })
         assertEquals(listOf(3, 3, 4), acknowledgements.map { it.boundaryIndex })
         assertTrue(acknowledgements.all { it.playbackId == "playback-1" })
+        assertTrue(acknowledgements.all { it.operation.traceId == "trc_${"a".repeat(32)}" })
         assertEquals(0, tracker.pendingCount())
     }
 
@@ -89,7 +90,8 @@ class DevicePlaybackTrackerTest {
                 .setSessionId("session-1")
                 .setGeneration(1)
                 .setOperationId("operation-1")
-                .setCancellationId("cancel-1"),
+                .setCancellationId("cancel-1")
+                .setTraceId("trc_${"a".repeat(32)}"),
         )
         .setSegmentId("source-1:3")
         .setBoundaryIndex(3)

@@ -155,16 +155,18 @@ class MessageEnvelope(_message.Message):
     def __init__(self, schema_version: _Optional[int] = ..., message_id: _Optional[str] = ..., session_id: _Optional[str] = ..., sequence: _Optional[int] = ..., source: _Optional[_Union[SourceKind, str]] = ..., content: _Optional[_Union[ContentRef, _Mapping]] = ..., content_sha256: _Optional[bytes] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ..., sensitivity: _Optional[_Union[Sensitivity, str]] = ...) -> None: ...
 
 class OperationRef(_message.Message):
-    __slots__ = ("session_id", "generation", "operation_id", "cancellation_id")
+    __slots__ = ("session_id", "generation", "operation_id", "cancellation_id", "trace_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     CANCELLATION_ID_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     generation: int
     operation_id: str
     cancellation_id: str
-    def __init__(self, session_id: _Optional[str] = ..., generation: _Optional[int] = ..., operation_id: _Optional[str] = ..., cancellation_id: _Optional[str] = ...) -> None: ...
+    trace_id: str
+    def __init__(self, session_id: _Optional[str] = ..., generation: _Optional[int] = ..., operation_id: _Optional[str] = ..., cancellation_id: _Optional[str] = ..., trace_id: _Optional[str] = ...) -> None: ...
 
 class SessionStart(_message.Message):
     __slots__ = ("request_id", "session_id", "participant_identity", "last_acknowledged_sequence", "idempotency_key")

@@ -51,4 +51,16 @@ public interface OperationRefOrBuilder extends
    */
   com.google.protobuf.ByteString
       getCancellationIdBytes();
+
+  /**
+   * <code>string trace_id = 5;</code>
+   * @return The traceId.
+   */
+  java.lang.String getTraceId();
+  /**
+   * <code>string trace_id = 5;</code>
+   * @return The bytes for traceId.
+   */
+  com.google.protobuf.ByteString
+      getTraceIdBytes();
 }

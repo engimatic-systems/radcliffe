@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     owner_id: str = Field(default="local-owner", pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
     database_path: Path = Path("var/radcliffe.sqlite3")
     source_root: Path = Path("fixtures/sources")
+    telemetry_path: Path = Path("var/telemetry/events.jsonl")
     sidecar_url: str = "http://127.0.0.1:8787"
     room_token_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     managed_workers_enabled: bool = True

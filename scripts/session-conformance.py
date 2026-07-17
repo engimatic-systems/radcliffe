@@ -26,6 +26,10 @@ from radcliffe_protocol.radcliffe.v2.protocol_pb2 import MessageEnvelope as Prot
 ROOT = Path(__file__).resolve().parent.parent
 BOOTSTRAP_TOKEN = "session-conformance-bootstrap"
 INTERNAL_TOKEN = "session-conformance-internal"
+TOOL_CORRELATION = {
+    "operationId": "operation-session-conformance",
+    "traceId": "trc_" + "2" * 32,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +337,7 @@ class SessionConformance:
             json_body={
                 "sessionId": session_ids[0],
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "callId": "conformance-list",
                 "idempotencyKey": "conformance-list",
                 "toolName": "list_sources",
@@ -359,6 +364,7 @@ class SessionConformance:
             json_body={
                 "sessionId": session_ids[0],
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "callId": "conformance-denied",
                 "idempotencyKey": "conformance-denied",
                 "toolName": "read_source",
@@ -374,6 +380,7 @@ class SessionConformance:
         source_call_body = {
             "sessionId": session_ids[0],
             "generation": 1,
+            **TOOL_CORRELATION,
             "callId": "conformance-read",
             "idempotencyKey": "conformance-read",
             "toolName": "read_source",
@@ -576,6 +583,7 @@ async def run(args: argparse.Namespace) -> int:
             "RADCLIFFE_INTERNAL_TOKEN": INTERNAL_TOKEN,
             "RADCLIFFE_OWNER_ID": "session-conformance",
             "RADCLIFFE_DATABASE_PATH": str(database_path),
+            "RADCLIFFE_TELEMETRY_PATH": str(output / "telemetry.jsonl"),
             "RADCLIFFE_SOURCE_ROOT": str(source_path.parents[1]),
             "RADCLIFFE_SIDECAR_URL": args.sidecar_url,
             "RADCLIFFE_LIVEKIT_URL": "ws://127.0.0.1:7880",

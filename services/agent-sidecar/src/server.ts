@@ -10,12 +10,14 @@ import { PiAgentOrchestrator } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
 import { warmOllama } from "./ollama-runtime.js";
 import { assertProviderAllowed } from "./provider-policy.js";
+import { TelemetrySink } from "./telemetry.js";
 import type {
   SidecarEvent,
   ToolExecutionRequest,
   ToolExecutionResult,
   TurnRequest,
 } from "./protocol.js";
+import { validTurnIdentity } from "./protocol.js";
 
 const port = Number(process.env.RADCLIFFE_SIDECAR_PORT ?? "8787");
 const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "ollama";
@@ -23,6 +25,9 @@ const modelId = process.env.RADCLIFFE_MODEL_ID ?? "qwen3:8b";
 assertProviderAllowed(provider, process.env.RADCLIFFE_ALLOW_CLOUD_MODELS);
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
 const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
+const telemetry = new TelemetrySink(
+  process.env.RADCLIFFE_TELEMETRY_PATH ?? "var/telemetry/events.jsonl",
+);
 const models = builtinModels();
 const ollamaModel = createOllamaModel({
   modelId,
@@ -53,19 +58,76 @@ async function executeTool(
   request: ToolExecutionRequest,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult> {
+  telemetry.emit({
+    component: "sidecar",
+    event: "tool",
+    outcome: "started",
+    traceId: request.traceId,
+    sessionId: request.sessionId,
+    generation: request.generation,
+    operation: request.operationId,
+    phase: "execution",
+  });
   if (!gatewayUrl || !internalToken) {
+    telemetry.emit({
+      component: "sidecar",
+      event: "tool_error",
+      outcome: "failed",
+      traceId: request.traceId,
+      sessionId: request.sessionId,
+      generation: request.generation,
+      operation: request.operationId,
+      phase: "configuration",
+    });
     throw new Error("RADCLIFFE_TOOL_GATEWAY_URL and RADCLIFFE_INTERNAL_TOKEN are required");
   }
-  const response = await fetch(`${gatewayUrl}/v1/tool-calls`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${internalToken}`,
-    },
-    body: JSON.stringify(request),
-    signal,
+  let response: Response;
+  try {
+    response = await fetch(`${gatewayUrl}/v1/tool-calls`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${internalToken}`,
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+  } catch (error) {
+    telemetry.emit({
+      component: "sidecar",
+      event: "tool_error",
+      outcome: "failed",
+      traceId: request.traceId,
+      sessionId: request.sessionId,
+      generation: request.generation,
+      operation: request.operationId,
+      phase: "gateway",
+    });
+    throw error;
+  }
+  if (!response.ok) {
+    telemetry.emit({
+      component: "sidecar",
+      event: "tool_error",
+      outcome: "failed",
+      traceId: request.traceId,
+      sessionId: request.sessionId,
+      generation: request.generation,
+      operation: request.operationId,
+      phase: "gateway",
+    });
+    throw new Error(`Tool Gateway returned HTTP ${response.status}`);
+  }
+  telemetry.emit({
+    component: "sidecar",
+    event: "tool",
+    outcome: "completed",
+    traceId: request.traceId,
+    sessionId: request.sessionId,
+    generation: request.generation,
+    operation: request.operationId,
+    phase: "execution",
   });
-  if (!response.ok) throw new Error(`Tool Gateway returned HTTP ${response.status}`);
   return (await response.json()) as ToolExecutionResult;
 }
 
@@ -129,6 +191,11 @@ createServer(async (request, response) => {
     }
     return;
   }
+  if (!validTurnIdentity(turn)) {
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "invalid turn correlation" }));
+    return;
+  }
   if (contextMeter) {
     try {
       const usage = await orchestrator.measure(turn);
@@ -159,17 +226,63 @@ createServer(async (request, response) => {
     "cache-control": "no-store",
   });
   activeTurns += 1;
+  const turnStarted = performance.now();
+  let turnOutcome = "completed";
+  telemetry.emit({
+    component: "sidecar",
+    event: "active_work",
+    outcome: "started",
+    traceId: turn.traceId!,
+    sessionId: turn.sessionId,
+    generation: turn.generation,
+    operation: turn.operationId!,
+    phase: "provider",
+  });
   const controller = new AbortController();
   response.on("close", () => {
     if (!response.writableEnded && !controller.signal.aborted) {
       cancelledTurns += 1;
+      turnOutcome = "interrupted";
       controller.abort();
     }
   });
   try {
     await orchestrator.run(turn, (event) => writeEvent(response, event), controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      turnOutcome = "interrupted";
+    } else {
+      turnOutcome = "failed";
+      telemetry.emit({
+        component: "sidecar",
+        event: "provider_error",
+        outcome: "failed",
+        traceId: turn.traceId!,
+        sessionId: turn.sessionId,
+        generation: turn.generation,
+        operation: turn.operationId!,
+        phase: "provider",
+        durationMs: performance.now() - turnStarted,
+      });
+      writeEvent(response, {
+        type: "error",
+        requestId: turn.requestId,
+        message: error instanceof Error ? error.message : "provider failed",
+      });
+    }
   } finally {
     activeTurns -= 1;
+    telemetry.emit({
+      component: "sidecar",
+      event: "active_work",
+      outcome: turnOutcome,
+      traceId: turn.traceId!,
+      sessionId: turn.sessionId,
+      generation: turn.generation,
+      operation: turn.operationId!,
+      phase: "provider",
+      durationMs: performance.now() - turnStarted,
+    });
     response.end();
   }
 }).listen(port, "127.0.0.1");

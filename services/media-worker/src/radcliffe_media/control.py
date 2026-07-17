@@ -4,7 +4,13 @@ from datetime import UTC
 from typing import Protocol
 
 from google.protobuf.message import DecodeError
-from radcliffe_domain.session import Operation, PlaybackAcknowledgement, PlaybackStatus
+from radcliffe_domain.session import (
+    Operation,
+    PlaybackAcknowledgement,
+    PlaybackStatus,
+    trace_id_for_operation,
+    valid_trace_id,
+)
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 _PLAYBACK_STATUS = {
@@ -47,6 +53,9 @@ class ClientControlHandler:
             if status is None or not acknowledgement.HasField("occurred_at"):
                 return False
             operation = acknowledgement.operation
+            trace_id = operation.trace_id or trace_id_for_operation(operation.operation_id)
+            if not valid_trace_id(trace_id):
+                return False
             await self.target.playback_acknowledgement(
                 PlaybackAcknowledgement(
                     acknowledgement_id=acknowledgement.acknowledgement_id,
@@ -55,6 +64,7 @@ class ClientControlHandler:
                         generation=operation.generation,
                         operation_id=operation.operation_id,
                         cancellation_id=operation.cancellation_id,
+                        trace_id=trace_id,
                     ),
                     segment_id=acknowledgement.segment_id,
                     status=status,

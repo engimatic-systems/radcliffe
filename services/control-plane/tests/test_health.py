@@ -9,6 +9,10 @@ from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 DEVICE_CREDENTIAL = "rdc_dev_" + "b" * 43
 DEVICE_AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
+TOOL_CORRELATION = {
+    "operationId": "operation-health-test",
+    "traceId": "trc_" + "1" * 32,
+}
 
 
 def settings(tmp_path) -> Settings:
@@ -21,6 +25,7 @@ def settings(tmp_path) -> Settings:
         internal_token="internal-token-1234",
         database_path=tmp_path / "events.sqlite3",
         source_root=source_root,
+        telemetry_path=tmp_path / "telemetry.jsonl",
         managed_workers_enabled=False,
     )
 
@@ -68,6 +73,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={
                 "session_id": "session-1",
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "call_id": "catalog-1",
                 "idempotency_key": "catalog-1",
                 "tool_name": "list_sources",
@@ -92,6 +98,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={
                 "session_id": "session-1",
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "call_id": "bad-catalog",
                 "idempotency_key": "bad-catalog",
                 "tool_name": "list_sources",
@@ -100,12 +107,29 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         )
         assert mismatched_arguments.status_code == 422
 
+        invalid_trace = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "sessionId": "session-1",
+                "generation": 1,
+                "operationId": "operation-health-test",
+                "traceId": "private transcript content",
+                "callId": "bad-trace",
+                "idempotencyKey": "bad-trace",
+                "toolName": "list_sources",
+                "arguments": {},
+            },
+        )
+        assert invalid_trace.status_code == 422
+
         tool = client.post(
             "/v1/tool-calls",
             headers={"Authorization": "Bearer internal-token-1234"},
             json={
                 "session_id": "session-1",
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "call_id": "call-1",
                 "idempotency_key": "idem-1",
                 "tool_name": "read_source",
@@ -132,6 +156,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={
                 "sessionId": "session-1",
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "callId": "call-2",
                 "idempotencyKey": "idem-2",
                 "toolName": "read_source",
@@ -146,6 +171,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={
                 "sessionId": "session-1",
                 "generation": 2,
+                **TOOL_CORRELATION,
                 "callId": "call-3",
                 "idempotencyKey": "idem-3",
                 "toolName": "read_source",
@@ -160,6 +186,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={
                 "sessionId": "session-1",
                 "generation": 1,
+                **TOOL_CORRELATION,
                 "callId": "call-4",
                 "idempotencyKey": "idem-4",
                 "toolName": "read_source",

@@ -81,6 +81,10 @@ Use `scripts/run-local-ops.sh --json` for stdout JSON or
 means at least one required component is not ready; the legacy compatibility
 worker is reported but optional for generated Android sessions.
 
+For a content-free correlated trace/metrics bundle, run
+`make export-diagnostics-local`. Its bounded schema and redaction rules are in
+[`telemetry-operations.md`](telemetry-operations.md).
+
 ## Safe first response
 
 1. Run `make services-status-local` to distinguish unloaded processes from
@@ -98,5 +102,5 @@ worker is reported but optional for generated Android sessions.
 
 Database backup/restore and revision rollback are covered by
 [`database-recovery.md`](database-recovery.md). Bounded log rotation and
-correlated turn telemetry remain subsequent children of `rad-b8nm`; this
-runbook does not claim those later acceptance gates are complete.
+deletion remain a subsequent child of `rad-b8nm`; this runbook does not claim
+that later acceptance gate is complete.

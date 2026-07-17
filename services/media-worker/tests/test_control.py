@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import rtc
+from radcliffe_domain.session import trace_id_for_operation
 from radcliffe_media.control import ClientControlHandler
 from radcliffe_media.livekit_adapter import RadcliffeLiveKitTransport
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
@@ -70,6 +71,7 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
                 generation=1,
                 operation_id="operation-1",
                 cancellation_id="cancel-1",
+                trace_id="trc_" + "b" * 32,
             ),
             segment_id="segment-1",
             status=protocol_pb2.PLAYBACK_STATUS_COMPLETED,
@@ -85,6 +87,43 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
     assert acknowledgement.segment_id == "segment-1"
     assert acknowledgement.position_ms == 1200
     assert acknowledgement.boundary_index == 2
+    assert acknowledgement.operation.trace_id == "trc_" + "b" * 32
+
+    legacy = protocol_pb2.ClientEvent.FromString(event.SerializeToString(deterministic=True))
+    legacy.playback_acknowledgement.acknowledgement_id = "ack-legacy"
+    legacy.playback_acknowledgement.operation.trace_id = ""
+    assert await handler.handle(legacy.SerializeToString(deterministic=True))
+    assert target.acknowledgements[1].operation.trace_id == trace_id_for_operation("operation-1")
+
+
+@pytest.mark.asyncio
+async def test_protocol_v2_rejects_malformed_trace_identity() -> None:
+    target = FakeControlTarget()
+    handler = ClientControlHandler(target)
+    occurred_at = Timestamp()
+    occurred_at.FromDatetime(datetime.now(UTC))
+    event = protocol_pb2.ClientEvent(
+        protocol_version=2,
+        playback_acknowledgement=protocol_pb2.PlaybackAcknowledgement(
+            acknowledgement_id="ack-invalid",
+            playback_id="playback-invalid",
+            operation=protocol_pb2.OperationRef(
+                session_id="s1",
+                generation=1,
+                operation_id="operation-invalid",
+                cancellation_id="cancel-invalid",
+                trace_id="transcript content does not belong here",
+            ),
+            segment_id="segment-invalid",
+            status=protocol_pb2.PLAYBACK_STATUS_COMPLETED,
+            position_ms=1,
+            boundary_index=1,
+            occurred_at=occurred_at,
+        ),
+    )
+
+    assert not await handler.handle(event.SerializeToString(deterministic=True))
+    assert not target.acknowledgements
 
 
 @pytest.mark.asyncio
