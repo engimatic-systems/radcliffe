@@ -59,6 +59,7 @@ class FakeVoice:
         self.active = 0
         self.maximum_active = 0
         self.first_started = asyncio.Event()
+        self.participant_connections = 0
 
     async def handle_transcript(self, transcript: str) -> None:
         self.transcripts.append(transcript)
@@ -73,6 +74,9 @@ class FakeVoice:
 
     async def barge_in(self) -> None:
         self.barge_ins += 1
+
+    async def participant_connected(self) -> None:
+        self.participant_connections += 1
 
 
 def audio_frame(*, voiced: bool, amplitude: int | None = None) -> UserAudioRawFrame:
@@ -104,6 +108,25 @@ async def test_short_natural_pause_stays_inside_one_endpointed_utterance() -> No
     assert len(speech.calls) == 1
     assert voice.transcripts == ["transcript-1"]
     assert voice.barge_ins == 0
+
+
+@pytest.mark.asyncio
+async def test_participant_rejoin_unpauses_and_clears_stale_endpoint_audio() -> None:
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(FakeSpeech())
+    endpoint.voice = voice  # type: ignore[assignment]
+    endpoint.paused = True
+    endpoint.speaking = True
+    endpoint.buffer.extend(b"stale audio")
+    endpoint.idle_buffer.extend(b"stale pre-roll")
+
+    await endpoint.participant_connected()
+
+    assert not endpoint.paused
+    assert not endpoint.speaking
+    assert endpoint.buffer == b""
+    assert endpoint.idle_buffer == b""
+    assert voice.participant_connections == 1
 
 
 @pytest.mark.asyncio
