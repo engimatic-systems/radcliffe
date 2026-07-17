@@ -172,9 +172,13 @@ developer and desktop client, but it is not the mobile reliability baseline.
   AES-256-GCM under a non-exportable Android Keystore key; DataStore contains
   only a versioned `v1` ciphertext envelope. App backups and screenshots are
   disabled, and clearing settings removes both preferences and key material.
-  Device enrollment under `rad-nmdx` can later exchange the decrypted legacy
-  bootstrap credential once, persist the enrolled device credential through
-  the same repository boundary, and delete the legacy key and ciphertext.
+  Device enrollment under `rad-nmdx` exchanges the decrypted legacy bootstrap
+  credential once for a client-generated per-installation credential. The
+  control plane stores only its digest, binds room identity server-side, rejects
+  bootstrap authorization on ordinary session routes, and supports immediate
+  operator revocation. Android persists the enrolled credential through the
+  same Keystore-backed repository boundary and then deletes the legacy key and
+  ciphertext.
 - **Realtime:** the official LiveKit Android SDK, configured for two-way
   communication audio. The app publishes microphone audio and subscribes to
   the agent’s audio track; control events use LiveKit data packets.

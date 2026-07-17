@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+from device_auth import enroll_device
 from livekit import rtc
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +27,6 @@ async def run(commit: str) -> int:
     bootstrap_token = os.environ.get("RADCLIFFE_BOOTSTRAP_TOKEN")
     if not bootstrap_token:
         raise RuntimeError("RADCLIFFE_BOOTSTRAP_TOKEN is required")
-    headers = {"Authorization": f"Bearer {bootstrap_token}"}
     idempotency_key = f"worker-smoke-{uuid4()}"
     created_at = datetime.now(UTC)
     report: dict[str, object] = {
@@ -40,6 +40,14 @@ async def run(commit: str) -> int:
     session_id: str | None = None
     async with httpx.AsyncClient(timeout=15) as client:
         try:
+            enrolled = await enroll_device(
+                client,
+                control_url=control_url,
+                bootstrap_token=bootstrap_token,
+                installation_id=f"worker-smoke-{uuid4().hex}",
+                display_name="Worker dispatch conformance",
+            )
+            headers = enrolled.headers
             started = time.monotonic()
             response = await client.post(
                 f"{control_url}/v1/sessions",

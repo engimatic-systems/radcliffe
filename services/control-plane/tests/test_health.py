@@ -7,6 +7,9 @@ from radcliffe_control.settings import Settings
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
+DEVICE_CREDENTIAL = "rdc_dev_" + "b" * 43
+DEVICE_AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
+
 
 def settings(tmp_path) -> Settings:
     source_root = tmp_path / "sources"
@@ -37,9 +40,19 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
             json={"session_id": "session-1", "participant_identity": "pixel"},
         )
         assert unauthorized.status_code == 401
+        enrollment = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": "Bearer bootstrap-token-123"},
+            json={
+                "installation_id": "health-installation-1234",
+                "display_name": "Health Pixel",
+                "credential": DEVICE_CREDENTIAL,
+            },
+        )
+        assert enrollment.status_code == 200
         session = client.post(
             "/v1/sessions",
-            headers={"Authorization": "Bearer bootstrap-token-123"},
+            headers=DEVICE_AUTHORIZATION,
             json={"session_id": "session-1", "participant_identity": "pixel"},
         )
         assert session.status_code == 200

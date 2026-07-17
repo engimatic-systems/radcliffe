@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import httpx
 import numpy as np
+from device_auth import enroll_device
 from google.protobuf.json_format import MessageToDict
 from livekit import rtc
 from radcliffe_domain.projection import (
@@ -432,12 +433,15 @@ async def run(commit: str) -> int:
     control_url = os.environ.get("RADCLIFFE_CONTROL_URL", "http://127.0.0.1:8000")
     sidecar_url = os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")
     bootstrap_token = os.environ.get("RADCLIFFE_BOOTSTRAP_TOKEN")
+    internal_token = os.environ.get("RADCLIFFE_INTERNAL_TOKEN")
     session_id = os.environ.get(
         "RADCLIFFE_CONFORMANCE_SESSION_ID",
         f"radcliffe-conformance-{uuid4().hex[:12]}",
     )
     if not bootstrap_token:
         raise RuntimeError("RADCLIFFE_BOOTSTRAP_TOKEN is required")
+    if not internal_token:
+        raise RuntimeError("RADCLIFFE_INTERNAL_TOKEN is required")
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_dir = ROOT / "artifacts" / "voice-conformance" / stamp
@@ -486,20 +490,16 @@ async def run(commit: str) -> int:
         _write_wav(output_dir / f"user-{name}.wav", utterance.pcm, INPUT_RATE)
 
     async with httpx.AsyncClient(timeout=10) as client:
-        worker_response = await client.post(
-            f"{control_url.rstrip('/')}/v1/sessions",
-            headers={"Authorization": f"Bearer {bootstrap_token}"},
-            json={
-                "session_id": session_id,
-                "participant_identity": "radcliffe-worker",
-                "role": "worker",
-            },
+        enrolled = await enroll_device(
+            client,
+            control_url=control_url,
+            bootstrap_token=bootstrap_token,
+            installation_id=f"voice-conformance-{uuid4().hex}",
+            display_name="Voice conformance client",
         )
-        worker_response.raise_for_status()
-        worker_credentials = worker_response.json()
         response = await client.post(
             f"{control_url.rstrip('/')}/v1/sessions",
-            headers={"Authorization": f"Bearer {bootstrap_token}"},
+            headers=enrolled.headers,
             json={
                 "session_id": session_id,
                 "participant_identity": "synthetic-voice-conformance",
@@ -508,6 +508,13 @@ async def run(commit: str) -> int:
         )
         response.raise_for_status()
         credentials = response.json()
+        worker_response = await client.post(
+            f"{control_url.rstrip('/')}/v1/internal/sessions/{session_id}/worker-credentials",
+            headers={"Authorization": f"Bearer {internal_token}"},
+            json={},
+        )
+        worker_response.raise_for_status()
+        worker_credentials = worker_response.json()
 
     worker_environment = {
         **os.environ,

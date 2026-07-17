@@ -22,6 +22,12 @@ from radcliffe_domain.catalog import (
     SessionConflictError,
     SessionRecord,
 )
+from radcliffe_domain.devices import (
+    DeviceEnrollmentConflictError,
+    DeviceRecord,
+    DeviceRegistry,
+    credential_digest,
+)
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity
 from radcliffe_domain.projection import (
     CONTEXT_PROJECTION_VERSION,
@@ -58,7 +64,7 @@ class SessionRequest(BaseModel):
 
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,96}$")
     participant_identity: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
-    role: Literal["client", "worker"] = "client"
+    role: Literal["client"] = "client"
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
     title: str | None = Field(default=None, max_length=120)
 
@@ -67,7 +73,28 @@ class SessionCredentialsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     participant_identity: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
-    role: Literal["client", "worker"] = "client"
+    role: Literal["client"] = "client"
+
+
+class WorkerCredentialsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DeviceEnrollmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    installation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{16,96}$")
+    display_name: str = Field(min_length=1, max_length=80)
+    credential: str = Field(pattern=r"^rdc_dev_[A-Za-z0-9_-]{43,128}$")
+
+
+class DeviceResponse(BaseModel):
+    device_id: str
+    participant_identity: str
+    display_name: str
+    created_at: datetime
+    last_authenticated_at: datetime | None
+    revoked: bool
 
 
 class SessionUpdateRequest(BaseModel):
@@ -92,6 +119,7 @@ class SessionResponse(SessionSummaryResponse):
     livekit_url: str
     room_name: str
     participant_token: str
+    participant_identity: str
     expires_in_seconds: int
 
 
@@ -205,6 +233,7 @@ class Runtime:
     workers: WorkerSupervisor | None
     worker_maintenance: asyncio.Task[None] | None
     context_usage: ContextUsageClient
+    devices: DeviceRegistry
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -315,6 +344,7 @@ def create_app(
             workers,
             None,
             context_usage_client or SidecarContextUsageClient(settings.sidecar_url),
+            DeviceRegistry(settings.database_path),
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -339,6 +369,52 @@ def create_app(
         if runtime is None:
             raise HTTPException(status_code=503, detail="control plane is starting")
         return runtime
+
+    async def require_device(
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DeviceRecord:
+        supplied = authorization.removeprefix("Bearer ") if authorization else ""
+        if (
+            not authorization
+            or not authorization.startswith("Bearer ")
+            or not 51 <= len(supplied) <= 136
+            or not supplied.startswith("rdc_dev_")
+        ):
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=None,
+                event_type="authentication_failed",
+                reason="malformed_credential",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid device credential",
+            )
+        device = await active.devices.authenticate(credential_digest(supplied))
+        if device is None or device.owner_id != active.settings.owner_id:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=None,
+                event_type="authentication_failed",
+                reason="unknown_credential",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid device credential",
+            )
+        if device.revoked_at is not None:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=device.device_id,
+                event_type="authentication_failed",
+                reason="revoked_credential",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid device credential",
+            )
+        return device
 
     @app.get("/healthz")
     async def health() -> dict[str, str]:
@@ -405,16 +481,98 @@ def create_app(
             livekit_url=active.settings.livekit_url,
             room_name=record.session_id,
             participant_token=token,
+            participant_identity=participant_identity,
             expires_in_seconds=active.settings.room_token_ttl_seconds,
+        )
+
+    @app.post("/v1/devices/enroll", response_model=DeviceResponse)
+    async def enroll_device(
+        request: DeviceEnrollmentRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DeviceResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        try:
+            device, created = await active.devices.enroll(
+                owner_id=active.settings.owner_id,
+                installation_id=request.installation_id,
+                display_name=request.display_name,
+                credential_sha256=credential_digest(request.credential),
+            )
+        except DeviceEnrollmentConflictError as error:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=None,
+                event_type="enrollment_conflict",
+                reason="installation_or_credential_replay",
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if created:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=device.device_id,
+                event_type="enrolled",
+                reason="new_installation",
+            )
+        return DeviceResponse(
+            device_id=device.device_id,
+            participant_identity=device.participant_identity,
+            display_name=device.display_name,
+            created_at=device.created_at,
+            last_authenticated_at=device.last_authenticated_at,
+            revoked=device.revoked_at is not None,
+        )
+
+    @app.get("/v1/devices/me", response_model=DeviceResponse)
+    async def get_current_device(
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
+    ) -> DeviceResponse:
+        return DeviceResponse(
+            device_id=device.device_id,
+            participant_identity=device.participant_identity,
+            display_name=device.display_name,
+            created_at=device.created_at,
+            last_authenticated_at=device.last_authenticated_at,
+            revoked=False,
+        )
+
+    @app.post("/v1/devices/{device_id}/revoke", response_model=DeviceResponse)
+    async def revoke_device(
+        device_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DeviceResponse:
+        _bearer(authorization, active.settings.internal_token)
+        existing = await active.devices.get(device_id)
+        if existing is None or existing.owner_id != active.settings.owner_id:
+            raise HTTPException(status_code=404, detail="device not found")
+        device = await active.devices.revoke(
+            owner_id=active.settings.owner_id,
+            device_id=device_id,
+        )
+        assert device is not None
+        if existing.revoked_at is None:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=device.device_id,
+                event_type="revoked",
+                reason="operator_revocation",
+            )
+        return DeviceResponse(
+            device_id=device.device_id,
+            participant_identity=device.participant_identity,
+            display_name=device.display_name,
+            created_at=device.created_at,
+            last_authenticated_at=device.last_authenticated_at,
+            revoked=True,
         )
 
     @app.post("/v1/sessions", response_model=SessionResponse)
     async def create_session(
         request: SessionRequest,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
     ) -> SessionResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         try:
             record, _created = await active.catalog.create(
                 principal_id=active.settings.owner_id,
@@ -428,19 +586,18 @@ def create_app(
         return await issue_credentials(
             active=active,
             record=record,
-            participant_identity=request.participant_identity,
-            role=request.role,
+            participant_identity=device.participant_identity,
+            role="client",
         )
 
     @app.get("/v1/sessions", response_model=SessionListResponse)
     async def list_sessions(
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
         cursor: str | None = None,
         include_archived: bool = False,
     ) -> SessionListResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         try:
             page = await active.catalog.list(
                 principal_id=active.settings.owner_id,
@@ -459,9 +616,8 @@ def create_app(
     async def get_session(
         session_id: str,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
     ) -> SessionSummaryResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         record = await active.catalog.get(
             principal_id=active.settings.owner_id,
             session_id=session_id,
@@ -477,9 +633,8 @@ def create_app(
     async def get_context_usage(
         session_id: str,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
     ) -> ContextUsageResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         record = await active.catalog.get(
             principal_id=active.settings.owner_id,
             session_id=session_id,
@@ -517,11 +672,10 @@ def create_app(
     async def get_session_messages(
         session_id: str,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
         after: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=100)] = 100,
     ) -> SessionMessageListResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         record = await active.catalog.get(
             principal_id=active.settings.owner_id,
             session_id=session_id,
@@ -568,9 +722,8 @@ def create_app(
         session_id: str,
         request: SessionUpdateRequest,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
     ) -> SessionSummaryResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         existing = await active.catalog.get(
             principal_id=active.settings.owner_id,
             session_id=session_id,
@@ -605,9 +758,8 @@ def create_app(
         session_id: str,
         request: SessionCredentialsRequest,
         active: Runtime = Depends(get_runtime),  # noqa: B008
-        authorization: Annotated[str | None, Header()] = None,
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
     ) -> SessionResponse:
-        _bearer(authorization, active.settings.bootstrap_token)
         record = await active.catalog.get(
             principal_id=active.settings.owner_id,
             session_id=session_id,
@@ -618,8 +770,32 @@ def create_app(
         return await issue_credentials(
             active=active,
             record=record,
-            participant_identity=request.participant_identity,
-            role=request.role,
+            participant_identity=device.participant_identity,
+            role="client",
+        )
+
+    @app.post(
+        "/v1/internal/sessions/{session_id}/worker-credentials",
+        response_model=SessionResponse,
+    )
+    async def issue_worker_credentials(
+        session_id: str,
+        _request: WorkerCredentialsRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SessionResponse:
+        _bearer(authorization, active.settings.internal_token)
+        record = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return await issue_credentials(
+            active=active,
+            record=record,
+            participant_identity=_worker_identity(record.session_id),
+            role="worker",
         )
 
     @app.post("/v1/tool-calls", response_model=ToolCallResponse)
