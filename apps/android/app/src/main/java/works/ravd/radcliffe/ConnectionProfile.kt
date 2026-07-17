@@ -7,6 +7,7 @@ import android.util.Base64
 import androidx.datastore.core.DataStore
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -174,6 +175,12 @@ class ConnectionProfileRepository(
             )
         }
 
+    val showSystemMessages: Flow<Boolean> = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences -> preferences[SHOW_SYSTEM_MESSAGES] ?: false }
+
     suspend fun save(profile: ConnectionProfile) {
         val normalized = profile.normalized()
         normalized.validationError()?.let { error(it) }
@@ -248,6 +255,10 @@ class ConnectionProfileRepository(
         }
     }
 
+    suspend fun setShowSystemMessages(show: Boolean) {
+        dataStore.edit { preferences -> preferences[SHOW_SYSTEM_MESSAGES] = show }
+    }
+
     companion object {
         private val CONTROL_URL = stringPreferencesKey("control_url")
         private val SESSION_ID = stringPreferencesKey("session_id")
@@ -257,6 +268,7 @@ class ConnectionProfileRepository(
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val PARTICIPANT_IDENTITY = stringPreferencesKey("participant_identity")
         private val PENDING_SESSION_KEY = stringPreferencesKey("pending_session_creation_key")
+        private val SHOW_SYSTEM_MESSAGES = booleanPreferencesKey("show_system_messages")
         private val SESSION_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
         private val DEVICE_ID_PATTERN = Regex("^dev_[a-f0-9]{32}$")
         private val PARTICIPANT_IDENTITY_PATTERN = Regex("^[A-Za-z0-9_.:-]{1,96}$")

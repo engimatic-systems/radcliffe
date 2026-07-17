@@ -89,16 +89,53 @@ object SessionApi {
         bootstrapToken: String,
         limit: Int = 20,
         cursor: String? = null,
+        status: String? = null,
     ): SessionPage {
         require(limit in 1..100)
+        require(status in setOf(null, "active", "ended", "archived"))
         val query = buildString {
             append("?limit=$limit")
             if (cursor != null) {
                 append("&cursor=")
                 append(URLEncoder.encode(cursor, Charsets.UTF_8.name()))
             }
+            if (status != null) {
+                append("&status=")
+                append(URLEncoder.encode(status, Charsets.UTF_8.name()))
+            }
         }
         return parseSessionPage(request(baseUrl, bootstrapToken, "GET", "/v1/sessions$query"))
+    }
+
+    fun get(
+        baseUrl: String,
+        deviceCredential: String,
+        sessionId: String,
+    ): SessionSummary = parseSessionSummary(
+        request(
+            baseUrl,
+            deviceCredential,
+            "GET",
+            "/v1/sessions/${encodePath(sessionId)}",
+        ),
+    )
+
+    fun updateStatus(
+        baseUrl: String,
+        deviceCredential: String,
+        sessionId: String,
+        status: String,
+    ): SessionSummary {
+        require(status in setOf("active", "ended", "archived"))
+        return parseSessionSummary(
+            request(
+                baseUrl,
+                deviceCredential,
+                "PATCH",
+                "/v1/sessions/${encodePath(sessionId)}",
+                JSONObject().put("status", status),
+            ),
+        )
     }
 
     fun createGenerated(
@@ -173,16 +210,7 @@ object SessionApi {
         val items = buildList {
             for (index in 0 until values.length()) {
                 val item = values.getJSONObject(index)
-                add(
-                    SessionSummary(
-                        sessionId = item.getString("session_id"),
-                        createdAt = Instant.parse(item.getString("created_at")),
-                        lastActivityAt = Instant.parse(item.getString("last_activity_at")),
-                        title = if (item.isNull("title")) null else item.getString("title"),
-                        status = item.getString("status"),
-                        workerStatus = item.getString("worker_status"),
-                    ),
-                )
+                add(parseSessionSummary(item))
             }
         }
         return SessionPage(
@@ -202,6 +230,15 @@ object SessionApi {
         measurementBasis = json.getString("measurement_basis"),
         exact = json.getBoolean("exact"),
         overflow = json.getBoolean("overflow"),
+    )
+
+    internal fun parseSessionSummary(json: JSONObject): SessionSummary = SessionSummary(
+        sessionId = json.getString("session_id"),
+        createdAt = Instant.parse(json.getString("created_at")),
+        lastActivityAt = Instant.parse(json.getString("last_activity_at")),
+        title = if (json.isNull("title")) null else json.getString("title"),
+        status = json.getString("status"),
+        workerStatus = json.getString("worker_status"),
     )
 
     internal fun parseTimelinePage(json: JSONObject): TimelinePage {
@@ -227,6 +264,8 @@ object SessionApi {
                             } else {
                                 item.getString("provenance_label")
                             },
+                            createdAt = Instant.parse(item.getString("created_at")),
+                            sequence = item.getLong("sequence"),
                         ),
                     )
                 }

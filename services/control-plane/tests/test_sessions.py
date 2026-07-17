@@ -214,6 +214,18 @@ def test_catalog_list_detail_update_pagination_and_authorization(tmp_path) -> No
             headers=AUTHORIZATION,
         ).json()["items"]
         assert "legacy-b" in {item["session_id"] for item in with_archived}
+        archived_only = client.get(
+            "/v1/sessions?status=archived",
+            headers=AUTHORIZATION,
+        ).json()["items"]
+        assert [item["session_id"] for item in archived_only] == ["legacy-b"]
+        assert (
+            client.get(
+                "/v1/sessions?status=deleted",
+                headers=AUTHORIZATION,
+            ).status_code
+            == 422
+        )
         assert client.get("/v1/sessions?cursor=not-valid", headers=AUTHORIZATION).status_code == 422
         assert client.get("/v1/sessions/missing", headers=AUTHORIZATION).status_code == 404
 
@@ -408,6 +420,17 @@ def test_status_only_update_preserves_session_title(tmp_path) -> None:
     config = settings(tmp_path)
     with TestClient(create_app(config)) as client:
         assert create(client, session_id="preserve-title", title="Keep me").status_code == 200
+        asyncio.run(
+            EventStore(config.database_path).append(
+                MessageEnvelope.text(
+                    session_id="preserve-title",
+                    sequence=1,
+                    source=SourceKind.USER,
+                    text="Keep this durable message",
+                    message_id="preserved-message",
+                )
+            )
+        )
         archived = client.patch(
             "/v1/sessions/preserve-title",
             headers=AUTHORIZATION,
@@ -415,6 +438,24 @@ def test_status_only_update_preserves_session_title(tmp_path) -> None:
         )
         assert archived.status_code == 200
         assert archived.json()["title"] == "Keep me"
+        archived_retry = client.patch(
+            "/v1/sessions/preserve-title",
+            headers=AUTHORIZATION,
+            json={"status": "archived"},
+        )
+        assert archived_retry.status_code == 200
+        timeline = client.get(
+            "/v1/sessions/preserve-title/messages",
+            headers=AUTHORIZATION,
+        ).json()["items"]
+        assert [item["message_id"] for item in timeline] == ["preserved-message"]
+        restored = client.patch(
+            "/v1/sessions/preserve-title",
+            headers=AUTHORIZATION,
+            json={"status": "active"},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["title"] == "Keep me"
 
 
 def test_generated_session_dispatches_one_worker_and_end_cleans_it_up(tmp_path) -> None:

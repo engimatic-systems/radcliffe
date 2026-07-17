@@ -13,10 +13,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
@@ -77,6 +83,15 @@ internal fun sessionHomePageAppended(
     nextCursor = nextCursor,
     loading = false,
     loadingMore = false,
+    problem = null,
+    problemDetail = null,
+)
+
+internal fun sessionHomeSessionRemoved(
+    current: SessionHomeUiState,
+    sessionId: String,
+): SessionHomeUiState = current.copy(
+    items = current.items.filterNot { it.summary.sessionId == sessionId },
     problem = null,
     problemDetail = null,
 )
@@ -176,15 +191,31 @@ internal fun formatSessionDate(instant: Instant): String = DateTimeFormatter
 fun SessionHome(
     state: SessionHomeUiState,
     selectedSessionId: String,
+    archived: Boolean,
+    mutationSessionId: String?,
     onNewSession: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onArchiveSession: (String) -> Unit,
+    onRestoreSession: (String) -> Unit,
+    onShowRecent: () -> Unit,
+    onShowArchived: () -> Unit,
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var pendingArchive by remember { mutableStateOf<RecentSessionItem?>(null) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(onClick = onNewSession, modifier = Modifier.fillMaxWidth()) {
             Text("New conversation")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (archived) {
+                OutlinedButton(onClick = onShowRecent) { Text("Recent") }
+                Button(onClick = {}, enabled = false) { Text("Archived") }
+            } else {
+                Button(onClick = {}, enabled = false) { Text("Recent") }
+                OutlinedButton(onClick = onShowArchived) { Text("Archived") }
+            }
         }
         when {
             state.loading && state.items.isEmpty() -> {
@@ -203,20 +234,33 @@ fun SessionHome(
                 onRetry,
             )
             state.items.isEmpty() -> {
-                Text("No conversations yet")
-                Text("Start a new conversation and it will appear here.")
+                Text(if (archived) "No archived conversations" else "No conversations yet")
+                Text(
+                    if (archived) {
+                        "Archived conversations remain durable and can be restored here."
+                    } else {
+                        "Start a new conversation and it will appear here."
+                    },
+                )
             }
             else -> {
                 if (state.problem != null) {
                     SessionHomeProblemCard(state.problem, state.problemDetail, onRetry)
                 }
-                Text("Recent conversations", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (archived) "Archived conversations" else "Recent conversations",
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.items, key = { it.summary.sessionId }) { item ->
                         SessionRow(
                             item,
                             selected = item.summary.sessionId == selectedSessionId,
+                            archived = archived,
+                            mutationInFlight = mutationSessionId == item.summary.sessionId,
                             onClick = { onOpenSession(item.summary.sessionId) },
+                            onArchive = { pendingArchive = item },
+                            onRestore = { onRestoreSession(item.summary.sessionId) },
                         )
                     }
                     if (state.nextCursor != null) {
@@ -233,6 +277,27 @@ fun SessionHome(
                 }
             }
         }
+    }
+    pendingArchive?.let { item ->
+        val summary = item.summary
+        val date = formatSessionDate(summary.lastActivityAt)
+        val title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation from $date"
+        AlertDialog(
+            onDismissRequest = { pendingArchive = null },
+            title = { Text("Archive conversation?") },
+            text = { Text("$title will leave Recent but keep its messages and audit history.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingArchive = null
+                        onArchiveSession(summary.sessionId)
+                    },
+                ) { Text("Archive") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingArchive = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -268,13 +333,17 @@ private fun SessionHomeProblemCard(
 private fun SessionRow(
     item: RecentSessionItem,
     selected: Boolean,
+    archived: Boolean,
+    mutationInFlight: Boolean,
     onClick: () -> Unit,
+    onArchive: () -> Unit,
+    onRestore: () -> Unit,
 ) {
     val summary = item.summary
     val date = formatSessionDate(summary.lastActivityAt)
     val title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation from $date"
     val indicator = contextIndicator(item.contextUsage)
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -292,6 +361,20 @@ private fun SessionRow(
                 Text(indicator.statusLabel, style = MaterialTheme.typography.labelSmall)
                 if (selected) {
                     Text("Most recently opened", style = MaterialTheme.typography.labelSmall)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (archived) {
+                        OutlinedButton(onClick = onRestore, enabled = !mutationInFlight) {
+                            Text(if (mutationInFlight) "Restoring…" else "Restore")
+                        }
+                    } else {
+                        OutlinedButton(onClick = onClick, enabled = !mutationInFlight) {
+                            Text("Open")
+                        }
+                        TextButton(onClick = onArchive, enabled = !mutationInFlight) {
+                            Text(if (mutationInFlight) "Archiving…" else "Archive")
+                        }
+                    }
                 }
             }
         }

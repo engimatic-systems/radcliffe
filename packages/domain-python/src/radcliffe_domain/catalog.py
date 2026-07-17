@@ -181,11 +181,18 @@ class SessionCatalog:
         limit: int = 20,
         cursor: str | None = None,
         include_archived: bool = False,
+        status: str | None = None,
     ) -> SessionPage:
         if not 1 <= limit <= 100:
             raise ValueError("session page limit must be between 1 and 100")
+        if status not in {None, "active", "ended", "archived"}:
+            raise ValueError("invalid session status filter")
         parameters: list[str | int] = [principal_id]
-        visibility = "" if include_archived else "AND status != 'archived'"
+        if status is not None:
+            visibility = "AND status = ?"
+            parameters.append(status)
+        else:
+            visibility = "" if include_archived else "AND status != 'archived'"
         boundary = ""
         if cursor:
             activity, session_id = _decode_cursor(cursor)

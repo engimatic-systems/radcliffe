@@ -112,7 +112,31 @@ class SessionApiTest {
 
         assertEquals(listOf(MessageKind.USER, MessageKind.SOURCE), page.messages.map { it.kind })
         assertEquals("demo.md", page.messages.last().provenance)
+        assertEquals(1L, page.messages.first().sequence)
+        assertEquals("2026-07-14T10:00:00Z", page.messages.first().createdAt.toString())
         assertEquals(2L, page.nextAfter)
+    }
+
+    @Test
+    fun statusUpdateParserPreservesTitleAndArchiveState() {
+        val summary = SessionApi.parseSessionSummary(
+            JSONObject(
+                """{
+                    "session_id": "ses_archived",
+                    "created_at": "2026-07-14T10:00:00Z",
+                    "last_activity_at": "2026-07-14T11:00:00Z",
+                    "title": "Keep me",
+                    "status": "archived",
+                    "protocol_version": 2,
+                    "generation": 3,
+                    "worker_status": "stopped"
+                }""".trimIndent(),
+            ),
+        )
+
+        assertEquals("Keep me", summary.title)
+        assertEquals("archived", summary.status)
+        assertEquals("stopped", summary.workerStatus)
     }
 
     @Test

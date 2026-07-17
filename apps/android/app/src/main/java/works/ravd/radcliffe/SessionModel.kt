@@ -1,5 +1,6 @@
 package works.ravd.radcliffe
 
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -12,6 +13,8 @@ data class DisplayMessage(
     val kind: MessageKind,
     val text: String,
     val provenance: String? = null,
+    val createdAt: Instant? = null,
+    val sequence: Long? = null,
 )
 
 object SessionModel {
