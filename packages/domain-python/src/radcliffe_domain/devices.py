@@ -13,6 +13,10 @@ class DeviceEnrollmentConflictError(ValueError):
     pass
 
 
+class DeviceCredentialRotationError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceRecord:
     device_id: str
@@ -159,6 +163,61 @@ class DeviceRegistry:
             if cursor.rowcount == 0:
                 return None
         return await self.get(device_id)
+
+    async def rotate_credential(
+        self,
+        *,
+        owner_id: str,
+        device_id: str,
+        current_credential_sha256: bytes,
+        next_credential_sha256: bytes,
+    ) -> tuple[DeviceRecord, bool]:
+        async with aiosqlite.connect(self.path) as database:
+            database.row_factory = aiosqlite.Row
+            await database.execute("BEGIN IMMEDIATE")
+            row = await (
+                await database.execute(
+                    "SELECT * FROM devices WHERE owner_id = ? AND device_id = ?",
+                    (owner_id, device_id),
+                )
+            ).fetchone()
+            if row is None:
+                await database.rollback()
+                raise DeviceCredentialRotationError("device is unavailable")
+            record = _record(row)
+            if record.revoked_at is not None:
+                await database.rollback()
+                raise DeviceCredentialRotationError("device is unavailable")
+            if record.credential_sha256 != current_credential_sha256:
+                await database.rollback()
+                raise DeviceCredentialRotationError("device credential changed concurrently")
+            if current_credential_sha256 == next_credential_sha256:
+                await database.rollback()
+                return record, False
+            try:
+                cursor = await database.execute(
+                    """UPDATE devices SET credential_sha256 = ?
+                    WHERE owner_id = ? AND device_id = ? AND credential_sha256 = ?
+                    AND revoked_at IS NULL""",
+                    (
+                        next_credential_sha256,
+                        owner_id,
+                        device_id,
+                        current_credential_sha256,
+                    ),
+                )
+            except aiosqlite.IntegrityError as error:
+                await database.rollback()
+                raise DeviceCredentialRotationError(
+                    "replacement credential is already enrolled"
+                ) from error
+            if cursor.rowcount != 1:
+                await database.rollback()
+                raise DeviceCredentialRotationError("device credential changed concurrently")
+            await database.commit()
+        rotated = await self.get(device_id)
+        assert rotated is not None
+        return rotated, True
 
     async def audit(
         self,

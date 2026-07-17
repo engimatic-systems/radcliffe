@@ -15,6 +15,7 @@ BOOTSTRAP = "bootstrap-token-123"
 INTERNAL = "internal-token-1234"
 CREDENTIAL = "rdc_dev_" + "c" * 43
 OTHER_CREDENTIAL = "rdc_dev_" + "d" * 43
+ROTATED_CREDENTIAL = "rdc_dev_" + "e" * 43
 
 
 def settings(tmp_path) -> Settings:
@@ -147,6 +148,17 @@ def test_device_auth_survives_restart_and_revocation_is_immediate_and_audited(tm
             ).status_code
             == 401
         )
+        assert restarted.get("/v1/internal/device-auth-audit").status_code == 401
+        audit_response = restarted.get(
+            "/v1/internal/device-auth-audit",
+            headers=internal_headers,
+        )
+        assert audit_response.status_code == 200
+        expected_fields = {"event_id", "device_id", "event_type", "reason", "occurred_at"}
+        assert all(set(item) == expected_fields for item in audit_response.json())
+        assert CREDENTIAL not in audit_response.text
+        assert OTHER_CREDENTIAL not in audit_response.text
+        assert BOOTSTRAP not in audit_response.text
 
     events = asyncio.run(DeviceRegistry(config.database_path).audit_events(owner_id="test-owner"))
     assert [(item.event_type, item.reason) for item in events] == [
@@ -160,3 +172,83 @@ def test_device_auth_survives_restart_and_revocation_is_immediate_and_audited(tm
     assert CREDENTIAL not in audit_text
     assert OTHER_CREDENTIAL not in audit_text
     assert BOOTSTRAP not in audit_text
+
+
+def test_device_credential_rotation_is_atomic_idempotent_and_one_way(tmp_path) -> None:
+    config = settings(tmp_path)
+    bootstrap_headers = {"Authorization": f"Bearer {BOOTSTRAP}"}
+    current_headers = {"Authorization": f"Bearer {CREDENTIAL}"}
+    rotated_headers = {"Authorization": f"Bearer {ROTATED_CREDENTIAL}"}
+    with TestClient(create_app(config)) as client:
+        enrolled = client.post(
+            "/v1/devices/enroll",
+            headers=bootstrap_headers,
+            json=enrollment(),
+        ).json()
+        assert (
+            client.post(
+                "/v1/devices/me/credential",
+                headers=bootstrap_headers,
+                json={"credential": ROTATED_CREDENTIAL},
+            ).status_code
+            == 401
+        )
+        rotated = client.post(
+            "/v1/devices/me/credential",
+            headers=current_headers,
+            json={"credential": ROTATED_CREDENTIAL},
+        )
+        assert rotated.status_code == 200
+        assert rotated.json()["device_id"] == enrolled["device_id"]
+        assert "credential" not in rotated.json()
+        assert client.get("/v1/devices/me", headers=current_headers).status_code == 401
+        assert client.get("/v1/devices/me", headers=rotated_headers).status_code == 200
+
+        confirmation = client.post(
+            "/v1/devices/me/credential",
+            headers=rotated_headers,
+            json={"credential": ROTATED_CREDENTIAL},
+        )
+        assert confirmation.status_code == 200
+
+    with TestClient(create_app(config)) as restarted:
+        assert restarted.get("/v1/devices/me", headers=rotated_headers).status_code == 200
+        assert restarted.get("/v1/devices/me", headers=current_headers).status_code == 401
+
+    raw_database = config.database_path.read_bytes()
+    assert CREDENTIAL.encode() not in raw_database
+    assert ROTATED_CREDENTIAL.encode() not in raw_database
+    events = asyncio.run(DeviceRegistry(config.database_path).audit_events(owner_id="test-owner"))
+    assert sum(item.event_type == "rotated" for item in events) == 1
+    assert all(CREDENTIAL not in repr(item) for item in events)
+    assert all(ROTATED_CREDENTIAL not in repr(item) for item in events)
+
+
+def test_rotation_rejects_a_credential_owned_by_another_installation(tmp_path) -> None:
+    config = settings(tmp_path)
+    bootstrap_headers = {"Authorization": f"Bearer {BOOTSTRAP}"}
+    current_headers = {"Authorization": f"Bearer {CREDENTIAL}"}
+    with TestClient(create_app(config)) as client:
+        client.post(
+            "/v1/devices/enroll",
+            headers=bootstrap_headers,
+            json=enrollment(),
+        ).raise_for_status()
+        client.post(
+            "/v1/devices/enroll",
+            headers=bootstrap_headers,
+            json={
+                "installation_id": "second-installation-1234",
+                "display_name": "Second device",
+                "credential": OTHER_CREDENTIAL,
+            },
+        ).raise_for_status()
+
+        conflict = client.post(
+            "/v1/devices/me/credential",
+            headers=current_headers,
+            json={"credential": OTHER_CREDENTIAL},
+        )
+
+        assert conflict.status_code == 409
+        assert client.get("/v1/devices/me", headers=current_headers).status_code == 200
