@@ -2,6 +2,7 @@
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	services-install-local services-status-local services-restart-local \
+	backup-local check-recovery-local recovery-prune-plan-local \
 	benchmark-stt-local demo build-voice-dashboard \
 	generate-protocol test-python test-node
 
@@ -62,6 +63,15 @@ services-status-local:
 
 services-restart-local:
 	uv run python scripts/radcliffe_services.py restart --include-compat-worker
+
+backup-local:
+	scripts/run-local-recovery.sh backup --retain 7
+
+check-recovery-local:
+	scripts/run-local-recovery.sh backup --kind drill --retain 7
+
+recovery-prune-plan-local:
+	scripts/run-local-recovery.sh prune --retain 7
 
 check-stt-rejection-local:
 	uv run python scripts/stt-rejection-conformance.py

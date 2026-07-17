@@ -113,12 +113,16 @@ provider secret used by the run.
 
 ## Backup and incident checks
 
-Back up the SQLite database only while the control plane is stopped or through a
-SQLite-consistent backup. The database contains conversation content, device
-credential digests, tool audit, and auth audit; protect it as private data even
-though it contains no raw bearer credentials. After restore, verify schema
-migrations, device authentication, session timeline replay, and credential
-rotation on an isolated copy before replacing the live database.
+Use `make backup-local` for an online SQLite-consistent backup. The database
+contains conversation content, device credential digests, tool audit, and auth
+audit; protect it as private data even though it contains no raw bearer
+credentials. The automated recovery path verifies hashes, integrity, schema
+migrations, preserved session/message/tool/playback/device-auth inventory, and
+current control-plane startup on an isolated copy. Ordinary restore is forbidden
+from targeting the live database; the separately confirmed rollback transaction
+creates a safety backup, stops services, restores the recorded service revision
+and database, and recovers the original pair if a later step fails. See
+[`database-recovery.md`](database-recovery.md).
 
 For an authentication incident, preserve content-free control logs and the auth
 audit, revoke affected devices, rotate bootstrap/internal/LiveKit secrets as

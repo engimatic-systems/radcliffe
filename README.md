@@ -183,12 +183,16 @@ plist; each supervised runner loads the protected `var/.env` at process start.
 make services-install-local
 make services-status-local
 make check-operations-local
+make check-recovery-local
 ```
 
 `/healthz` is shallow process liveness. `/readyz` additionally checks the
 database schema/integrity, warmed Pi sidecar, LiveKit signaling, source root,
 and managed-worker supervisor. The local operator workflow and stable failure
 codes are documented in [`docs/local-operations.md`](docs/local-operations.md).
+SQLite backup, isolated restore verification, upgrade receipts, and confirmed
+revision rollback are documented in
+[`docs/database-recovery.md`](docs/database-recovery.md).
 
 The focused false-turn corpus is faster and covers digital silence, seeded room
 tone, post-AEC playback echo, nearby speech-like babble, foreground speech over
