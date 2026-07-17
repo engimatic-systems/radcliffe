@@ -117,6 +117,7 @@ def test_install_status_restart_and_uninstall_are_idempotent(tmp_path) -> None:
     manager.install(services)
     manager.install(services)
     statuses = manager.statuses(services)
+    manager.start(services)
     manager.restart(services)
     manager.uninstall(services)
     manager.uninstall(services)
@@ -126,6 +127,7 @@ def test_install_status_restart_and_uninstall_are_idempotent(tmp_path) -> None:
     assert {status.pid for status in statuses} == {4242}
     assert not tuple(launch_agents.glob("*.plist"))
     assert not launchctl.loaded
+    assert not [command for command in launchctl.commands if command[1] == "kickstart"]
 
     machine_status = json.loads(render_status(statuses, as_json=True))
     assert machine_status["schema"] == "radcliffe-local-services-v1"

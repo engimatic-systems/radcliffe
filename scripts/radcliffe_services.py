@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -58,6 +59,16 @@ SERVICES = (
 )
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def selected_services(include_compat_worker: bool) -> tuple[ServiceDefinition, ...]:
@@ -143,16 +154,14 @@ class ServiceManager:
             path = self._plist_path(service)
             if not path.is_file():
                 raise RuntimeError(f"service is not installed: {service.name}")
-            loaded = (
-                self._run(
-                    ("print", f"{self.domain}/{service.label}"),
-                    check=False,
-                ).returncode
-                == 0
+            status = self._run(
+                ("print", f"{self.domain}/{service.label}"),
+                check=False,
             )
-            if not loaded:
+            if status.returncode != 0:
                 self._run(("bootstrap", self.domain, str(path)))
-            self._run(("kickstart", f"{self.domain}/{service.label}"))
+            elif _match_text(status.stdout, r"^\s*state = ([A-Za-z]+)$") != "running":
+                self._run(("kickstart", f"{self.domain}/{service.label}"))
 
     def stop(self, services: Sequence[ServiceDefinition]) -> None:
         for service in reversed(services):
@@ -187,7 +196,16 @@ class ServiceManager:
         self.start(services)
 
     def _bootout(self, service: ServiceDefinition) -> None:
+        status = self._run(("print", f"{self.domain}/{service.label}"), check=False)
+        pid = _match_int(status.stdout, r"^\s*pid = (\d+)$") if status.returncode == 0 else None
         self._run(("bootout", f"{self.domain}/{service.label}"), check=False)
+        if pid is None:
+            return
+        deadline = time.monotonic() + 5
+        while process_is_alive(pid):
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"service did not stop within 5 seconds: {service.name}")
+            time.sleep(0.05)
 
     def _plist_path(self, service: ServiceDefinition) -> Path:
         return self.launch_agents / f"{service.label}.plist"
