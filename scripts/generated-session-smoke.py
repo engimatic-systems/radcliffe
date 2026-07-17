@@ -144,10 +144,32 @@ async def run(commit: str) -> int:
         finally:
             await room.disconnect()
             if session_id is not None:
-                await client.patch(
+                archived = await client.patch(
                     f"{control_url}/v1/sessions/{session_id}",
                     headers=headers,
                     json={"status": "archived"},
+                )
+                archived.raise_for_status()
+                recent = await client.get(
+                    f"{control_url}/v1/sessions",
+                    headers=headers,
+                    params={"limit": 100},
+                )
+                archived_only = await client.get(
+                    f"{control_url}/v1/sessions",
+                    headers=headers,
+                    params={"limit": 100, "status": "archived"},
+                )
+                recent.raise_for_status()
+                archived_only.raise_for_status()
+                recent_ids = {item["session_id"] for item in recent.json()["items"]}
+                archived_ids = {item["session_id"] for item in archived_only.json()["items"]}
+                checks.append(
+                    {
+                        "name": "archive_is_hidden_and_recoverable",
+                        "passed": session_id not in recent_ids and session_id in archived_ids,
+                        "detail": "archived session left Recent and remained in archived-only view",
+                    }
                 )
     report["session_id"] = session_id
     report["passed"] = all(bool(check["passed"]) for check in checks)
