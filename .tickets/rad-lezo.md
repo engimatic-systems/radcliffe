@@ -1,6 +1,6 @@
 ---
 id: rad-lezo
-status: in_progress
+status: closed
 deps: [rad-au20, rad-ihso]
 links: [rad-l1jc, rad-ncdz]
 created: 2026-07-15T03:44:49Z
@@ -28,3 +28,7 @@ The worker publishes source audio in stable sentence boundaries; Android sends r
 **2026-07-16T22:15:23Z**
 
 2026-07-16 device-authoritative increment is locally green. Protocol v2 announces immutable playback segments with a unique attempt ID; production Android reports started/250ms position/completed from the decoded LiveKit PCM sink and flushes before pause, interrupt, or stop; the worker validates operation, segment, boundary, monotonic position, duration, and transition order before persistence. External LiveKit evidence passed 35/35 checks, including distinct interrupted/resumed attempt IDs and exact client-to-SQLite provenance: artifacts/voice-conformance/20260716T221109Z/report.json. Full repository checks passed (90 Python, 18 Node, Android unit/lint) and session conformance passed 24/24. APK checkpoint: Radcliffe-device-playback-v0.4.0-debug.apk. Ticket remains in progress solely for Pixel app and notification/media-control pause/resume acceptance.
+
+**2026-07-17T00:44:30Z**
+
+2026-07-16 Pixel v0.4.0 acceptance passed. The user confirmed completed sentences did not replay and left the result in the live conversation. SQLite corroborates the device path for ses_d94bbaad38276fc8a0c5076cfc6e2e9f: source boundaries 0 and 1 completed; boundary 2 flushed at 680 ms under playback attempt 7b571e5e-1021-4e37-a735-79edde8d71b4; boundary 2 resumed under fresh attempt 9e4731a9-6644-4948-9f36-9490a88b7481 and completed; boundary 3 then completed. This satisfies physical app/media-control resume acceptance.
