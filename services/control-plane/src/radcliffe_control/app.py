@@ -507,8 +507,11 @@ def create_app(
             await asyncio.sleep(active.settings.worker_reconcile_seconds)
             try:
                 await reconcile_workers(active)
-            except Exception:
-                logger.exception("managed worker reconciliation failed")
+            except Exception as error:
+                logger.error(
+                    "managed worker reconciliation failed type=%s",
+                    type(error).__name__,
+                )
 
     async def ensure_worker(active: Runtime, record: SessionRecord) -> SessionRecord:
         if active.workers is None or record.worker_mode != "managed":

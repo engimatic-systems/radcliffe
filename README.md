@@ -185,6 +185,7 @@ make services-status-local
 make check-operations-local
 make check-recovery-local
 make export-diagnostics-local
+make audit-logs-local
 ```
 
 `/healthz` is shallow process liveness. `/readyz` additionally checks the
@@ -197,6 +198,8 @@ revision rollback are documented in
 The correlated content-free event schema, bounded metrics, and private
 diagnostic export are documented in
 [`docs/telemetry-operations.md`](docs/telemetry-operations.md).
+Log lifecycle and bounded failure procedures are documented in
+[`docs/operator-recovery.md`](docs/operator-recovery.md).
 
 The focused false-turn corpus is faster and covers digital silence, seeded room
 tone, post-AEC playback echo, nearby speech-like babble, foreground speech over

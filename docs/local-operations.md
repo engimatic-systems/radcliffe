@@ -85,6 +85,9 @@ For a content-free correlated trace/metrics bundle, run
 `make export-diagnostics-local`. Its bounded schema and redaction rules are in
 [`telemetry-operations.md`](telemetry-operations.md).
 
+Log retention, the exact-content privacy audit, and condition-specific recovery
+limits are documented in [`operator-recovery.md`](operator-recovery.md).
+
 ## Safe first response
 
 1. Run `make services-status-local` to distinguish unloaded processes from
@@ -101,6 +104,6 @@ For a content-free correlated trace/metrics bundle, run
    `make check-operations-local` and `make check-worker-dispatch-local` to pass.
 
 Database backup/restore and revision rollback are covered by
-[`database-recovery.md`](database-recovery.md). Bounded log rotation and
-deletion remain a subsequent child of `rad-b8nm`; this runbook does not claim
-that later acceptance gate is complete.
+[`database-recovery.md`](database-recovery.md). The operational children of
+`rad-b8nm` are locally implemented; physical-network foundation gates remain
+tracked separately.
