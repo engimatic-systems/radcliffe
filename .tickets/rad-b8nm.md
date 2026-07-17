@@ -1,6 +1,6 @@
 ---
 id: rad-b8nm
-status: open
+status: in_progress
 deps: [rad-2tft]
 links: []
 created: 2026-07-13T01:52:53Z

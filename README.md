@@ -173,6 +173,23 @@ make check-device-auth-local
 Operational recovery and secret-rotation procedures are documented in
 [`docs/security-operations.md`](docs/security-operations.md).
 
+### Local service operations
+
+The macOS local profile has repository-owned LaunchAgent definitions and a
+content-free readiness report. Installation stores no environment values in a
+plist; each supervised runner loads the protected `var/.env` at process start.
+
+```sh
+make services-install-local
+make services-status-local
+make check-operations-local
+```
+
+`/healthz` is shallow process liveness. `/readyz` additionally checks the
+database schema/integrity, warmed Pi sidecar, LiveKit signaling, source root,
+and managed-worker supervisor. The local operator workflow and stable failure
+codes are documented in [`docs/local-operations.md`](docs/local-operations.md).
+
 The focused false-turn corpus is faster and covers digital silence, seeded room
 tone, post-AEC playback echo, nearby speech-like babble, foreground speech over
 continuing babble, a short noise burst, a 30-second sparse-spike endpoint, and

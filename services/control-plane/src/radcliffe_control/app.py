@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from livekit import api
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from radcliffe_domain.catalog import (
@@ -44,6 +44,7 @@ from radcliffe_control.context_usage import (
     ContextUsageClientError,
     SidecarContextUsageClient,
 )
+from radcliffe_control.readiness import ReadinessProbe
 from radcliffe_control.settings import Settings
 from radcliffe_control.workers import (
     LocalWorkerLauncher,
@@ -141,6 +142,19 @@ class SessionResponse(SessionSummaryResponse):
 class SessionListResponse(BaseModel):
     items: tuple[SessionSummaryResponse, ...]
     next_cursor: str | None
+
+
+class ReadinessCheckResponse(BaseModel):
+    component: str
+    status: Literal["ok", "failed", "disabled"]
+    code: str
+    observed: int | None = None
+    expected: int | None = None
+
+
+class ReadinessResponse(BaseModel):
+    status: Literal["ready", "not_ready"]
+    checks: tuple[ReadinessCheckResponse, ...]
 
 
 class SidecarContextUsageResponse(BaseModel):
@@ -249,6 +263,7 @@ class Runtime:
     worker_maintenance: asyncio.Task[None] | None
     context_usage: ContextUsageClient
     devices: DeviceRegistry
+    readiness: ReadinessProbe
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -312,6 +327,7 @@ def create_app(
     provided_settings: Settings | None = None,
     worker_launcher: WorkerLauncher | None = None,
     context_usage_client: ContextUsageClient | None = None,
+    readiness_probe: ReadinessProbe | None = None,
 ) -> FastAPI:
     runtime: Runtime | None = None
 
@@ -360,6 +376,7 @@ def create_app(
             None,
             context_usage_client or SidecarContextUsageClient(settings.sidecar_url),
             DeviceRegistry(settings.database_path),
+            readiness_probe or ReadinessProbe(settings),
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -434,6 +451,32 @@ def create_app(
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok" if runtime is not None else "starting"}
+
+    @app.get("/readyz", response_model=ReadinessResponse)
+    async def readiness(
+        response: Response,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+    ) -> ReadinessResponse:
+        maintenance = active.worker_maintenance
+        report = await active.readiness.check(
+            worker_supervisor_available=active.workers is not None,
+            worker_maintenance_running=maintenance is not None and not maintenance.done(),
+        )
+        if report.status != "ready":
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return ReadinessResponse(
+            status=report.status,
+            checks=tuple(
+                ReadinessCheckResponse(
+                    component=check.component,
+                    status=check.status,
+                    code=check.code,
+                    observed=check.observed,
+                    expected=check.expected,
+                )
+                for check in report.checks
+            ),
+        )
 
     async def reconcile_workers(active: Runtime) -> None:
         if active.workers is None:

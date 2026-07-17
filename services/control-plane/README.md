@@ -23,6 +23,15 @@ participant identity.
 Enrollment, conflict, failed-authentication, and revocation events are recorded
 without request bodies, credentials, or conversational content.
 
+## Health API
+
+- `GET /healthz` is shallow liveness and reports when application startup has
+  completed.
+- `GET /readyz` verifies the current SQLite schema and quick integrity check,
+  Pi sidecar/Ollama readiness, LiveKit signaling, source-root readability, and
+  managed-worker maintenance. It returns HTTP 503 when a required component is
+  unavailable and exposes stable content-free reason codes only.
+
 ## Session API
 
 - `POST /v1/sessions` creates a session and returns client room credentials bound
