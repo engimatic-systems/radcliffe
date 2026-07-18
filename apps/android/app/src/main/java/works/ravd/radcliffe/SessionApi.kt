@@ -264,6 +264,11 @@ object SessionApi {
                             } else {
                                 item.getString("provenance_label")
                             },
+                            deliveryLabel = if (item.isNull("delivery_label")) {
+                                null
+                            } else {
+                                item.getString("delivery_label")
+                            },
                             createdAt = Instant.parse(item.getString("created_at")),
                             sequence = item.getLong("sequence"),
                         ),

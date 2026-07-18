@@ -102,7 +102,8 @@ class SessionApiTest {
                             "created_at": "2026-07-14T10:01:00Z",
                             "source": "text_source",
                             "text": "Canonical",
-                            "provenance_label": "demo.md"
+                            "provenance_label": "demo.md",
+                            "delivery_label": "Fast (1.25×)"
                         }
                     ],
                     "next_after": 2
@@ -112,6 +113,7 @@ class SessionApiTest {
 
         assertEquals(listOf(MessageKind.USER, MessageKind.SOURCE), page.messages.map { it.kind })
         assertEquals("demo.md", page.messages.last().provenance)
+        assertEquals("Fast (1.25×)", page.messages.last().deliveryLabel)
         assertEquals(1L, page.messages.first().sequence)
         assertEquals("2026-07-14T10:00:00Z", page.messages.first().createdAt.toString())
         assertEquals(2L, page.nextAfter)

@@ -225,6 +225,7 @@ class VoiceSessionService : MediaSessionService() {
                     kind,
                     message.content.inlineText,
                     message.provenance.displayName.ifBlank { null },
+                    message.metadataMap["radcliffe.delivery.summary"],
                 ),
             )
         }

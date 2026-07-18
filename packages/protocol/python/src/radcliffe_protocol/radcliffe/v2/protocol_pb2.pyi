@@ -359,7 +359,7 @@ class PlaybackAcknowledgement(_message.Message):
     def __init__(self, acknowledgement_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., status: _Optional[_Union[PlaybackStatus, str]] = ..., position_ms: _Optional[int] = ..., boundary_index: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., detail: _Optional[str] = ..., playback_id: _Optional[str] = ...) -> None: ...
 
 class PlaybackSegment(_message.Message):
-    __slots__ = ("operation", "segment_id", "boundary_index", "duration_ms", "canonical_sha256", "source", "playback_id")
+    __slots__ = ("operation", "segment_id", "boundary_index", "duration_ms", "canonical_sha256", "source", "playback_id", "speech_rate_multiplier")
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
     BOUNDARY_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -367,6 +367,7 @@ class PlaybackSegment(_message.Message):
     CANONICAL_SHA256_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     PLAYBACK_ID_FIELD_NUMBER: _ClassVar[int]
+    SPEECH_RATE_MULTIPLIER_FIELD_NUMBER: _ClassVar[int]
     operation: OperationRef
     segment_id: str
     boundary_index: int
@@ -374,7 +375,8 @@ class PlaybackSegment(_message.Message):
     canonical_sha256: bytes
     source: SourceKind
     playback_id: str
-    def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., boundary_index: _Optional[int] = ..., duration_ms: _Optional[int] = ..., canonical_sha256: _Optional[bytes] = ..., source: _Optional[_Union[SourceKind, str]] = ..., playback_id: _Optional[str] = ...) -> None: ...
+    speech_rate_multiplier: float
+    def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., boundary_index: _Optional[int] = ..., duration_ms: _Optional[int] = ..., canonical_sha256: _Optional[bytes] = ..., source: _Optional[_Union[SourceKind, str]] = ..., playback_id: _Optional[str] = ..., speech_rate_multiplier: _Optional[float] = ...) -> None: ...
 
 class CapabilityGrant(_message.Message):
     __slots__ = ("grant_id", "session_id", "readable_roots", "allowed_tools", "expires_at")
@@ -459,10 +461,12 @@ class AgentControlTarget(_message.Message):
     def __init__(self, scope: _Optional[_Union[AgentControlScope, str]] = ..., session_id: _Optional[str] = ..., device_id: _Optional[str] = ..., turn_id: _Optional[str] = ..., snippet_id: _Optional[str] = ...) -> None: ...
 
 class SpeechDeliveryAction(_message.Message):
-    __slots__ = ("rate",)
+    __slots__ = ("rate", "rate_multiplier")
     RATE_FIELD_NUMBER: _ClassVar[int]
+    RATE_MULTIPLIER_FIELD_NUMBER: _ClassVar[int]
     rate: SpeechRate
-    def __init__(self, rate: _Optional[_Union[SpeechRate, str]] = ...) -> None: ...
+    rate_multiplier: float
+    def __init__(self, rate: _Optional[_Union[SpeechRate, str]] = ..., rate_multiplier: _Optional[float] = ...) -> None: ...
 
 class ConfigurationAction(_message.Message):
     __slots__ = ("key", "response_detail", "speech_rate")

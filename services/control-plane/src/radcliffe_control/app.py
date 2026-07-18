@@ -15,7 +15,14 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from livekit import api
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from radcliffe_domain.catalog import (
     InvalidPageCursorError,
     SessionCatalog,
@@ -34,7 +41,9 @@ from radcliffe_domain.projection import (
     CONTEXT_PROJECTION_VERSION,
     TURN_DISPOSITION_EVENT,
     TURN_EVENT_METADATA,
+    SpeechDelivery,
     context_replay,
+    render_projection,
 )
 from radcliffe_domain.session import Operation
 from radcliffe_domain.store import EventStore
@@ -200,6 +209,7 @@ class SessionMessageResponse(BaseModel):
     source: Literal["user", "model", "call", "text_source", "system"]
     text: str | None
     provenance_label: str | None
+    delivery_label: str | None
 
 
 class SessionMessageListResponse(BaseModel):
@@ -211,6 +221,14 @@ class ReadSourceArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
+    rate: str | float | None = None
+
+    @field_validator("rate", mode="before")
+    @classmethod
+    def valid_rate(cls, value: object) -> object:
+        if value is not None:
+            SpeechDelivery.parse(value)
+        return value
 
 
 class ListSourcesArguments(BaseModel):
@@ -842,6 +860,7 @@ def create_app(
                     provenance_label=(
                         envelope.provenance.display_name or envelope.provenance.locator or None
                     ),
+                    delivery_label=render_projection(envelope).delivery_summary,
                 )
                 for envelope in items
             ),
@@ -1024,7 +1043,7 @@ def create_app(
                     session_id=request.session_id,
                     generation=request.generation,
                     grant=grant,
-                    raw_arguments=request.arguments.model_dump(),
+                    raw_arguments=request.arguments.model_dump(exclude_none=True),
                 )
             except ToolDeniedError as exc:
                 active.telemetry.emit(

@@ -13,9 +13,12 @@ data class DisplayMessage(
     val kind: MessageKind,
     val text: String,
     val provenance: String? = null,
+    val deliveryLabel: String? = null,
     val createdAt: Instant? = null,
     val sequence: Long? = null,
 )
+
+internal fun speechDeliveryDescription(label: String): String = "Speech delivery: $label"
 
 internal fun stateAfterSessionReady(
     activeSessionId: String,

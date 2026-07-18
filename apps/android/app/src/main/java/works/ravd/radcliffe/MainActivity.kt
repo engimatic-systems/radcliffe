@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -766,6 +767,15 @@ class MainActivity : ComponentActivity() {
         ) {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Text(label, style = MaterialTheme.typography.titleSmall)
+                message.deliveryLabel?.let { deliveryLabel ->
+                    Text(
+                        "Speech delivery · $deliveryLabel",
+                        modifier = Modifier.semantics {
+                            contentDescription = speechDeliveryDescription(deliveryLabel)
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 Text(message.text)
             }
         }

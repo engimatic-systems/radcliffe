@@ -73,4 +73,10 @@ public interface PlaybackSegmentOrBuilder extends
    */
   com.google.protobuf.ByteString
       getPlaybackIdBytes();
+
+  /**
+   * <code>double speech_rate_multiplier = 8;</code>
+   * @return The speechRateMultiplier.
+   */
+  double getSpeechRateMultiplier();
 }

@@ -1,9 +1,12 @@
+import asyncio
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 from radcliffe_media.speech import (
     LocalAppleSpeechProvider,
+    OpenAISpeechProvider,
     Transcription,
     TranscriptionSegmentEvidence,
     assess_transcription,
@@ -20,6 +23,96 @@ async def test_local_tts_produces_24khz_mono_pcm() -> None:
 
     assert len(audio) > 2400
     assert len(audio) % 2 == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rate", "expected_words_per_minute"),
+    [(0.75, "135"), (1.0, "180"), (1.25, "225"), (1.5, "270")],
+)
+async def test_local_tts_maps_bounded_rates_without_changing_input_text(
+    monkeypatch,
+    rate: float,
+    expected_words_per_minute: str,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    captured_text = ""
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_subprocess(*arguments, **_options):
+        nonlocal captured_text
+        values = tuple(str(argument) for argument in arguments)
+        calls.append(values)
+        if values[0] == "/usr/bin/say":
+            captured_text = await asyncio.to_thread(Path(values[values.index("-f") + 1]).read_text)
+        else:
+            await asyncio.to_thread(Path(values[-1]).write_bytes, b"\x00" * 4800)
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        "radcliffe_media.speech.asyncio.create_subprocess_exec",
+        fake_subprocess,
+    )
+    provider = LocalAppleSpeechProvider(voice="Test Voice")
+
+    audio = await provider.synthesize("Exact source.\n", rate=rate)
+
+    assert captured_text == "Exact source.\n"
+    assert calls[0][calls[0].index("-r") + 1] == expected_words_per_minute
+    assert audio == b"\x00" * 4800
+
+
+@pytest.mark.asyncio
+async def test_openai_tts_receives_the_same_bounded_rate(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        content = b"pcm"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def post(self, url, *, headers, json):
+            seen.update(url=url, headers=headers, json=json)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "radcliffe_media.speech.httpx.AsyncClient",
+        lambda **_options: FakeClient(),
+    )
+    provider = OpenAISpeechProvider("test-key")
+
+    audio = await provider.synthesize("Exact source.", rate=1.333)
+
+    assert audio == b"pcm"
+    assert seen["json"] == {
+        "model": "tts-1",
+        "voice": "alloy",
+        "input": "Exact source.",
+        "speed": 1.333,
+        "response_format": "pcm",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate", [0.749, 1.501, float("inf")])
+async def test_speech_providers_reject_out_of_bounds_rates(rate: float) -> None:
+    with pytest.raises(ValueError, match="between"):
+        await LocalAppleSpeechProvider().synthesize("No call.", rate=rate)
+    with pytest.raises(ValueError, match="between"):
+        await OpenAISpeechProvider("test-key").synthesize("No call.", rate=rate)
 
 
 @pytest.mark.asyncio

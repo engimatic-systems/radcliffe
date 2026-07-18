@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -529,12 +530,16 @@ class AgentControlBoundary:
     @staticmethod
     def _validate_arguments(request: protocol_pb2.AgentControlActionRequest) -> None:
         if request.action_id == _ACTION_DELIVERY:
-            if request.speech_delivery.rate not in {
+            named_rate = request.speech_delivery.rate
+            multiplier = request.speech_delivery.rate_multiplier
+            named_rate_is_valid = named_rate in {
                 protocol_pb2.SPEECH_RATE_SLOW_0_75X,
                 protocol_pb2.SPEECH_RATE_NORMAL_1_0X,
                 protocol_pb2.SPEECH_RATE_FAST_1_25X,
                 protocol_pb2.SPEECH_RATE_VERY_FAST_1_5X,
-            }:
+            }
+            multiplier_is_valid = math.isfinite(multiplier) and 0.75 <= multiplier <= 1.5
+            if named_rate_is_valid == multiplier_is_valid:
                 raise _ContractRejection(_REJECTION_ARGUMENT)
             return
         if request.action_id == _ACTION_CONFIGURATION:

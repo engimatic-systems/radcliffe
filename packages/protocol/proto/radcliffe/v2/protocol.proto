@@ -215,6 +215,7 @@ message PlaybackSegment {
   bytes canonical_sha256 = 5;
   SourceKind source = 6;
   string playback_id = 7;
+  double speech_rate_multiplier = 8;
 }
 
 message CapabilityGrant {
@@ -266,6 +267,7 @@ message AgentControlTarget {
 
 message SpeechDeliveryAction {
   SpeechRate rate = 1;
+  double rate_multiplier = 2;
 }
 
 message ConfigurationAction {

@@ -20,4 +20,10 @@ public interface SpeechDeliveryActionOrBuilder extends
    * @return The rate.
    */
   works.ravd.radcliffe.protocol.v2.SpeechRate getRate();
+
+  /**
+   * <code>double rate_multiplier = 2;</code>
+   * @return The rateMultiplier.
+   */
+  double getRateMultiplier();
 }

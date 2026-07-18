@@ -44,6 +44,18 @@ describe("agent-control contract", () => {
       "session.restart": 5,
     });
     expect(isAgentControlRequest(deliveryRequest())).toBe(true);
+    expect(
+      isAgentControlRequest({
+        ...deliveryRequest(),
+        arguments: { rate: 1.333 },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentControlRequest({
+        ...deliveryRequest(),
+        arguments: { rate: 1.501 },
+      }),
+    ).toBe(false);
   });
 
   it("rejects unknown actions and arbitrary settings", () => {

@@ -53,9 +53,11 @@ class DetailedTranscriber(Protocol):
 
 
 class SpeechProvider(Protocol):
+    supports_speech_rate: bool
+
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str: ...
 
-    async def synthesize(self, canonical_text: str) -> bytes: ...
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes: ...
 
 
 def pcm_to_16khz_mono(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray:
@@ -76,6 +78,8 @@ def pcm_to_16khz_mono(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray
 
 
 class LocalAppleSpeechProvider:
+    supports_speech_rate = True
+
     def __init__(
         self,
         *,
@@ -167,7 +171,9 @@ class LocalAppleSpeechProvider:
             return float(value)
         return None
 
-    async def synthesize(self, canonical_text: str) -> bytes:
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes:
+        if not math.isfinite(rate) or not 0.75 <= rate <= 1.5:
+            raise ValueError("local TTS rate must be between 0.75x and 1.5x")
         with tempfile.TemporaryDirectory(prefix="radcliffe-tts-") as directory:
             aiff_path = Path(directory) / "speech.aiff"
             pcm_path = Path(directory) / "speech.pcm"
@@ -177,6 +183,8 @@ class LocalAppleSpeechProvider:
                 "/usr/bin/say",
                 "-v",
                 self.voice,
+                "-r",
+                str(round(180 * rate)),
                 "-o",
                 str(aiff_path),
                 "-f",
@@ -211,6 +219,8 @@ class LocalAppleSpeechProvider:
 
 
 class OpenAISpeechProvider:
+    supports_speech_rate = True
+
     def __init__(
         self,
         api_key: str,
@@ -241,7 +251,9 @@ class OpenAISpeechProvider:
             response.raise_for_status()
             return str(response.json()["text"]).strip()
 
-    async def synthesize(self, canonical_text: str) -> bytes:
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes:
+        if not math.isfinite(rate) or not 0.75 <= rate <= 1.5:
+            raise ValueError("OpenAI TTS rate must be between 0.75x and 1.5x")
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 "https://api.openai.com/v1/audio/speech",
@@ -250,6 +262,7 @@ class OpenAISpeechProvider:
                     "model": self.tts_model,
                     "voice": self.voice,
                     "input": canonical_text,
+                    "speed": rate,
                     "response_format": "pcm",
                 },
             )

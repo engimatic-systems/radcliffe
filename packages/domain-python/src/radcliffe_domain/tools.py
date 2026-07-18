@@ -9,9 +9,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
+from radcliffe_domain.projection import SpeechDelivery, with_delivery_rate_for_all
 from radcliffe_domain.store import EventStore, ToolAudit
 
 MAX_SOURCE_BYTES = 1024 * 1024
@@ -34,6 +35,14 @@ class ReadSourceArguments(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
+    rate: str | float | None = None
+
+    @field_validator("rate", mode="before")
+    @classmethod
+    def valid_rate(cls, value: object) -> object:
+        if value is not None:
+            SpeechDelivery.parse(value)
+        return value
 
 
 class ListSourcesArguments(BaseModel):
@@ -87,7 +96,7 @@ class ToolGateway:
     ) -> ReadSourceResult:
         arguments = ReadSourceArguments.model_validate(raw_arguments)
         arguments_json = json.dumps(
-            arguments.model_dump(), sort_keys=True, separators=(",", ":")
+            arguments.model_dump(exclude_none=True), sort_keys=True, separators=(",", ":")
         ).encode()
         pending = ToolAudit(
             call_id=call_id,
@@ -109,7 +118,11 @@ class ToolGateway:
             session_id=session_id,
             sequence=await self.store.next_sequence(session_id),
             source=SourceKind.CALL,
-            text=arguments_json.decode(),
+            text=json.dumps(
+                {"path": arguments.path},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             message_id=f"call:{call_id}",
             metadata={
                 "tool_name": "read_source",
@@ -147,6 +160,11 @@ class ToolGateway:
                         permission_basis=grant.grant_id,
                     ),
                 )
+                if arguments.rate is not None:
+                    source_envelope = with_delivery_rate_for_all(
+                        source_envelope,
+                        arguments.rate,
+                    )
                 await self.store.append(source_envelope)
                 result_content = json.dumps(
                     {

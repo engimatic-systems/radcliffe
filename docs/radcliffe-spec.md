@@ -299,6 +299,28 @@ MessageEnvelope
 - **RenderProjection** decides whether, how, and in what segments the canonical
   message can be spoken. It must support provenance labels, interruption,
   pause/resume, cancellation, and a playback cursor.
+- A `read_source` call may include `rate` only for an explicit user delivery
+  request. Named rates map to the closed provider-independent range below;
+  numeric multipliers are rounded to three decimal places and rejected outside
+  `0.75` through `1.5` rather than silently clamped.
+
+  | Delivery | Multiplier | Local Apple TTS |
+  | --- | ---: | ---: |
+  | slow | `0.75x` | 135 words/minute |
+  | normal | `1.0x` | 180 words/minute |
+  | fast | `1.25x` | 225 words/minute |
+  | very fast | `1.5x` | 270 words/minute |
+
+  OpenAI TTS receives the same bounded multiplier in its `speed` field. A
+  legacy provider without rate support continues at normal speed, but a
+  non-default instruction fails visibly instead of being ignored.
+- Non-default delivery is stored only in reserved per-boundary envelope
+  metadata. It never changes message content or its SHA-256, and all
+  `radcliffe.delivery.*` keys are removed from ContextProjection. The playback
+  announcement carries the multiplier for device diagnostics; Android renders
+  a non-default accessible label. Resume and replay re-derive the rate from the
+  persisted boundary metadata, so no mutable current-rate state can leak into
+  another snippet.
 - **ContextProjection** produces a structured model-context item based on the
   envelope’s content, source kind, provenance, permissions, sensitivity, and
   metadata. It may select, redact, annotate, or reference content according to
@@ -367,7 +389,7 @@ The initial registry is closed:
 
 | Stable action ID | Typed payload | Allowed scope | Required confirmation |
 | --- | --- | --- | --- |
-| `speech_delivery.set_rate` (`1`) | rate: `0.75x`, `1.0x`, `1.25x`, or `1.5x` | snippet | none |
+| `speech_delivery.set_rate` (`1`) | rate enum (`0.75x`, `1.0x`, `1.25x`, `1.5x`) or one numeric multiplier from `0.75` through `1.5` | snippet | none |
 | `configuration.set` (`2`) | `response_detail` or `default_speech_rate` with its matching enum value | turn or session | none |
 | `configuration.set` (`2`) | same allowlisted keys | device | authenticated user |
 | `configuration.set` (`2`) | same allowlisted keys | operator default | authenticated operator |
@@ -383,7 +405,7 @@ field. Such capabilities require separate tools, grants, schemas, and
 confirmation policies; they cannot be smuggled through agent control.
 
 The policy boundary validates in this order: supported schema and safe IDs;
-registered action and matching payload; target shape and argument enum;
+registered action and matching payload; target shape and bounded typed argument;
 origin/action/scope capability grant and expiry; current operation generation;
 idempotency and precedence-slot collision; then declared confirmation policy.
 It emits only stable rejection codes:
