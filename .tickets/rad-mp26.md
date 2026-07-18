@@ -1,8 +1,8 @@
 ---
 id: rad-mp26
 status: open
-deps: [rad-tx88, rad-lod5]
-links: []
+deps: [rad-tx88, rad-lod5, rad-yk82]
+links: [rad-lod5, rad-yk82, rad-h2lv]
 created: 2026-07-14T02:48:09Z
 type: feature
 priority: 1

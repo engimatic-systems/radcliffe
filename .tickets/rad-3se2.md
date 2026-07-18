@@ -1,6 +1,6 @@
 ---
 id: rad-3se2
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-14T02:46:46Z
@@ -23,3 +23,7 @@ Interrupted or superseded turns have an explicit persisted disposition and canno
 **2026-07-14T03:03:23Z**
 
 Cloud-provider testing policy: funded OpenAI and Anthropic credentials remain disabled by default. Tests use fakes or the local Ollama/Whisper/TTS profile unless the user explicitly authorizes a bounded run and RADCLIFFE_ALLOW_CLOUD_MODELS=1 is set for that process.
+
+**2026-07-14T05:37:24Z**
+
+Durable control-plane catalog child rad-lod5 is complete and deployed locally. A missing dependency was made explicit as rad-yk82: generated rooms still need idempotent media-worker dispatch before Android can automatically enter them. rad-mp26 now depends on that worker lifecycle ticket.

@@ -5,7 +5,7 @@ from radcliffe_control.settings import Settings
 
 def settings(tmp_path) -> Settings:
     source_root = tmp_path / "sources"
-    source_root.mkdir()
+    source_root.mkdir(exist_ok=True)
     return Settings(
         livekit_api_key="test-key",
         livekit_api_secret="test-secret-that-is-definitely-long-enough",
