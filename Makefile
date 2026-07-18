@@ -1,6 +1,8 @@
 .PHONY: bootstrap check check-python check-node check-android check-conformance-local \
 	check-session-local check-voice-local check-stt-rejection-local \
-	check-worker-dispatch-local check-device-auth-local benchmark-stt-local demo build-voice-dashboard \
+	check-worker-dispatch-local check-device-auth-local check-operations-local \
+	services-install-local services-status-local services-restart-local \
+	benchmark-stt-local demo build-voice-dashboard \
 	generate-protocol test-python test-node
 
 bootstrap:
@@ -47,6 +49,19 @@ check-worker-dispatch-local:
 
 check-device-auth-local:
 	uv run python scripts/device-auth-conformance.py
+
+check-operations-local:
+	mkdir -p artifacts/operations
+	scripts/run-local-ops.sh --wait 30 --output artifacts/operations/status.json
+
+services-install-local:
+	uv run python scripts/radcliffe_services.py install --include-compat-worker
+
+services-status-local:
+	uv run python scripts/radcliffe_services.py status --include-compat-worker
+
+services-restart-local:
+	uv run python scripts/radcliffe_services.py restart --include-compat-worker
 
 check-stt-rejection-local:
 	uv run python scripts/stt-rejection-conformance.py
