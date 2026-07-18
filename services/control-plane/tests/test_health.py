@@ -1,4 +1,5 @@
 import base64
+import json
 
 from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
@@ -47,6 +48,44 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         assert payload["protocol_version"] == 2
         assert payload["expires_in_seconds"] == 600
         assert payload["worker_status"] == "external"
+
+        catalog = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "session_id": "session-1",
+                "generation": 1,
+                "call_id": "catalog-1",
+                "idempotency_key": "catalog-1",
+                "tool_name": "list_sources",
+                "arguments": {},
+            },
+        )
+        assert catalog.status_code == 200
+        catalog_body = catalog.json()
+        assert json.loads(catalog_body["modelContent"]) == {
+            "paths": ["demo.md"],
+            "truncated": False,
+        }
+        assert catalog_body["details"] == {
+            "catalogCount": "1",
+            "truncated": "false",
+        }
+        assert str(config.source_root) not in catalog_body["modelContent"]
+
+        mismatched_arguments = client.post(
+            "/v1/tool-calls",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={
+                "session_id": "session-1",
+                "generation": 1,
+                "call_id": "bad-catalog",
+                "idempotency_key": "bad-catalog",
+                "tool_name": "list_sources",
+                "arguments": {"path": "demo.md"},
+            },
+        )
+        assert mismatched_arguments.status_code == 422
 
         tool = client.post(
             "/v1/tool-calls",

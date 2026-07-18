@@ -20,10 +20,11 @@ The gateway compares it to current session state for every call. Grants are
 short lived, scoped to one session, stored without credentials, and denied
 after expiration, revocation, session end, or generation change.
 
-The only M1 tool is:
+The initial read-only source tools are:
 
 | Tool | Allowlist and constraints | Side effects | Retry | Audit |
-| --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
+| `list_sources` | Relative `.md` names only beneath explicit readable roots; lexical order; maximum 200 results, four path levels, and 2,000 scanned entries; hidden paths, symlinks, non-files, case-ambiguous names, contents, and absolute host paths excluded | Read directory metadata | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, bounded relative result, result SHA-256, outcome, and timings |
 | `read_source` | One UTF-8 `.md` path under an explicit readable root; maximum 1 MiB; regular files only; resolved target must remain below the resolved root | Read only | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, resolved path, byte count, SHA-256, outcome, timings, and error code |
 
 Arguments are copied through canonical JSON before validation. Calls execute
@@ -35,6 +36,7 @@ even if an underlying read finishes concurrently.
 
 | Action | M1 behavior | Future policy |
 | --- | --- | --- |
+| List names under an allowed source root | Separately granted, bounded metadata only | Add user-selected collections without exposing unrestricted paths |
 | Read allowed Markdown source | Grant is sufficient | Same |
 | Read outside grant or unsupported type | Deny | Require a newly issued grant |
 | File write/delete, shell, download, archive extraction | Tool unavailable and deny | Explicit per-action confirmation plus narrow grant |
@@ -49,6 +51,10 @@ even if an underlying read finishes concurrently.
   root and target; require the target to be a regular file contained by the
   resolved root. An attacker-controlled symlink that resolves outside is
   denied. Production workers should add OS sandboxing as defense in depth.
+- **Filename disclosure and enumeration:** source discovery exposes only bounded
+  relative Markdown paths from the same roots already named in the session
+  grant. It excludes hidden entries and symlinks, never accepts a caller-chosen
+  directory, and never returns source contents or absolute host paths.
 - **SSRF and malicious archives:** no M1 tool performs network access or archive
   expansion. A future fetcher must reject loopback, link-local, private,
   metadata, non-HTTP(S), DNS-rebinding, unsafe redirects, oversized or

@@ -75,6 +75,12 @@ For the physical M1 gate:
    candidate report. The LiveKit and Android tickets remain open until direct
    UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.
 
+When the user refers to a source without its exact filename, Pi first calls the
+separately granted `list_sources` tool. It receives only a bounded catalog of
+relative Markdown paths, then passes one returned path to `read_source` for the
+canonical, provenance-preserving render path. Neither tool grants general
+filesystem access.
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

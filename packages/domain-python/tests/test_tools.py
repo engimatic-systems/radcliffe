@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import radcliffe_domain.tools as tool_module
 from radcliffe_domain.envelope import SourceKind
 from radcliffe_domain.projection import render_projection
 from radcliffe_domain.store import EventStore
@@ -13,13 +14,19 @@ from radcliffe_domain.tools import (
 )
 
 
-def grant(root, *, generation: int = 1, revoked: bool = False) -> CapabilityGrant:
+def grant(
+    root,
+    *,
+    generation: int = 1,
+    revoked: bool = False,
+    allowed_tools: frozenset[str] = frozenset({"read_source"}),
+) -> CapabilityGrant:
     return CapabilityGrant(
         grant_id="grant-1",
         session_id="s1",
         generation=generation,
         readable_roots=(root,),
-        allowed_tools=frozenset({"read_source"}),
+        allowed_tools=allowed_tools,
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
         revoked=revoked,
     )
@@ -213,3 +220,125 @@ async def test_read_source_denies_symlink_stale_grant_and_cancellation(tmp_path)
             raw_arguments={"path": "safe.md"},
             cancelled=cancelled,
         )
+
+
+@pytest.mark.asyncio
+async def test_list_sources_is_bounded_private_auditable_and_idempotent(
+    tmp_path, monkeypatch
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    (source_root / "Zeta.md").write_text("zeta")
+    nested = source_root / "notes"
+    nested.mkdir()
+    (nested / "Alpha.MD").write_text("alpha")
+    (source_root / "ignore.txt").write_text("not Markdown")
+    (source_root / ".private.md").write_text("hidden")
+    hidden = source_root / ".hidden"
+    hidden.mkdir()
+    (hidden / "secret.md").write_text("hidden")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside")
+    (source_root / "escape.md").symlink_to(outside)
+    too_deep = source_root / "one" / "two" / "three" / "four"
+    too_deep.mkdir(parents=True)
+    (too_deep / "deep.md").write_text("deep")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    gateway = ToolGateway(store)
+    source_grant = grant(
+        source_root,
+        allowed_tools=frozenset({"list_sources", "read_source"}),
+    )
+
+    result = await gateway.list_sources(
+        call_id="catalog",
+        idempotency_key="catalog",
+        session_id="s1",
+        generation=1,
+        grant=source_grant,
+        raw_arguments={},
+    )
+    replay = await gateway.list_sources(
+        call_id="catalog-retry",
+        idempotency_key="catalog",
+        session_id="s1",
+        generation=1,
+        grant=source_grant,
+        raw_arguments={},
+    )
+
+    assert result.paths == ("notes/Alpha.MD", "Zeta.md")
+    assert not result.truncated
+    assert replay.replayed
+    assert replay.paths == result.paths
+    assert str(tmp_path) not in result.result_envelope.content.inline_text
+    assert [item.source for item in await store.replay("s1")] == [
+        SourceKind.CALL,
+        SourceKind.CALL,
+    ]
+
+    with pytest.raises(ToolDeniedError, match="reused with different parameters"):
+        await gateway.read_source(
+            call_id="catalog",
+            idempotency_key="different-operation",
+            session_id="s1",
+            generation=1,
+            grant=source_grant,
+            raw_arguments={"path": "Zeta.md"},
+        )
+
+    monkeypatch.setattr(tool_module, "MAX_SOURCE_CATALOG_ENTRIES", 1)
+    limited = await gateway.list_sources(
+        call_id="limited-catalog",
+        idempotency_key="limited-catalog",
+        session_id="s1",
+        generation=1,
+        grant=source_grant,
+        raw_arguments={},
+    )
+    assert limited.paths == ("notes/Alpha.MD",)
+    assert limited.truncated
+
+
+@pytest.mark.asyncio
+async def test_list_sources_requires_its_own_capability_and_excludes_ambiguity(tmp_path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "demo.md").write_text("first")
+    (second / "DEMO.md").write_text("second")
+    (second / "unique.md").write_text("unique")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    gateway = ToolGateway(store)
+
+    with pytest.raises(ToolDeniedError, match="list_sources is not granted"):
+        await gateway.list_sources(
+            call_id="not-granted",
+            idempotency_key="not-granted",
+            session_id="s1",
+            generation=1,
+            grant=grant(first),
+            raw_arguments={},
+        )
+
+    catalog_grant = CapabilityGrant(
+        grant_id="catalog-grant",
+        session_id="s1",
+        generation=1,
+        readable_roots=(first, second),
+        allowed_tools=frozenset({"list_sources"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    result = await gateway.list_sources(
+        call_id="ambiguous",
+        idempotency_key="ambiguous",
+        session_id="s1",
+        generation=1,
+        grant=catalog_grant,
+        raw_arguments={},
+    )
+
+    assert result.paths == ("unique.md",)

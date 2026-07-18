@@ -75,6 +75,17 @@ describe("Ollama context accounting", () => {
         {
           type: "function",
           function: {
+            name: "list_sources",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "read_source",
             parameters: {
               type: "object",

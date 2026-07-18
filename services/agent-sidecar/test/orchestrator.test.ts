@@ -39,6 +39,7 @@ describe("PiAgentOrchestrator", () => {
   it("instructs the model to normalize spoken filename punctuation", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dot M D");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dash");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("list_sources first");
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {
@@ -115,6 +116,82 @@ describe("PiAgentOrchestrator", () => {
     expect(events.find((event) => event.type === "tool_end")).toMatchObject({
       result: { details: { sourceEnvelopeProtoBase64: sourceEnvelope } },
     });
+  });
+
+  it("discovers an informally named source before reading its canonical bytes", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-catalog-test" });
+    const sourceEnvelope = "opaque-canonical-envelope-base64";
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("list_sources", {}, { id: "list-1" }), {
+        stopReason: "toolUse",
+      }),
+      (context) => {
+        const catalog = context.messages.find(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolCallId === "list-1",
+        );
+        expect(catalog?.content).toEqual([
+          {
+            type: "text",
+            text: '{"paths":["radcliffe-demo.md"],"truncated":false}',
+          },
+        ]);
+        return fauxAssistantMessage(
+          fauxToolCall("read_source", { path: "radcliffe-demo.md" }, { id: "read-1" }),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const read = context.messages.find(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolCallId === "read-1",
+        );
+        expect(read?.content).toEqual([{ type: "text", text: "source:radcliffe-demo.md" }]);
+        expect(JSON.stringify(read?.content)).not.toContain(sourceEnvelope);
+        return fauxAssistantMessage("The authorized source is being read.");
+      },
+    ]);
+    const tool = vi.fn(async (toolRequest) => {
+      if (toolRequest.toolName === "list_sources") {
+        return {
+          modelContent: '{"paths":["radcliffe-demo.md"],"truncated":false}',
+          details: { catalogCount: "1", truncated: "false" },
+        };
+      }
+      return {
+        modelContent: "source:radcliffe-demo.md",
+        details: {
+          sourceMessageId: "source-1",
+          sourceEnvelopeProtoBase64: sourceEnvelope,
+        },
+      };
+    });
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([packet("new-user", "Read the demo file")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).toHaveBeenCalledTimes(2);
+    expect(tool.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({
+        callId: "list-1",
+        toolName: "list_sources",
+        arguments: {},
+      }),
+      expect.objectContaining({
+        callId: "read-1",
+        toolName: "read_source",
+        arguments: { path: "radcliffe-demo.md" },
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "tool_end")).toHaveLength(2);
   });
 
   it("filters excluded packets and labels canonical sources", () => {

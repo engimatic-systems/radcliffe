@@ -408,6 +408,12 @@ TTS, plus end-to-end acoustic evaluation against audio produced on real devices.
   isolated.
   Tool cancellation propagates from the Radcliffe operation token through Pi’s
   abort signal to the capability worker.
+- When the user refers to a document informally, Pi may first invoke the
+  separately granted `list_sources` tool. Its model-visible result is a bounded,
+  sorted catalog of relative Markdown paths only. The agent must select an
+  exact returned path for `read_source`, or ask the user when more than one
+  candidate is plausible; it cannot select a directory or browse outside the
+  grant.
 - Each session receives explicit capability grants: readable roots, writable
   roots, allowed web domains, maximum download sizes, and permitted actions.
   The control plane monotonically ratchets the active operation generation on
@@ -503,6 +509,11 @@ between words and a terminal `dot M D`. The gateway must retain the original
 tool arguments in its audit event, resolve the normalized candidate beneath an
 explicit readable root, reject traversal and ambiguous case-insensitive
 matches, and keep the canonical source bytes out of the model context.
+
+An uncertain source reference must use `list_sources` before `read_source`.
+Catalog enumeration is independently capability-scoped, lexically stable,
+bounded by entry, scan, and depth limits, and returns relative Markdown names
+without file contents, hidden entries, symlinks, or absolute host paths.
 
 Ticket-sized commits should follow that order on
 `epic/radcliffe-foundation`. The completed branch is reviewed and merged as one

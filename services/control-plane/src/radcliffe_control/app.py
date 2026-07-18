@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -14,7 +15,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from livekit import api
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from radcliffe_domain.catalog import (
     InvalidPageCursorError,
     SessionCatalog,
@@ -153,6 +154,10 @@ class ReadSourceArguments(BaseModel):
     path: str
 
 
+class ListSourcesArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class ToolCallRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -164,8 +169,18 @@ class ToolCallRequest(BaseModel):
     generation: int
     call_id: str
     idempotency_key: str
-    tool_name: Literal["read_source"]
-    arguments: ReadSourceArguments
+    tool_name: Literal["list_sources", "read_source"]
+    arguments: ReadSourceArguments | ListSourcesArguments
+
+    @model_validator(mode="after")
+    def arguments_match_tool(self) -> ToolCallRequest:
+        expected = {
+            "list_sources": ListSourcesArguments,
+            "read_source": ReadSourceArguments,
+        }[self.tool_name]
+        if not isinstance(self.arguments, expected):
+            raise ValueError(f"arguments do not match {self.tool_name}")
+        return self
 
 
 class ToolCallResponse(BaseModel):
@@ -372,7 +387,7 @@ def create_app(
             session_id=record.session_id,
             generation=record.generation,
             readable_roots=(active.settings.source_root.resolve(),),
-            allowed_tools=frozenset({"read_source"}),
+            allowed_tools=frozenset({"list_sources", "read_source"}),
             expires_at=datetime.now(UTC)
             + timedelta(seconds=active.settings.room_token_ttl_seconds),
         )
@@ -632,6 +647,27 @@ def create_app(
                     grant,
                 )
             try:
+                if request.tool_name == "list_sources":
+                    catalog = await active.gateway.list_sources(
+                        call_id=request.call_id,
+                        idempotency_key=request.idempotency_key,
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        grant=grant,
+                        raw_arguments=request.arguments.model_dump(),
+                    )
+                    model_content = json.dumps(
+                        {"paths": catalog.paths, "truncated": catalog.truncated},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    return ToolCallResponse(
+                        model_content=model_content,
+                        details={
+                            "catalogCount": str(len(catalog.paths)),
+                            "truncated": str(catalog.truncated).lower(),
+                        },
+                    )
                 result = await active.gateway.read_source(
                     call_id=request.call_id,
                     idempotency_key=request.idempotency_key,

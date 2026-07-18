@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -457,16 +459,30 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun MessageCard(message: DisplayMessage) {
-        val color = when (message.kind) {
-            MessageKind.USER -> MaterialTheme.colorScheme.secondaryContainer
-            MessageKind.MODEL -> MaterialTheme.colorScheme.primaryContainer
-            MessageKind.SOURCE -> MaterialTheme.colorScheme.tertiaryContainer
-            MessageKind.SYSTEM -> MaterialTheme.colorScheme.errorContainer
+        val (containerColor, contentColor) = when (message.kind) {
+            MessageKind.USER -> MaterialTheme.colorScheme.secondaryContainer to
+                MaterialTheme.colorScheme.onSecondaryContainer
+            MessageKind.MODEL -> MaterialTheme.colorScheme.primaryContainer to
+                MaterialTheme.colorScheme.onPrimaryContainer
+            MessageKind.SOURCE -> MaterialTheme.colorScheme.tertiaryContainer to
+                MaterialTheme.colorScheme.onTertiaryContainer
+            MessageKind.SYSTEM -> MaterialTheme.colorScheme.errorContainer to
+                MaterialTheme.colorScheme.onErrorContainer
         }
-        Card(modifier = Modifier.fillMaxWidth()) {
+        val label = if (message.kind == MessageKind.SOURCE) {
+            message.provenance?.let { "Source · $it" } ?: "Authorized source"
+        } else {
+            message.kind.name.lowercase().replaceFirstChar(Char::uppercase)
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+            colors = CardDefaults.cardColors(
+                containerColor = containerColor,
+                contentColor = contentColor,
+            ),
+        ) {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                Text(message.kind.name.lowercase(), color = color)
-                message.provenance?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                Text(label, style = MaterialTheme.typography.titleSmall)
                 Text(message.text)
             }
         }
