@@ -7,4 +7,4 @@ set -a
 source var/.env
 set +a
 uv_bin="${RADCLIFFE_UV_BIN:-/opt/homebrew/bin/uv}"
-exec "$uv_bin" run uvicorn radcliffe_control.app:app --host 0.0.0.0 --port 8000
+exec "$uv_bin" run uvicorn radcliffe_control.app:app --host 0.0.0.0 --port 8000 --no-access-log

@@ -3,7 +3,7 @@
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	services-install-local services-status-local services-restart-local \
 	backup-local check-recovery-local recovery-prune-plan-local \
-	export-diagnostics-local \
+	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
 	benchmark-stt-local demo build-voice-dashboard \
 	generate-protocol test-python test-node
 
@@ -76,6 +76,15 @@ recovery-prune-plan-local:
 
 export-diagnostics-local: check-operations-local
 	scripts/run-local-diagnostics.sh
+
+audit-logs-local: export-diagnostics-local
+	scripts/run-local-log-maintenance.sh audit
+
+maintain-logs-local:
+	scripts/run-local-log-maintenance.sh maintain
+
+check-operations-tabletop:
+	uv run python scripts/operations-tabletop.py
 
 check-stt-rejection-local:
 	uv run python scripts/stt-rejection-conformance.py

@@ -439,8 +439,8 @@ class EndpointProcessor(FrameProcessor):
                 await self.voice.handle_transcript(transcription.text)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("voice turn failed before completion")
+        except Exception as error:
+            logger.error("voice turn failed before completion type={}", type(error).__name__)
         finally:
             if self.turn_task is asyncio.current_task():
                 self.turn_task = None

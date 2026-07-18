@@ -31,7 +31,7 @@ from radcliffe_domain.session import (
     SessionEngine,
 )
 from radcliffe_domain.store import EventStore
-from radcliffe_domain.telemetry import TelemetrySink
+from radcliffe_domain.telemetry import TelemetrySink, session_pseudonym
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_media.sidecar import SidecarEvent
@@ -805,8 +805,11 @@ class VoicePipeline:
                 return
             try:
                 await self.publisher.flush()
-            except Exception:
-                logger.exception("failed to flush audio after a voice turn error")
+            except Exception as error:
+                logger.error(
+                    "failed to flush audio after a voice turn error type={}",
+                    type(error).__name__,
+                )
             if turn.rendered_model_text and not turn.model_persisted:
                 await self._persist_model(
                     turn,
@@ -888,7 +891,7 @@ class VoicePipeline:
             "operation_id={} generation={}",
             phase,
             round(seconds * 1000, 2),
-            self.engine.session_id,
+            session_pseudonym(self.engine.session_id),
             operation.operation_id if operation is not None else "pending",
             operation.generation if operation is not None else self.engine.generation,
         )
@@ -924,7 +927,7 @@ class VoicePipeline:
             return
         error = task.exception()
         if error is not None:
-            logger.error("background source resume failed: {}", error)
+            logger.error("background source resume failed type={}", type(error).__name__)
 
     async def _append_text(
         self,
