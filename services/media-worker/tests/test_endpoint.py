@@ -60,6 +60,7 @@ class FakeVoice:
         self.maximum_active = 0
         self.first_started = asyncio.Event()
         self.participant_connections = 0
+        self.clarifications: list[str] = []
 
     async def handle_transcript(self, transcript: str) -> None:
         self.transcripts.append(transcript)
@@ -78,11 +79,19 @@ class FakeVoice:
     async def participant_connected(self) -> None:
         self.participant_connections += 1
 
+    async def request_clarification(self, reason: str) -> None:
+        self.clarifications.append(reason)
 
-def audio_frame(*, voiced: bool, amplitude: int | None = None) -> UserAudioRawFrame:
+
+def audio_frame(
+    *,
+    voiced: bool,
+    amplitude: int | None = None,
+    user_id: str | None = None,
+) -> UserAudioRawFrame:
     value = amplitude if amplitude is not None else (3000 if voiced else 0)
     pcm = array("h", [value] * 320).tobytes()
-    return UserAudioRawFrame(pcm, 16000, 1)
+    return UserAudioRawFrame(pcm, 16000, 1, user_id=user_id)
 
 
 async def feed(endpoint: EndpointProcessor, *, voiced: bool, frames: int) -> None:
@@ -127,6 +136,27 @@ async def test_participant_rejoin_unpauses_and_clears_stale_endpoint_audio() -> 
     assert endpoint.buffer == b""
     assert endpoint.idle_buffer == b""
     assert voice.participant_connections == 1
+
+
+@pytest.mark.asyncio
+async def test_audio_subscription_waits_for_the_first_processed_frame_before_ready() -> None:
+    endpoint = EndpointProcessor(FakeSpeech())
+    ready: list[str] = []
+
+    async def input_ready(participant_id: str) -> None:
+        ready.append(participant_id)
+
+    endpoint.input_ready_handler = input_ready
+    endpoint.audio_track_subscribed("participant-1")
+
+    assert ready == []
+    await endpoint.process_frame(
+        audio_frame(voiced=False, user_id="participant-1"),
+        FrameDirection.DOWNSTREAM,
+    )
+
+    assert ready == ["participant-1"]
+    assert endpoint.idle_buffer != b""
 
 
 @pytest.mark.asyncio
@@ -447,3 +477,34 @@ async def test_repetitive_whisper_hallucination_never_reaches_conversation_pipel
         await task
 
     assert voice.transcripts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["low_log_probability", "decoder_disagreement"])
+async def test_uncertain_transcript_requests_clarification_without_persisting_user_text(
+    reason: str,
+) -> None:
+    alternative = ("Turn off the kitchen lights.",) if reason == "decoder_disagreement" else ()
+    log_probability = -1.7 if reason == "low_log_probability" else -0.4
+    speech = DetailedFakeSpeech(
+        Transcription(
+            "Turn on the kitchen lights.",
+            (TranscriptionSegmentEvidence(log_probability, 0.01, 0.5),),
+            alternative,
+        )
+    )
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(
+        speech,
+        activity=FakeActivity(speech_windows=4, maximum_probability=0.98),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    task = endpoint.turn_task
+    if task is not None:
+        await task
+
+    assert voice.transcripts == []
+    assert voice.clarifications == [reason]

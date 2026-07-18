@@ -35,3 +35,7 @@ Protocol v2 control/data interoperability is now live: the Pipecat adapter prese
 **2026-07-14T02:46:33Z**
 
 User physically verified the v0.1.1 Pixel app connects, displays state, plays responses, and the on-screen interrupt, pause/resume, and end controls basically work. Persistent setup fields, automatic sessions, recent-session navigation, lock-screen/hardware evidence, and context usage UI remain follow-up work.
+
+**2026-07-17T23:27:52Z**
+
+2026-07-17 physical follow-up: with the Pixel screen locked, the active voice session continued to hear the user and respond. Headset hardware controls remain deferred because no headset was available.

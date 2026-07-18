@@ -1,6 +1,6 @@
 ---
 id: rad-tx88
-status: in_progress
+status: closed
 deps: []
 links: [rad-nmdx]
 created: 2026-07-14T02:47:05Z
@@ -40,3 +40,7 @@ Android 0.3.0 now removes manual session configuration while preserving encrypte
 **2026-07-15T03:15:48Z**
 
 2026-07-14 Pixel v0.3.2 preserved the saved configuration and selected conversation across app close/restart. Device reboot remains the only unverified persistence condition.
+
+**2026-07-17T23:27:52Z**
+
+2026-07-17 Pixel reboot acceptance passed: encrypted connection configuration, recent sessions, and selected conversation survived a full device reboot and remained usable without re-entry. Together with the prior upgrade, app relaunch, process recreation, reset/corruption, and redaction evidence, this completes the physical persistence gate.

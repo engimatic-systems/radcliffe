@@ -85,8 +85,7 @@ class VoiceSessionService : MediaSessionService() {
                     it.localParticipant.setMicrophoneEnabled(true)
                 }
             }.onSuccess {
-                SessionModel.state(VoiceState.LISTENING)
-                notify("Listening", false)
+                notify("Waiting for microphone", false)
             }.onFailure {
                 SessionModel.state(VoiceState.FAILED)
                 SessionModel.message(DisplayMessage("connection-error", MessageKind.SYSTEM, it.message ?: "Connection failed"))
@@ -177,7 +176,7 @@ class VoiceSessionService : MediaSessionService() {
             activeRoom.events.events.collect { event ->
                 when (event) {
                     is RoomEvent.Reconnecting -> SessionModel.state(VoiceState.RECONNECTING)
-                    is RoomEvent.Reconnected -> SessionModel.state(VoiceState.LISTENING)
+                    is RoomEvent.Reconnected -> SessionModel.state(VoiceState.CONNECTING)
                     is RoomEvent.TrackSubscribed -> attachPlaybackSink(event.track)
                     is RoomEvent.TrackUnsubscribed -> detachPlaybackSink(event.track)
                     is RoomEvent.DataReceived -> runCatching { ServerEvent.parseFrom(event.data) }
@@ -191,6 +190,14 @@ class VoiceSessionService : MediaSessionService() {
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
         if (event.hasPlaybackSegment()) playbackTracker.announce(event.playbackSegment)
+        if (event.hasSessionReady()) {
+            val current = SessionModel.state.value
+            val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)
+            if (ready != current) {
+                SessionModel.state(ready)
+                notify("Listening", false)
+            }
+        }
         if (event.hasStateChanged()) {
             SessionModel.state(when (event.stateChanged.current) {
                 ConversationState.CONVERSATION_STATE_CONNECTING -> VoiceState.CONNECTING

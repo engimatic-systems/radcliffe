@@ -162,6 +162,10 @@ def test_local_launcher_does_not_inherit_control_plane_secrets(tmp_path) -> None
             "RADCLIFFE_LIVEKIT_API_SECRET": "must-not-pass",
             "RADCLIFFE_OPENAI_API_KEY": "disabled-cloud-key",
             "RADCLIFFE_SPEECH_PROVIDER": "local",
+            "RADCLIFFE_WHISPER_VERIFICATION_MODEL": "verification-model",
+            "RADCLIFFE_STT_CAPTURE_ENABLED": "1",
+            "RADCLIFFE_STT_CAPTURE_PLAN": str(tmp_path / "capture-plan.json"),
+            "RADCLIFFE_STT_CAPTURE_DIRECTORY": str(tmp_path / "captures"),
         },
     )
 
@@ -169,4 +173,8 @@ def test_local_launcher_does_not_inherit_control_plane_secrets(tmp_path) -> None
         "HOME": str(tmp_path),
         "PATH": "/usr/bin",
         "RADCLIFFE_SPEECH_PROVIDER": "local",
+        "RADCLIFFE_WHISPER_VERIFICATION_MODEL": "verification-model",
+        "RADCLIFFE_STT_CAPTURE_ENABLED": "1",
+        "RADCLIFFE_STT_CAPTURE_PLAN": str(tmp_path / "capture-plan.json"),
+        "RADCLIFFE_STT_CAPTURE_DIRECTORY": str(tmp_path / "captures"),
     }

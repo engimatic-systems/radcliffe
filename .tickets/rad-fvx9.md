@@ -2,7 +2,7 @@
 id: rad-fvx9
 status: closed
 deps: [rad-9e2z]
-links: [rad-rwfl, rad-enbx, rad-ghti]
+links: [rad-rwfl, rad-enbx, rad-ghti, rad-9e2z, rad-0mws]
 created: 2026-07-15T04:08:39Z
 type: bug
 priority: 1

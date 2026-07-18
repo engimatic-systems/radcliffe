@@ -4,7 +4,7 @@
 	services-install-local services-status-local services-restart-local \
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
-	benchmark-stt-local demo build-voice-dashboard \
+	benchmark-stt-local benchmark-private-stt-local demo build-voice-dashboard \
 	generate-protocol test-python test-node
 
 bootstrap:
@@ -94,3 +94,12 @@ build-voice-dashboard:
 
 benchmark-stt-local:
 	uv run python scripts/stt-conformance.py --profiles all
+
+SELECTED_STT_PROFILE ?= large-v3-turbo-domain
+
+benchmark-private-stt-local:
+	@test -n "$(CAPTURE_DIRECTORY)" || \
+		{ echo "CAPTURE_DIRECTORY is required" >&2; exit 2; }
+	uv run python scripts/stt_capture_benchmark.py \
+		"$(CAPTURE_DIRECTORY)" --profiles all \
+		--selected-profile "$(SELECTED_STT_PROFILE)" --require-pass

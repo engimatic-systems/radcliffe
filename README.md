@@ -221,6 +221,54 @@ By default it writes `~/agent-share/radcliffe/voice-tests/index.html`. The
 full-duplex player puts the synthetic microphone on the left channel and the
 assistant on the right.
 
+### Opt-in private Pixel STT corpus
+
+Synthetic speech is not acceptance authority for a specific speaker. A local
+operator can explicitly enable a bounded, owner-only capture run using
+[`docs/stt-capture-plan.example.json`](docs/stt-capture-plan.example.json).
+Copy that file under ignored `artifacts/`, replace the owner identity with the
+server-issued identity of the enrolled Pixel, tailor the expected phrases, and
+protect it with mode `0600`. Then set all three values for the managed worker:
+
+```sh
+RADCLIFFE_STT_CAPTURE_ENABLED=1
+RADCLIFFE_STT_CAPTURE_PLAN=/absolute/path/to/private-plan.json
+RADCLIFFE_STT_CAPTURE_DIRECTORY=/absolute/path/to/private-corpus
+```
+
+Capture is off unless the enable flag is exactly `1`; an incomplete setup
+fails closed. Only audio from the participant whose LiveKit identity exactly
+matches the plan is retained. Plans are capped at 24 utterances and each WAV is
+capped at 30 seconds. The capture directory is mode `0700`; WAV and JSON files
+are mode `0600`. Private audio and expected/actual text never enter ordinary
+worker logs, telemetry, diagnostic exports, or the repository. Each JSON record
+retains transport-to-first-frame, endpoint pre-roll/trailing-silence, decoder
+confidence, expected/actual text, and the hash of the exact PCM.
+
+Speak the plan in order, disable the flag and restart the worker immediately
+afterward, then compare all local candidates against the identical captured
+PCM:
+
+```sh
+make benchmark-private-stt-local CAPTURE_DIRECTORY=/absolute/path/to/private-corpus
+```
+
+The current production profile is selected by default. To gate a measured
+winner instead, add `SELECTED_STT_PROFILE=large-v3` (or another evaluated
+profile) and then set the matching worker model only after the report passes.
+
+The private report requires macro WER at most `0.03`, exact required-keyword
+recall `1.0`, zero dropped leading words, both speaker and earbud routes, and
+all required scenario coverage. Its per-case timing and cross-decoder results
+classify transport loss, likely endpoint truncation, and decoder error. Delete
+the private directory when the evidence is no longer needed.
+
+After measurement selects a genuinely independent verifier, set
+`RADCLIFFE_WHISPER_VERIFICATION_MODEL` to its local model ID. Materially
+disagreeing local hypotheses and low-confidence primary decodes produce a fixed
+request to repeat; uncertain text is never persisted as a user turn or sent to
+the model for rewriting.
+
 The current core covers command-level STT WER and vocabulary recall, multiple
 English voices, natural and long clause pauses, deterministic
 noise/echo/frame loss, paused microphone suppression, consecutive responses

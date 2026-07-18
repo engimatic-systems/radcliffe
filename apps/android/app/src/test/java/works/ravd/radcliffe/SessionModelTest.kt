@@ -30,4 +30,20 @@ class SessionModelTest {
         assertEquals(1, SessionModel.messages.value.size)
         assertEquals("Live update", SessionModel.messages.value.single().text)
     }
+
+    @Test
+    fun listeningRequiresWorkerReadinessForTheActiveSession() {
+        assertEquals(
+            VoiceState.LISTENING,
+            stateAfterSessionReady("session", "session", VoiceState.CONNECTING),
+        )
+        assertEquals(
+            VoiceState.CONNECTING,
+            stateAfterSessionReady("session", "stale-session", VoiceState.CONNECTING),
+        )
+        assertEquals(
+            VoiceState.THINKING,
+            stateAfterSessionReady("session", "session", VoiceState.THINKING),
+        )
+    }
 }
