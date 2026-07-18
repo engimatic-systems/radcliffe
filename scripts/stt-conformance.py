@@ -48,6 +48,42 @@ class Profile:
 
 CASES = (
     CorpusCase(
+        "ack-ok-us-male-clean",
+        ("OK.",),
+        "Fred",
+        ("okay",),
+        transcript_reference="Okay.",
+    ),
+    CorpusCase(
+        "ack-ok-us-male-phone-like",
+        ("OK.",),
+        "Reed (English (US))",
+        ("okay",),
+        noise_snr_db=8,
+        echo_delay_ms=70,
+        echo_gain=0.25,
+        frame_dropout_rate=0.025,
+        transcript_reference="Okay.",
+    ),
+    CorpusCase(
+        "ack-ok-count-us-male-phone-like",
+        ("OK, count from one to fifty.",),
+        "Rocko (English (US))",
+        ("okay", "count", "50"),
+        noise_snr_db=8,
+        echo_delay_ms=70,
+        echo_gain=0.25,
+        frame_dropout_rate=0.025,
+        transcript_reference="Okay, count from 1 to 50.",
+    ),
+    CorpusCase(
+        "ack-ok-stop-us-male",
+        ("OK, stop and switch topic.",),
+        "Eddy (English (US))",
+        ("okay", "stop", "switch topic"),
+        transcript_reference="Okay, stop and switch topic.",
+    ),
+    CorpusCase(
         "cosmic-command-us",
         (
             "Please start your response exactly with dash, bold Cosmic touch, "

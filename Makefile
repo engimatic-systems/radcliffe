@@ -1,5 +1,6 @@
 .PHONY: bootstrap check check-python check-node check-android check-voice-local \
-	check-worker-dispatch-local benchmark-stt-local demo generate-protocol test-python test-node
+	check-stt-rejection-local check-worker-dispatch-local benchmark-stt-local demo \
+	build-voice-dashboard generate-protocol test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
@@ -37,6 +38,12 @@ check-voice-local:
 
 check-worker-dispatch-local:
 	set -a; . var/.env; set +a; uv run python scripts/generated-session-smoke.py
+
+check-stt-rejection-local:
+	uv run python scripts/stt-rejection-conformance.py
+
+build-voice-dashboard:
+	uv run python scripts/build-voice-test-dashboard.py
 
 benchmark-stt-local:
 	uv run python scripts/stt-conformance.py --profiles all

@@ -58,6 +58,7 @@ class TimedAudio:
 class SmokeState:
     started_at: float = field(default_factory=time.monotonic)
     events: list[TimedEvent] = field(default_factory=list)
+    input: list[TimedAudio] = field(default_factory=list)
     output: list[TimedAudio] = field(default_factory=list)
     capture_tasks: list[asyncio.Task[None]] = field(default_factory=list)
 
@@ -68,6 +69,16 @@ class Check:
     passed: bool
     detail: str
     measured: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RecordingAudioSource:
+    source: rtc.AudioSource
+    state: SmokeState
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.state.input.append(TimedAudio(time.monotonic(), bytes(frame.data)))
+        await self.source.capture_frame(frame)
 
 
 async def wait_until(predicate, limit_seconds: float = 30.0) -> None:
@@ -85,6 +96,15 @@ def _active(pcm: bytes, threshold: float = 300) -> bool:
     if not samples.size:
         return False
     return math.sqrt(float(np.mean(samples**2))) >= threshold
+
+
+def _contains_emoji(text: str) -> bool:
+    return any(
+        0x1F000 <= ord(character) <= 0x1FAFF
+        or 0x2600 <= ord(character) <= 0x27BF
+        or ord(character) == 0xFE0F
+        for character in text
+    )
 
 
 def _first_audio_after(state: SmokeState, timestamp: float) -> float | None:
@@ -154,7 +174,24 @@ async def synthesize_paused_utterance(
     return Utterance(" ".join(segments), speech, speech + b"\x00\x00" * INPUT_RATE)
 
 
-async def publish_audio(source: rtc.AudioSource, utterance: Utterance) -> tuple[float, float]:
+async def synthesize_background_babble() -> Utterance:
+    provider = LocalAppleSpeechProvider(voice="Samantha")
+    pcm_24khz = await provider.synthesize("Ba ba da da. Ma ma ba ba. Da ba ma da. Ba da ba ma.")
+    waveform = provider._waveform(pcm_24khz, OUTPUT_RATE, 1).astype(np.float32)
+    maximum_rms = 850 / 32767
+    for start in range(0, len(waveform), FRAME_SAMPLES):
+        frame = waveform[start : start + FRAME_SAMPLES]
+        if not frame.size:
+            continue
+        rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+        if rms > maximum_rms:
+            frame *= maximum_rms / rms
+    waveform = waveform[: INPUT_RATE * 2]
+    speech = np.clip(waveform * 32768, -32768, 32767).astype("<i2").tobytes()
+    return Utterance("nearby background babble", speech, speech + b"\x00\x00" * INPUT_RATE)
+
+
+async def publish_audio(source: RecordingAudioSource, utterance: Utterance) -> tuple[float, float]:
     started_at = time.monotonic()
     next_frame_at = started_at
     frame_bytes = FRAME_SAMPLES * 2
@@ -188,9 +225,9 @@ async def send_control(room: rtc.Room, kind: int) -> None:
     )
 
 
-def _write_wav(path: Path, pcm: bytes, sample_rate: int) -> None:
+def _write_wav(path: Path, pcm: bytes, sample_rate: int, *, channels: int = 1) -> None:
     with wave.open(str(path), "wb") as output:
-        output.setnchannels(1)
+        output.setnchannels(channels)
         output.setsampwidth(2)
         output.setframerate(sample_rate)
         output.writeframes(pcm)
@@ -210,6 +247,41 @@ def _output_timeline(state: SmokeState) -> bytes:
         samples = np.frombuffer(item.pcm, dtype="<i2")
         timeline[start : start + len(samples)] = samples
     return timeline.tobytes()
+
+
+def _input_timeline(state: SmokeState) -> np.ndarray:
+    input_audio = tuple(item for item in state.input if item.received_at >= state.started_at)
+    if not input_audio:
+        return np.zeros(0, dtype="<i2")
+    final_sample = max(
+        round((item.received_at - state.started_at) * INPUT_RATE) + len(item.pcm) // 2
+        for item in input_audio
+    )
+    timeline = np.zeros(final_sample, dtype="<i2")
+    for item in input_audio:
+        start = round((item.received_at - state.started_at) * INPUT_RATE)
+        samples = np.frombuffer(item.pcm, dtype="<i2")
+        timeline[start : start + len(samples)] = samples
+    return timeline
+
+
+def _review_timeline(state: SmokeState) -> bytes:
+    input_16khz = _input_timeline(state)
+    if input_16khz.size:
+        output_length = round(len(input_16khz) * OUTPUT_RATE / INPUT_RATE)
+        input_24khz = np.interp(
+            np.linspace(0, len(input_16khz) - 1, output_length),
+            np.arange(len(input_16khz)),
+            input_16khz.astype(np.float32),
+        ).astype("<i2")
+    else:
+        input_24khz = np.zeros(0, dtype="<i2")
+    agent = np.frombuffer(_output_timeline(state), dtype="<i2")
+    length = max(len(input_24khz), len(agent))
+    stereo = np.zeros((length, 2), dtype="<i2")
+    stereo[: len(input_24khz), 0] = input_24khz
+    stereo[: len(agent), 1] = agent
+    return stereo.tobytes()
 
 
 def _proto_event(item: TimedEvent, started_at: float) -> dict[str, object]:
@@ -271,6 +343,7 @@ async def run(commit: str) -> int:
         "replacement": await synthesize_utterance(
             "Samantha", "Stop counting. Reply with exactly switched topic."
         ),
+        "background-babble": await synthesize_background_babble(),
     }
     for name, utterance in utterances.items():
         _write_wav(output_dir / f"user-{name}.wav", utterance.pcm, INPUT_RATE)
@@ -359,8 +432,9 @@ async def run(commit: str) -> int:
         await room.connect(credentials["livekit_url"], credentials["participant_token"])
         await wait_until(lambda: "radcliffe-worker" in room.remote_participants, 30)
         state.started_at = time.monotonic()
-        source = rtc.AudioSource(INPUT_RATE, 1)
-        track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", source)
+        livekit_source = rtc.AudioSource(INPUT_RATE, 1)
+        source = RecordingAudioSource(livekit_source, state)
+        track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", livekit_source)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
         await room.local_participant.publish_track(track, options)
@@ -1020,6 +1094,65 @@ async def run(commit: str) -> int:
             )
         )
 
+        babble_index = len(state.events)
+        babble_started, babble_ended = await publish_audio(source, utterances["background-babble"])
+        await asyncio.sleep(0.25)
+        babble_interruption = _event_after(
+            state,
+            babble_index,
+            lambda event: (
+                event.HasField("state_changed") and event.state_changed.reason == "interrupted"
+            ),
+        )
+        babble_user = _event_after(
+            state,
+            babble_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_USER
+            ),
+        )
+        heard_during_babble = [
+            item
+            for item in state.output
+            if babble_started + 0.25 <= item.received_at <= babble_ended and _active(item.pcm)
+        ]
+        async with httpx.AsyncClient(timeout=5) as sidecar_during_babble:
+            active_after_babble_response = await sidecar_during_babble.get(f"{sidecar_url}/healthz")
+            active_after_babble_response.raise_for_status()
+            active_after_babble = int(active_after_babble_response.json().get("active_turns", 0))
+        checks.append(
+            Check(
+                "background_babble_does_not_interrupt_or_create_turn",
+                babble_interruption is None and babble_user is None,
+                (
+                    "background babble produced neither interruption nor user envelope"
+                    if babble_interruption is None and babble_user is None
+                    else "background babble interrupted playback or created a user envelope"
+                ),
+                {
+                    "babble_seconds": round(babble_ended - babble_started, 3),
+                    "interrupted": babble_interruption is not None,
+                    "created_user_message": babble_user is not None,
+                },
+            )
+        )
+        checks.append(
+            Check(
+                "background_babble_preserves_agent_audio",
+                bool(heard_during_babble) and active_after_babble >= 1,
+                (
+                    f"heard {len(heard_during_babble)} active assistant frames during babble; "
+                    f"sidecar active turns={active_after_babble}"
+                    if heard_during_babble and active_after_babble >= 1
+                    else "assistant became inaudible or its active turn ended during babble"
+                ),
+                {
+                    "active_output_frames": len(heard_during_babble),
+                    "active_turns_after_babble": active_after_babble,
+                },
+            )
+        )
+
         replacement_index = len(state.events)
         replacement_started = time.monotonic()
         _, replacement_speech_end = await publish_audio(source, utterances["replacement"])
@@ -1174,6 +1307,24 @@ async def run(commit: str) -> int:
 
     envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
     packets = context_replay(envelopes)
+    emoji_model_messages = [
+        item.message_id
+        for item in envelopes
+        if item.source.value == "model"
+        and item.content.inline_text is not None
+        and _contains_emoji(item.content.inline_text)
+    ]
+    checks.append(
+        Check(
+            "model_responses_contain_no_emoji",
+            not emoji_model_messages,
+            (
+                "all model responses complied with the no-emoji system instruction"
+                if not emoji_model_messages
+                else f"emoji appeared in model messages: {emoji_model_messages!r}"
+            ),
+        )
+    )
     source_envelopes = [item for item in envelopes if item.source.value == "text_source"]
     if source_envelopes:
         source_message_id = source_envelopes[0].message_id
@@ -1235,6 +1386,12 @@ async def run(commit: str) -> int:
         )
 
     _write_wav(output_dir / "agent-timeline.wav", _output_timeline(state), OUTPUT_RATE)
+    _write_wav(
+        output_dir / "review-timeline-stereo.wav",
+        _review_timeline(state),
+        OUTPUT_RATE,
+        channels=2,
+    )
     (output_dir / "worker.log").write_bytes(worker_log)
     report = {
         "schema": "radcliffe-livekit-conformance-v1",
@@ -1254,6 +1411,8 @@ async def run(commit: str) -> int:
         "events": [_proto_event(item, state.started_at) for item in state.events],
         "artifacts": {
             "agent_timeline": "agent-timeline.wav",
+            "review_timeline": "review-timeline-stereo.wav",
+            "review_channels": {"left": "synthetic microphone", "right": "assistant"},
             "user_inputs": [f"user-{name}.wav" for name in utterances],
             "worker_log": "worker.log",
         },
