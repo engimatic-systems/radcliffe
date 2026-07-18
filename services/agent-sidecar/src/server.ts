@@ -6,6 +6,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Model } from "@earendil-works/pi-ai";
 
 import { PiAgentOrchestrator } from "./orchestrator.js";
+import { assertProviderAllowed } from "./provider-policy.js";
 import type {
   SidecarEvent,
   ToolExecutionRequest,
@@ -14,8 +15,9 @@ import type {
 } from "./protocol.js";
 
 const port = Number(process.env.RADCLIFFE_SIDECAR_PORT ?? "8787");
-const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "openai";
-const modelId = process.env.RADCLIFFE_MODEL_ID ?? "gpt-5.1";
+const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "ollama";
+const modelId = process.env.RADCLIFFE_MODEL_ID ?? "qwen3:8b";
+assertProviderAllowed(provider, process.env.RADCLIFFE_ALLOW_CLOUD_MODELS);
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
 const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
 const models = builtinModels();

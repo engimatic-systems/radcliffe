@@ -3,12 +3,21 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import uuid4
 
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
-from radcliffe_domain.projection import ContextPacket, context_projection, render_projection
+from radcliffe_domain.projection import (
+    TURN_DISPOSITION_EVENT,
+    TURN_DISPOSITION_METADATA,
+    TURN_EVENT_METADATA,
+    TURN_ID_METADATA,
+    ContextPacket,
+    context_replay,
+    render_projection,
+)
 from radcliffe_domain.session import (
     ConversationState,
     Operation,
@@ -21,6 +30,17 @@ from radcliffe_domain.store import EventStore
 from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
+
+
+@dataclass(slots=True)
+class _ActiveTurn:
+    turn_id: str
+    task: asyncio.Task[None]
+    cancelled: asyncio.Event
+    requested_disposition: str = "interrupted"
+    operation: Operation | None = None
+    model_text: str = ""
+    model_persisted: bool = False
 
 
 class Orchestrator(Protocol):
@@ -81,7 +101,11 @@ class VoicePipeline:
         self.synthesizer = synthesizer
         self.publisher = publisher
         self.events = events
-        self._cancelled = asyncio.Event()
+        self._active_turn: _ActiveTurn | None = None
+        self._coordinator = asyncio.Lock()
+        self._turn_serial = asyncio.Lock()
+        self._append_lock = asyncio.Lock()
+        self._latest_submission = 0
 
     async def start(self) -> None:
         previous = self.engine.state
@@ -92,17 +116,7 @@ class VoicePipeline:
         await self._notify_state(previous, "session ready")
 
     async def barge_in(self) -> None:
-        self._cancelled.set()
-        await self.publisher.flush()
-        if self.engine.state in {
-            ConversationState.THINKING,
-            ConversationState.SPEAKING,
-            ConversationState.READING,
-            ConversationState.PAUSED,
-        }:
-            previous = self.engine.state
-            self.engine.interrupt()
-            await self._notify_state(previous, "interrupted")
+        await self._cancel_active("interrupted", always_flush=True)
 
     async def pause(self) -> None:
         if self.engine.state is not ConversationState.LISTENING:
@@ -119,50 +133,75 @@ class VoicePipeline:
             await self._notify_state(previous, "resumed")
 
     async def stop(self) -> None:
+        await self._cancel_active("interrupted", always_flush=True)
         previous = self.engine.state
         self.engine.end()
         if previous is not ConversationState.IDLE:
             await self._notify_state(previous, "session ended")
 
     async def handle_transcript(self, text: str) -> None:
-        if self.engine.state is not ConversationState.LISTENING:
-            await self.barge_in()
-        self._cancelled = asyncio.Event()
-        user = MessageEnvelope.text(
-            session_id=self.engine.session_id,
-            sequence=await self.store.next_sequence(self.engine.session_id),
-            source=SourceKind.USER,
-            text=text,
-        )
-        await self.store.append(user)
-        if self.events is not None:
-            await self.events.message(user)
+        submission = await self._begin_submission()
+        turn_id = str(uuid4())
+        async with self._turn_serial:
+            await self._append_text(
+                SourceKind.USER,
+                text,
+                {TURN_ID_METADATA: turn_id},
+                notify=True,
+            )
+            task = cast(asyncio.Task[None], asyncio.current_task())
+            turn = _ActiveTurn(turn_id, task, asyncio.Event())
+            async with self._coordinator:
+                if submission != self._latest_submission:
+                    stale = True
+                else:
+                    stale = False
+                    self._active_turn = turn
+            if stale:
+                await self._append_disposition(turn, "superseded")
+                return
+            try:
+                await self._run_turn(turn)
+            except asyncio.CancelledError:
+                await self._finish_cancelled(turn)
+            except Exception:
+                await self._finish_failed(turn)
+                raise
+            finally:
+                async with self._coordinator:
+                    if self._active_turn is turn:
+                        self._active_turn = None
+
+    async def _run_turn(self, turn: _ActiveTurn) -> None:
+        self._assert_owner(turn)
         previous = self.engine.state
         operation = self.engine.begin(ConversationState.THINKING)
+        turn.operation = operation
         await self._notify_state(previous, "transcription complete", operation)
         history = await self.store.replay(self.engine.session_id)
+        packets = context_replay(history)
         request_id = str(uuid4())
         request: dict[str, object] = {
             "requestId": request_id,
             "sessionId": self.engine.session_id,
             "generation": self.engine.generation,
             "packets": [
-                _packet(context_projection(item), int(item.created_at.timestamp() * 1000))
-                for item in history
+                _packet(packet, int(item.created_at.timestamp() * 1000))
+                for item, packet in zip(history, packets, strict=True)
             ],
         }
         buffer = ""
-        full_model = ""
         source_rendered = False
-        async for event in self.orchestrator.turn(request, self._cancelled):
-            if self._cancelled.is_set():
+        async for event in self.orchestrator.turn(request, turn.cancelled):
+            if turn.cancelled.is_set():
                 break
+            self._assert_owner(turn, operation)
             if event.type == "model_delta":
                 delta = str(event.payload.get("text", ""))
-                full_model += delta
+                turn.model_text += delta
                 if not source_rendered:
                     buffer += delta
-                    buffer = await self._speak_complete_sentences(buffer, operation)
+                    buffer = await self._speak_complete_sentences(buffer, operation, turn)
             elif event.type == "tool_end" and not bool(event.payload.get("isError")):
                 source_id = self._source_message_id(event.payload.get("result"))
                 if source_id:
@@ -177,44 +216,54 @@ class VoicePipeline:
                     if source is not None:
                         if self.engine.state is ConversationState.THINKING:
                             await self._transition(
-                                ConversationState.READING, "source authorized", operation
+                                ConversationState.READING,
+                                "source authorized",
+                                operation,
+                                turn,
                             )
                         if self.events is not None:
                             await self.events.message(source)
-                        await self._speak_plan(source, operation)
+                        await self._speak_plan(source, operation, turn)
                         source_rendered = True
                         buffer = ""
             elif event.type == "model_complete":
-                full_model = str(event.payload.get("text", full_model))
+                turn.model_text = str(event.payload.get("text", turn.model_text))
             elif event.type == "error":
-                self.engine.transition(ConversationState.FAILED)
                 raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
 
-        if full_model:
-            model = MessageEnvelope.text(
-                session_id=self.engine.session_id,
-                sequence=await self.store.next_sequence(self.engine.session_id),
-                source=SourceKind.MODEL,
-                text=full_model,
-            )
-            await self.store.append(model)
-            if self.events is not None:
-                await self.events.message(model)
-        if buffer and not source_rendered and not self._cancelled.is_set():
+        self._assert_owner(turn, operation)
+        if turn.model_text:
+            await self._persist_model(turn, notify=True)
+        if buffer and not source_rendered:
             if self.engine.state is ConversationState.THINKING:
                 await self._transition(
-                    ConversationState.SPEAKING, "model response ready", operation
+                    ConversationState.SPEAKING,
+                    "model response ready",
+                    operation,
+                    turn,
                 )
-            await self._speak(buffer, f"{operation.operation_id}:final", 0, operation)
-        if not self._cancelled.is_set() and self.engine.state is not ConversationState.FAILED:
-            await self._transition(ConversationState.LISTENING, "turn complete", operation)
+            await self._speak(
+                buffer,
+                f"{operation.operation_id}:final",
+                0,
+                operation,
+                turn,
+            )
+        await self._finish_completed(turn)
 
-    async def _speak_complete_sentences(self, buffer: str, operation: Operation) -> str:
+    async def _speak_complete_sentences(
+        self, buffer: str, operation: Operation, turn: _ActiveTurn
+    ) -> str:
         matches = list(_SENTENCE.finditer(buffer))
         if not matches:
             return buffer
         if self.engine.state is ConversationState.THINKING:
-            await self._transition(ConversationState.SPEAKING, "model sentence ready", operation)
+            await self._transition(
+                ConversationState.SPEAKING,
+                "model sentence ready",
+                operation,
+                turn,
+            )
         end = matches[-1].end()
         start = 0
         for index, match in enumerate(matches):
@@ -223,13 +272,19 @@ class VoicePipeline:
                 f"{operation.operation_id}:model:{index}",
                 index,
                 operation,
+                turn,
             )
             start = match.end()
         return buffer[end:]
 
     async def _transition(
-        self, target: ConversationState, reason: str, operation: Operation | None = None
+        self,
+        target: ConversationState,
+        reason: str,
+        operation: Operation,
+        turn: _ActiveTurn,
     ) -> None:
+        self._assert_owner(turn, operation)
         previous = self.engine.state
         self.engine.transition(target)
         await self._notify_state(previous, reason, operation)
@@ -249,7 +304,9 @@ class VoicePipeline:
                 operation,
             )
 
-    async def _speak_plan(self, envelope: MessageEnvelope, operation: Operation) -> None:
+    async def _speak_plan(
+        self, envelope: MessageEnvelope, operation: Operation, turn: _ActiveTurn
+    ) -> None:
         plan = render_projection(envelope)
         for segment in plan.segments:
             await self._speak(
@@ -257,6 +314,7 @@ class VoicePipeline:
                 segment.segment_id,
                 segment.boundary_index,
                 operation,
+                turn,
             )
 
     async def _speak(
@@ -265,11 +323,11 @@ class VoicePipeline:
         segment_id: str,
         boundary_index: int,
         operation: Operation,
+        turn: _ActiveTurn,
     ) -> None:
-        self.engine.assert_current(operation)
+        self._assert_owner(turn, operation)
         audio = await self.synthesizer.synthesize(canonical_text)
-        if self._cancelled.is_set():
-            return
+        self._assert_owner(turn, operation)
         now = datetime.now(UTC)
         await self.engine.acknowledge(
             PlaybackAcknowledgement(
@@ -282,7 +340,9 @@ class VoicePipeline:
                 occurred_at=now,
             )
         )
+        self._assert_owner(turn, operation)
         duration = await self.publisher.publish(segment_id, audio)
+        self._assert_owner(turn, operation)
         await self.engine.acknowledge(
             PlaybackAcknowledgement(
                 acknowledgement_id=str(uuid4()),
@@ -294,6 +354,145 @@ class VoicePipeline:
                 occurred_at=datetime.now(UTC),
             )
         )
+
+    async def _begin_submission(self) -> int:
+        async with self._coordinator:
+            self._latest_submission += 1
+            submission = self._latest_submission
+        await self._cancel_active("superseded")
+        return submission
+
+    async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
+        task: asyncio.Task[None] | None = None
+        should_flush = always_flush
+        async with self._coordinator:
+            turn = self._active_turn
+            if turn is not None:
+                should_flush = True
+                turn.requested_disposition = disposition
+                if not turn.cancelled.is_set():
+                    turn.cancelled.set()
+                    task = turn.task
+                    task.cancel()
+        if should_flush:
+            await self.publisher.flush()
+        current = asyncio.current_task()
+        if task is not None and task is not current:
+            await asyncio.gather(task, return_exceptions=True)
+            await self.publisher.flush()
+
+    async def _finish_completed(self, turn: _ActiveTurn) -> None:
+        async with self._coordinator:
+            self._assert_owner(turn, turn.operation)
+            previous = self.engine.state
+            self.engine.transition(ConversationState.LISTENING)
+            await self._append_disposition(turn, "completed")
+            self._active_turn = None
+            await self._notify_state(previous, "turn complete", turn.operation)
+
+    async def _finish_cancelled(self, turn: _ActiveTurn) -> None:
+        async with self._coordinator:
+            if self._active_turn is not turn:
+                return
+            if turn.model_text and not turn.model_persisted:
+                await self._persist_model(turn, partial=True)
+            await self._append_disposition(turn, turn.requested_disposition)
+            previous = self.engine.state
+            if previous in {
+                ConversationState.THINKING,
+                ConversationState.SPEAKING,
+                ConversationState.READING,
+                ConversationState.PAUSED,
+            }:
+                self.engine.interrupt()
+                await self._notify_state(previous, turn.requested_disposition, turn.operation)
+            self._active_turn = None
+
+    async def _finish_failed(self, turn: _ActiveTurn) -> None:
+        async with self._coordinator:
+            if self._active_turn is not turn:
+                return
+            await self._append_disposition(turn, "failed")
+            previous = self.engine.state
+            if previous is not ConversationState.FAILED:
+                self.engine.transition(ConversationState.FAILED)
+                await self._notify_state(previous, "turn failed", turn.operation)
+            self._active_turn = None
+
+    async def _append_disposition(self, turn: _ActiveTurn, disposition: str) -> MessageEnvelope:
+        operation = turn.operation
+        metadata = {
+            TURN_ID_METADATA: turn.turn_id,
+            TURN_EVENT_METADATA: TURN_DISPOSITION_EVENT,
+            TURN_DISPOSITION_METADATA: disposition,
+        }
+        if operation is not None:
+            metadata["radcliffe.operation_id"] = operation.operation_id
+            metadata["radcliffe.generation"] = str(operation.generation)
+        return await self._append_text(
+            SourceKind.SYSTEM,
+            f"Turn {disposition}",
+            metadata,
+        )
+
+    async def _persist_model(
+        self,
+        turn: _ActiveTurn,
+        *,
+        partial: bool = False,
+        notify: bool = False,
+    ) -> None:
+        if turn.model_persisted or not turn.model_text:
+            return
+        metadata = {TURN_ID_METADATA: turn.turn_id}
+        if turn.operation is not None:
+            metadata["radcliffe.operation_id"] = turn.operation.operation_id
+            metadata["radcliffe.generation"] = str(turn.operation.generation)
+        if partial:
+            metadata["radcliffe.partial"] = "true"
+        append_task = asyncio.create_task(
+            self._append_text(
+                SourceKind.MODEL,
+                turn.model_text,
+                metadata,
+            )
+        )
+        try:
+            envelope = await asyncio.shield(append_task)
+        except asyncio.CancelledError:
+            await append_task
+            turn.model_persisted = True
+            raise
+        turn.model_persisted = True
+        if notify and self.events is not None:
+            await self.events.message(envelope)
+
+    async def _append_text(
+        self,
+        source: SourceKind,
+        text: str,
+        metadata: dict[str, str] | None = None,
+        *,
+        notify: bool = False,
+    ) -> MessageEnvelope:
+        async with self._append_lock:
+            envelope = MessageEnvelope.text(
+                session_id=self.engine.session_id,
+                sequence=await self.store.next_sequence(self.engine.session_id),
+                source=source,
+                text=text,
+                metadata=metadata,
+            )
+            await self.store.append(envelope)
+        if notify and self.events is not None:
+            await self.events.message(envelope)
+        return envelope
+
+    def _assert_owner(self, turn: _ActiveTurn, operation: Operation | None = None) -> None:
+        if self._active_turn is not turn or turn.cancelled.is_set():
+            raise asyncio.CancelledError
+        if operation is not None:
+            self.engine.assert_current(operation)
 
     @staticmethod
     def _source_message_id(result: object) -> str | None:

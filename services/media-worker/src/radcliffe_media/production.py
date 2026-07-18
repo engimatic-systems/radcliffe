@@ -4,6 +4,7 @@ import asyncio
 import math
 import os
 from array import array
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -26,10 +27,30 @@ from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import LocalAppleSpeechProvider, OpenAISpeechProvider, SpeechProvider
 
 
+@dataclass(frozen=True, slots=True)
+class EndpointSettings:
+    rms_threshold: float = 600
+    minimum_voice_ms: float = 250
+    end_silence_ms: float = 900
+
+    def __post_init__(self) -> None:
+        if min(self.rms_threshold, self.minimum_voice_ms, self.end_silence_ms) <= 0:
+            raise ValueError("endpoint settings must be positive")
+
+    @classmethod
+    def from_environment(cls) -> EndpointSettings:
+        return cls(
+            rms_threshold=float(os.environ.get("RADCLIFFE_ENDPOINT_RMS", "600")),
+            minimum_voice_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "250")),
+            end_silence_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_SILENCE_MS", "900")),
+        )
+
+
 class EndpointProcessor(FrameProcessor):
-    def __init__(self, speech: SpeechProvider) -> None:
+    def __init__(self, speech: SpeechProvider, settings: EndpointSettings | None = None) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
+        self.settings = settings or EndpointSettings()
         self.voice: VoicePipeline | None = None
         self.buffer = bytearray()
         self.speaking = False
@@ -49,20 +70,23 @@ class EndpointProcessor(FrameProcessor):
         samples = array("h")
         samples.frombytes(frame.audio)
         rms = math.sqrt(sum(sample * sample for sample in samples) / max(len(samples), 1))
-        voiced = rms >= 600
+        voiced = rms >= self.settings.rms_threshold
         if voiced and not self.speaking:
+            if self.turn_task is not None and not self.turn_task.done():
+                await self._cancel_current_turn()
             self.speaking = True
             self.buffer.clear()
             self.voice_ms = 0
             self.silence_ms = 0
-            if self.turn_task is not None and not self.turn_task.done() and self.voice is not None:
-                await self.voice.barge_in()
         if not self.speaking:
             return
         self.buffer.extend(frame.audio)
         self.voice_ms += duration_ms if voiced else 0
         self.silence_ms = 0 if voiced else self.silence_ms + duration_ms
-        if self.silence_ms >= 600 and self.voice_ms >= 250:
+        if (
+            self.silence_ms >= self.settings.end_silence_ms
+            and self.voice_ms >= self.settings.minimum_voice_ms
+        ):
             audio = bytes(self.buffer)
             self.speaking = False
             self.buffer.clear()
@@ -80,18 +104,25 @@ class EndpointProcessor(FrameProcessor):
             raise
         except Exception:
             logger.exception("voice turn failed before completion")
+        finally:
+            if self.turn_task is asyncio.current_task():
+                self.turn_task = None
 
     async def interrupt(self) -> None:
         self.paused = False
         await self._cancel_current_turn()
 
     async def _cancel_current_turn(self) -> None:
+        turn_task = self.turn_task
         self.speaking = False
         self.buffer.clear()
         if self.voice is not None:
             await self.voice.barge_in()
-        if self.turn_task is not None and not self.turn_task.done():
-            self.turn_task.cancel()
+        if turn_task is not None and not turn_task.done():
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+        if self.turn_task is turn_task:
+            self.turn_task = None
 
     async def pause(self) -> None:
         self.paused = True
@@ -142,13 +173,18 @@ async def run() -> None:
             voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
         )
     elif speech_provider == "openai":
+        if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
+            raise RuntimeError(
+                "OpenAI speech is disabled; set RADCLIFFE_ALLOW_CLOUD_MODELS=1 "
+                "only for a user-approved test run"
+            )
         api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
         speech = OpenAISpeechProvider(api_key)
     else:
         raise RuntimeError(f"unsupported speech provider: {speech_provider}")
-    endpoint = EndpointProcessor(speech)
+    endpoint = EndpointProcessor(speech, EndpointSettings.from_environment())
     transport = create_transport(
         LiveKitConnection(
             required["RADCLIFFE_LIVEKIT_URL"] or "",

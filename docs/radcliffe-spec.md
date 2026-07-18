@@ -287,6 +287,29 @@ This design allows a later feature to read every eligible message
 deterministically while injecting source-aware context for user speech, model
 output, calls, and text sources.
 
+### Turn disposition and supersession policy
+
+Every voice turn tags its user and model envelopes with a stable
+`radcliffe.turn_id`. Completion, interruption, failure, or replacement appends
+an immutable `SYSTEM` audit envelope with `radcliffe.event=turn_disposition`
+and `radcliffe.turn_disposition` set to `completed`, `interrupted`, `failed`,
+or `superseded`. Existing envelopes are never rewritten or deleted.
+
+`ContextProjection` version `context-v2` derives the latest disposition for
+each turn during replay. It excludes disposition audit envelopes and replaces
+the model-visible content of interrupted, failed, or superseded turns with a
+deterministic exclusion marker. Completed turns remain eligible under the
+normal source, provenance, permission, and sensitivity rules. Thus the local
+audit retains abandoned user speech and partial model output without allowing
+either to become an accidental instruction in a later turn.
+
+Only one endpointed transcript may own a session at a time. A newer transcript
+cancels and awaits the active owner; if multiple transcripts are pending, the
+newest submission wins and older pending submissions are recorded as
+superseded without invoking the model. This replacement policy is deliberate:
+Radcliffe does not concatenate separately endpointed transcripts because doing
+so could silently change user intent.
+
 ### Pi Agent Core adapter
 
 `AgentOrchestrator` maps Radcliffe envelopes to Pi custom agent messages and
@@ -388,6 +411,18 @@ Test layers:
    malicious archives, unauthorized tools, and stale-token access.
 7. Soak, load, and chaos tests for agent crashes, provider timeouts, TURN-only
    networks, packet loss, and CPU/GPU contention.
+
+### Cloud-provider test budget
+
+Automated and exploratory tests use fake providers or the local Ollama,
+Whisper, and TTS profile by default. The presence of a funded OpenAI or
+Anthropic credential in an ignored environment file is not permission to use
+it. Cloud model and speech calls remain disabled unless the user explicitly
+approves that test run and the operator sets `RADCLIFFE_ALLOW_CLOUD_MODELS=1`
+for that process. A cloud-provider acceptance run should be made only after
+the deterministic local suite passes, should use a bounded scenario set, and
+should record provider, model, token usage, and reported cost so one controlled
+run can be evaluated before another is authorized.
 
 Release requires repeated clean conformance runs, all security tests passing,
 SLOs met under isolated and realistic load, and two weeks of dogfood use with

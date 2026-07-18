@@ -14,12 +14,12 @@ function packet(
   options: Partial<ContextPacket> = {},
 ): ContextPacket {
   return {
-    projectionVersion: "context-v1",
+    projectionVersion: "context-v2",
     messageId,
     role: "user",
     content,
     source: "user",
-    annotations: [["projection", "context-v1"]],
+    annotations: [["projection", "context-v2"]],
     include: true,
     timestamp: 1,
     ...options,
