@@ -4,6 +4,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _workspace_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RADCLIFFE_", env_file=".env", extra="ignore")
 
@@ -16,3 +20,10 @@ class Settings(BaseSettings):
     database_path: Path = Path("var/radcliffe.sqlite3")
     source_root: Path = Path("fixtures/sources")
     room_token_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    managed_workers_enabled: bool = True
+    worker_idle_seconds: int = Field(default=1800, ge=60)
+    worker_reconcile_seconds: int = Field(default=10, ge=1)
+    worker_stop_timeout_seconds: int = Field(default=5, ge=1, le=30)
+    worker_uv_bin: Path = Path("/opt/homebrew/bin/uv")
+    worker_workspace_root: Path = Field(default_factory=_workspace_root)
+    worker_log_directory: Path = Path("var/workers")

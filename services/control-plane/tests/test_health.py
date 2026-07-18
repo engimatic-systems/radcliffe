@@ -13,6 +13,7 @@ def settings(tmp_path) -> Settings:
         internal_token="internal-token-1234",
         database_path=tmp_path / "events.sqlite3",
         source_root=source_root,
+        managed_workers_enabled=False,
     )
 
 
@@ -41,6 +42,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         assert payload["room_name"] == "session-1"
         assert payload["protocol_version"] == 2
         assert payload["expires_in_seconds"] == 600
+        assert payload["worker_status"] == "external"
 
         tool = client.post(
             "/v1/tool-calls",

@@ -1,9 +1,33 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 from livekit import api
 from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
 
 AUTHORIZATION = {"Authorization": "Bearer bootstrap-token-123"}
+
+
+class FakeProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.finished = asyncio.Event()
+        self.pid = 1000
+        self.terminated = False
+
+    async def wait(self) -> int:
+        await self.finished.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+        self.finished.set()
+
+    def kill(self) -> None:
+        self.returncode = -9
+        self.finished.set()
 
 
 def settings(tmp_path) -> Settings:
@@ -17,6 +41,7 @@ def settings(tmp_path) -> Settings:
         owner_id="test-owner",
         database_path=tmp_path / "events.sqlite3",
         source_root=source_root,
+        managed_workers_enabled=False,
     )
 
 
@@ -104,6 +129,7 @@ def test_catalog_list_detail_update_pagination_and_authorization(tmp_path) -> No
             "status",
             "protocol_version",
             "generation",
+            "worker_status",
         }
         updated = client.patch(
             "/v1/sessions/legacy-b",
@@ -133,3 +159,60 @@ def test_catalog_survives_control_plane_restart(tmp_path) -> None:
         )
         assert credential.status_code == 200
         assert credential.json()["generation"] == 1
+
+
+def test_generated_session_dispatches_one_worker_and_end_cleans_it_up(tmp_path) -> None:
+    config = settings(tmp_path).model_copy(
+        update={"managed_workers_enabled": True, "worker_reconcile_seconds": 3600}
+    )
+    launched: list[FakeProcess] = []
+
+    async def launch(_record):
+        process = FakeProcess()
+        launched.append(process)
+        return process
+
+    with TestClient(create_app(config, worker_launcher=launch)) as client:
+        first = create(client, idempotency_key="managed-create")
+        retry = create(client, idempotency_key="managed-create")
+
+        assert first.status_code == 200
+        assert first.json()["worker_status"] == "running"
+        assert retry.json()["session_id"] == first.json()["session_id"]
+        assert len(launched) == 1
+        ended = client.patch(
+            f"/v1/sessions/{first.json()['session_id']}",
+            headers=AUTHORIZATION,
+            json={"status": "ended"},
+        )
+        assert ended.json()["worker_status"] == "stopped"
+        assert launched[0].terminated
+
+
+def test_supervisor_restart_reconciles_recent_managed_session(tmp_path) -> None:
+    config = settings(tmp_path).model_copy(
+        update={"managed_workers_enabled": True, "worker_reconcile_seconds": 3600}
+    )
+    first_launches: list[FakeProcess] = []
+    second_launches: list[FakeProcess] = []
+
+    async def first_launcher(_record):
+        process = FakeProcess()
+        first_launches.append(process)
+        return process
+
+    async def second_launcher(_record):
+        process = FakeProcess()
+        second_launches.append(process)
+        return process
+
+    with TestClient(create_app(config, worker_launcher=first_launcher)) as client:
+        response = create(client, idempotency_key="restart-worker")
+        session_id = response.json()["session_id"]
+        assert len(first_launches) == 1
+
+    assert first_launches[0].terminated
+    with TestClient(create_app(config, worker_launcher=second_launcher)) as restarted:
+        detail = restarted.get(f"/v1/sessions/{session_id}", headers=AUTHORIZATION)
+        assert detail.json()["worker_status"] == "running"
+        assert len(second_launches) == 1
