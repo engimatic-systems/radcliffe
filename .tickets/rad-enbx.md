@@ -28,3 +28,7 @@ A documented inventory maps useful Oxford scenarios to Radcliffe contracts witho
 **2026-07-14T05:26:25Z**
 
 First Oxford-derived increment is now executable via make check-voice-local with retained acoustic and end-to-end evidence. Covered: multi-turn content/latency, pause suppression, noisy/echoed STT commands, and audible interruption. Remaining scenarios stay dependency-gated: rapid replacement/failure permutations, restart/catalog/context accounting, and exact-source randomized workspaces.
+
+**2026-07-14T12:02:23Z**
+
+2026-07-14 Oxford-derived external-suite increment now covers a live rapid replacement turn end to end, including active-stream observation, speech interruption, old-audio cessation, exact replacement content/latency, HTTP cancellation, durable interrupted disposition, and projection exclusion. Cold Ollama readiness is also deterministic: the Sidecar warms and pins the selected local model before health is exposed, preserving the unchanged five-second first-audio gate after restart.

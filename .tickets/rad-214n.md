@@ -1,6 +1,6 @@
 ---
 id: rad-214n
-status: in_progress
+status: closed
 deps: []
 links: [rad-rwfl, rad-lo0t, rad-chaa, rad-ghti, rad-nu8n]
 created: 2026-07-14T02:47:05Z
@@ -32,3 +32,7 @@ Implemented on fix/generation-safe-voice-turns: immutable per-turn cancellation,
 **2026-07-14T04:05:38Z**
 
 2026-07-13 Pixel verification: the latest session showed no recurrence of the stale listening-to-listening transition race. Completed and interrupted dispositions were recorded. A separate TTS failure exposed recoverability work tracked by rad-nu8n and transcript publication work tracked by rad-lo0t.
+
+**2026-07-14T12:02:23Z**
+
+2026-07-14 live external verification completed on test/live-cancellation-conformance. The isolated LiveKit harness began a long audible count, spoke a replacement while the Sidecar HTTP stream was active, and proved: speech interruption acknowledgement 158 ms, old audio stopped 208 ms after new speech, replacement first audio 2.040 s with exact 'switched topic' content, cancellation counter advanced 2 to 3, and the abandoned turn persisted as disposition=interrupted while context_replay excluded it. Tap interruption remained 9 ms/57 ms audible stop. The suite retains the report at artifacts/voice-conformance/20260714T120038Z/report.json; make check passes with 54 Python, 10 Sidecar, and Android unit/lint gates. Acceptance is complete.

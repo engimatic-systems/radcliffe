@@ -7,6 +7,7 @@ import type { Model } from "@earendil-works/pi-ai";
 
 import { PiAgentOrchestrator } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
+import { warmOllama } from "./ollama-runtime.js";
 import { assertProviderAllowed } from "./provider-policy.js";
 import type {
   SidecarEvent,
@@ -28,6 +29,13 @@ const ollamaModel = createOllamaModel({
 });
 const model = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
 if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
+if (provider === "ollama") {
+  await warmOllama({
+    baseUrl: ollamaModel.baseUrl,
+    modelId,
+    keepAlive: process.env.RADCLIFFE_OLLAMA_KEEP_ALIVE ?? "-1",
+  });
+}
 const streamFn: StreamFn =
   provider === "ollama"
     ? (selectedModel, context, options) =>
@@ -59,6 +67,8 @@ async function executeTool(
 }
 
 const orchestrator = new PiAgentOrchestrator(model, streamFn, executeTool);
+let activeTurns = 0;
+let cancelledTurns = 0;
 
 function writeEvent(response: ServerResponse, event: SidecarEvent): void {
   response.write(`${JSON.stringify(event)}\n`);
@@ -67,7 +77,13 @@ function writeEvent(response: ServerResponse, event: SidecarEvent): void {
 createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/healthz") {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "ok" }));
+    response.end(
+      JSON.stringify({
+        status: "ok",
+        active_turns: activeTurns,
+        cancelled_turns: cancelledTurns,
+      }),
+    );
     return;
   }
   if (request.method !== "POST" || request.url !== "/v1/turns") {
@@ -88,13 +104,18 @@ createServer(async (request, response) => {
     "content-type": "application/x-ndjson",
     "cache-control": "no-store",
   });
+  activeTurns += 1;
   const controller = new AbortController();
   response.on("close", () => {
-    if (!response.writableEnded) controller.abort();
+    if (!response.writableEnded && !controller.signal.aborted) {
+      cancelledTurns += 1;
+      controller.abort();
+    }
   });
   try {
     await orchestrator.run(turn, (event) => writeEvent(response, event), controller.signal);
   } finally {
+    activeTurns -= 1;
     response.end();
   }
 }).listen(port, "127.0.0.1");

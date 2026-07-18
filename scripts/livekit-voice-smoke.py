@@ -16,6 +16,13 @@ import httpx
 import numpy as np
 from google.protobuf.json_format import MessageToDict
 from livekit import rtc
+from radcliffe_domain.projection import (
+    TURN_DISPOSITION_METADATA,
+    TURN_EVENT_METADATA,
+    TURN_ID_METADATA,
+    context_replay,
+)
+from radcliffe_domain.store import EventStore
 from radcliffe_media.speech import LocalAppleSpeechProvider
 from radcliffe_media.speech_quality import assess_transcript
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
@@ -194,6 +201,7 @@ def _proto_event(item: TimedEvent, started_at: float) -> dict[str, object]:
 
 async def run(commit: str) -> int:
     control_url = os.environ.get("RADCLIFFE_CONTROL_URL", "http://127.0.0.1:8000")
+    sidecar_url = os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")
     bootstrap_token = os.environ.get("RADCLIFFE_BOOTSTRAP_TOKEN")
     session_id = os.environ.get(
         "RADCLIFFE_CONFORMANCE_SESSION_ID",
@@ -222,6 +230,14 @@ async def run(commit: str) -> int:
         ),
         "interrupt": await synthesize_utterance(
             "Tessa", "Tell me a five sentence story about a lighthouse."
+        ),
+        "speech-barge": await synthesize_utterance(
+            "Daniel",
+            "Count slowly from one to two hundred, spelling every number in words, "
+            "and do not stop early.",
+        ),
+        "replacement": await synthesize_utterance(
+            "Samantha", "Stop counting. Reply with exactly switched topic."
         ),
     }
     for name, utterance in utterances.items():
@@ -281,6 +297,7 @@ async def run(commit: str) -> int:
     room = rtc.Room()
     state = SmokeState()
     checks: list[Check] = []
+    cancelled_user_message_id: str | None = None
 
     async def capture(track: rtc.Track) -> None:
         stream = rtc.AudioStream(track, sample_rate=OUTPUT_RATE, num_channels=1)
@@ -647,6 +664,172 @@ async def run(commit: str) -> int:
                 },
             )
         )
+
+        async with httpx.AsyncClient(timeout=5) as sidecar_before:
+            sidecar_baseline_response = await sidecar_before.get(f"{sidecar_url}/healthz")
+            sidecar_baseline_response.raise_for_status()
+            sidecar_baseline = sidecar_baseline_response.json()
+        cancelled_before = int(sidecar_baseline.get("cancelled_turns", 0))
+        barge_index = len(state.events)
+        _, barge_speech_end = await publish_audio(source, utterances["speech-barge"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    barge_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_SPEAKING
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        barge_user = _event_after(
+            state,
+            barge_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_USER
+            ),
+        )
+        assert barge_user is not None
+        cancelled_user_message_id = barge_user.event.message.message_id
+        await wait_for_audio_after(state, barge_speech_end, 30)
+        async with httpx.AsyncClient(timeout=5) as sidecar_client:
+            active_response = await sidecar_client.get(f"{sidecar_url}/healthz")
+            active_response.raise_for_status()
+            active_sidecar_turns = int(active_response.json().get("active_turns", 0))
+        checks.append(
+            Check(
+                "speech_replacement_observes_live_sidecar_stream",
+                active_sidecar_turns >= 1,
+                f"sidecar reported {active_sidecar_turns} active turn(s) before barge-in",
+            )
+        )
+
+        replacement_index = len(state.events)
+        replacement_started = time.monotonic()
+        _, replacement_speech_end = await publish_audio(source, utterances["replacement"])
+        speech_interrupt_event = _event_after(
+            state,
+            replacement_index,
+            lambda event: (
+                event.HasField("state_changed") and event.state_changed.reason == "interrupted"
+            ),
+        )
+        speech_interrupt_ack = (
+            speech_interrupt_event.received_at - replacement_started
+            if speech_interrupt_event is not None
+            else 30.0
+        )
+        checks.append(
+            Check(
+                "speech_barge_acknowledgement",
+                speech_interrupt_ack < 0.5,
+                f"speech interruption acknowledged in {speech_interrupt_ack:.3f}s",
+                {"latency_seconds": round(speech_interrupt_ack, 3)},
+            )
+        )
+        old_audio_after_barge = [
+            item.received_at
+            for item in state.output
+            if replacement_started < item.received_at <= replacement_started + 1.2
+            and _active(item.pcm)
+        ]
+        speech_barge_stop_seconds = (
+            max(old_audio_after_barge) - replacement_started if old_audio_after_barge else 0
+        )
+        checks.append(
+            Check(
+                "speech_barge_stops_heard_audio",
+                speech_barge_stop_seconds <= 0.5,
+                f"last old-turn audio was {speech_barge_stop_seconds:.3f}s after new speech",
+                {"stop_seconds": round(speech_barge_stop_seconds, 3)},
+            )
+        )
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    replacement_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                    ),
+                )
+                is not None
+            ),
+            20,
+        )
+        replacement_user = _event_after(
+            state,
+            replacement_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_USER
+            ),
+        )
+        assert replacement_user is not None
+        replacement_user_index = state.events.index(replacement_user)
+        replacement_audio = await wait_for_audio_after(state, replacement_speech_end, 30)
+        replacement_latency = replacement_audio - replacement_speech_end
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    replacement_user_index + 1,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        replacement_model = _event_after(
+            state,
+            replacement_user_index + 1,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+            ),
+        )
+        assert replacement_model is not None
+        replacement_model_text = replacement_model.event.message.content.inline_text.casefold()
+        checks.append(
+            Check(
+                "replacement_turn_does_not_resume_abandoned_count",
+                "switched topic" in replacement_model_text
+                and "one, two" not in replacement_model_text,
+                f"replacement model message: {replacement_model_text!r}",
+            )
+        )
+        checks.append(
+            Check(
+                "replacement_turn_first_audio",
+                replacement_latency < 5,
+                f"first heard replacement audio after {replacement_latency:.3f}s",
+                {"latency_seconds": round(replacement_latency, 3)},
+            )
+        )
+        await wait_for_output_silence(state, after=replacement_audio, limit_seconds=30)
+        async with httpx.AsyncClient(timeout=5) as sidecar_client:
+            async with asyncio.timeout(10):
+                while True:  # noqa: ASYNC110 - polling the external sidecar process
+                    sidecar_after_response = await sidecar_client.get(f"{sidecar_url}/healthz")
+                    sidecar_after_response.raise_for_status()
+                    sidecar_after = sidecar_after_response.json()
+                    if int(sidecar_after.get("active_turns", 0)) == 0:
+                        break
+                    await asyncio.sleep(0.05)
+        cancelled_after = int(sidecar_after.get("cancelled_turns", 0))
+        checks.append(
+            Check(
+                "speech_replacement_closes_abandoned_http_stream",
+                cancelled_after > cancelled_before,
+                f"sidecar cancellation counter advanced {cancelled_before} -> {cancelled_after}",
+            )
+        )
     finally:
         await room.disconnect()
         for task in state.capture_tasks:
@@ -660,6 +843,31 @@ async def run(commit: str) -> int:
             worker.kill()
             await worker.wait()
         await worker_log_task
+
+    envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
+    packets = context_replay(envelopes)
+    if cancelled_user_message_id is not None:
+        cancelled_envelope = next(
+            item for item in envelopes if item.message_id == cancelled_user_message_id
+        )
+        turn_id = cancelled_envelope.metadata.get(TURN_ID_METADATA)
+        disposition = next(
+            (
+                item.metadata.get(TURN_DISPOSITION_METADATA)
+                for item in envelopes
+                if item.metadata.get(TURN_EVENT_METADATA) == "turn_disposition"
+                and item.metadata.get(TURN_ID_METADATA) == turn_id
+            ),
+            None,
+        )
+        packet = next(item for item in packets if item.message_id == cancelled_user_message_id)
+        checks.append(
+            Check(
+                "abandoned_turn_is_auditable_but_excluded_from_context",
+                disposition in {"interrupted", "superseded"} and not packet.include,
+                f"durable disposition={disposition!r}, context include={packet.include}",
+            )
+        )
 
     _write_wav(output_dir / "agent-timeline.wav", _output_timeline(state), OUTPUT_RATE)
     (output_dir / "worker.log").write_bytes(worker_log)
