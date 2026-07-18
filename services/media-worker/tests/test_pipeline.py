@@ -317,6 +317,51 @@ async def test_interrupt_is_safe_while_listening(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stopped_persistent_worker_accepts_a_turn_after_participant_rejoins(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = FakePublisher()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+        events,
+    )
+    await pipeline.start()
+    initial_generation = pipeline.engine.generation
+    await pipeline.stop()
+
+    assert pipeline.engine.state is ConversationState.IDLE
+
+    await pipeline.participant_connected()
+    await pipeline.handle_transcript("Can you hear me after reconnecting?")
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert pipeline.engine.generation > initial_generation
+    history = await store.replay("s1")
+    assert [item.source for item in history] == [
+        SourceKind.USER,
+        SourceKind.MODEL,
+        SourceKind.SYSTEM,
+    ]
+    assert [item.content.inline_text for item in history[:2]] == [
+        "Can you hear me after reconnecting?",
+        "First sentence. Second sentence.",
+    ]
+    assert [state[3] for state in events.states][-6:] == [
+        "session ended",
+        "participant reconnected",
+        "session ready after reconnect",
+        "transcription complete",
+        "model chunk ready",
+        "turn complete",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()

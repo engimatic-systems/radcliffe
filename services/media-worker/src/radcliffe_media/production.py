@@ -478,6 +478,13 @@ class EndpointProcessor(FrameProcessor):
         if self.voice is not None:
             await self.voice.resume()
 
+    async def participant_connected(self) -> None:
+        self.paused = False
+        self._reset_candidate()
+        self.idle_buffer.clear()
+        if self.voice is not None:
+            await self.voice.participant_connected()
+
     async def stop(self) -> None:
         self.paused = True
         await self._cancel_current_turn()
@@ -585,7 +592,13 @@ async def run() -> None:
         if not await controls.handle(data):
             logger.warning("ignored unsupported Protocol v2 client event")
 
+    async def on_participant_connected(
+        _transport: RadcliffeLiveKitTransport, _participant_id: str
+    ) -> None:
+        await endpoint.participant_connected()
+
     transport.add_event_handler("on_data_received", on_data_received)
+    transport.add_event_handler("on_participant_connected", on_participant_connected)
     pipeline = Pipeline([transport.input(), endpoint, transport.output()])
     worker = PipelineWorker(
         pipeline,

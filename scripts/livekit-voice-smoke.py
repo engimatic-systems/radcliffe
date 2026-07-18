@@ -564,12 +564,10 @@ async def run(commit: str) -> int:
         finally:
             await stream.aclose()
 
-    @room.on("track_subscribed")
     def on_track_subscribed(track, _publication, participant) -> None:
         if participant.identity == worker_identity and track.kind == rtc.TrackKind.KIND_AUDIO:
             state.capture_tasks.append(asyncio.create_task(capture(track)))
 
-    @room.on("data_received")
     def on_data_received(packet: rtc.DataPacket) -> None:
         event = protocol_pb2.ServerEvent()
         try:
@@ -580,6 +578,12 @@ async def run(commit: str) -> int:
             state.events.append(TimedEvent(time.monotonic(), event))
             if event.HasField("playback_segment"):
                 playback.announce(event.playback_segment)
+
+    def bind_room(active_room: rtc.Room) -> None:
+        active_room.on("track_subscribed")(on_track_subscribed)
+        active_room.on("data_received")(on_data_received)
+
+    bind_room(room)
 
     try:
         await room.connect(credentials["livekit_url"], credentials["participant_token"])
@@ -1432,6 +1436,96 @@ async def run(commit: str) -> int:
                 f"sidecar cancellation counter advanced {cancelled_before} -> {cancelled_after}",
             )
         )
+
+        stop_index = len(state.events)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_STOP, worker_identity, playback)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    stop_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_IDLE
+                        and event.state_changed.reason == "session ended"
+                    ),
+                )
+                is not None
+            ),
+            5,
+        )
+        await room.disconnect()
+        async with httpx.AsyncClient(timeout=10) as client:
+            reopened_response = await client.post(
+                f"{control_url.rstrip('/')}/v1/sessions/{session_id}/credentials",
+                headers=enrolled.headers,
+                json={"participant_identity": "synthetic-voice-conformance"},
+            )
+            reopened_response.raise_for_status()
+            reopened_credentials = reopened_response.json()
+
+        rejoin_index = len(state.events)
+        room = rtc.Room()
+        bind_room(room)
+        await room.connect(
+            reopened_credentials["livekit_url"],
+            reopened_credentials["participant_token"],
+        )
+        await wait_until(lambda: worker_identity in room.remote_participants, 30)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    rejoin_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
+                        and event.state_changed.reason == "session ready after reconnect"
+                    ),
+                )
+                is not None
+            ),
+            5,
+        )
+        rejoined_livekit_source = rtc.AudioSource(INPUT_RATE, 1)
+        rejoined_source = RecordingAudioSource(rejoined_livekit_source, state)
+        rejoined_track = rtc.LocalAudioTrack.create_audio_track(
+            "synthetic-microphone-rejoined", rejoined_livekit_source
+        )
+        rejoined_options = rtc.TrackPublishOptions()
+        rejoined_options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
+        await room.local_participant.publish_track(rejoined_track, rejoined_options)
+        await asyncio.sleep(0.5)
+
+        rejoined_turn_index = len(state.events)
+        await publish_audio(rejoined_source, utterances["turn-two"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    rejoined_turn_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        rejoined_models = [
+            item.event.message.content.inline_text.casefold()
+            for item in state.events[rejoined_turn_index:]
+            if item.event.HasField("message")
+            and item.event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+        ]
+        checks.append(
+            Check(
+                "stopped_worker_rearms_after_client_rejoin",
+                len(rejoined_models) == 1 and "blue" in rejoined_models[0],
+                f"model messages after stop/disconnect/rejoin: {rejoined_models!r}",
+            )
+        )
     except Exception as error:
         run_error = error
         checks.append(
@@ -1442,25 +1536,62 @@ async def run(commit: str) -> int:
             )
         )
     finally:
-        await room.disconnect()
+        cleanup_errors: list[str] = []
+        try:
+            await room.disconnect()
+        except Exception as error:
+            cleanup_errors.append(f"room disconnect: {type(error).__name__}: {error}")
         for task in state.capture_tasks:
             task.cancel()
         await asyncio.gather(*state.capture_tasks, return_exceptions=True)
-        if worker.returncode is None:
-            worker.terminate()
         try:
-            await asyncio.wait_for(worker.wait(), timeout=10)
-        except TimeoutError:
-            worker.kill()
-            await worker.wait()
-        await worker_log_task
-        async with httpx.AsyncClient(timeout=10) as client:
-            archive = await client.patch(
-                f"{control_url.rstrip('/')}/v1/sessions/{session_id}",
-                headers=enrolled.headers,
-                json={"status": "archived"},
+            if worker.returncode is None:
+                worker.terminate()
+            try:
+                await asyncio.wait_for(worker.wait(), timeout=10)
+            except TimeoutError:
+                worker.kill()
+                await worker.wait()
+            await worker_log_task
+        except Exception as error:
+            cleanup_errors.append(f"worker shutdown: {type(error).__name__}: {error}")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                archive = await client.patch(
+                    f"{control_url.rstrip('/')}/v1/sessions/{session_id}",
+                    headers=enrolled.headers,
+                    json={"status": "archived"},
+                )
+                archive.raise_for_status()
+                recent = await client.get(
+                    f"{control_url.rstrip('/')}/v1/sessions?limit=100",
+                    headers=enrolled.headers,
+                )
+                recent.raise_for_status()
+                visible_ids = {str(item["session_id"]) for item in recent.json().get("items", [])}
+            checks.append(
+                Check(
+                    "archived_conformance_session_is_hidden_from_recent_catalog",
+                    session_id not in visible_ids,
+                    (
+                        "archived test session is absent from the default device catalog"
+                        if session_id not in visible_ids
+                        else "archived test session leaked into the default device catalog"
+                    ),
+                )
             )
-            archive.raise_for_status()
+        except Exception as error:
+            cleanup_errors.append(f"session archive: {type(error).__name__}: {error}")
+        if cleanup_errors:
+            checks.append(
+                Check(
+                    "conformance_cleanup",
+                    False,
+                    "; ".join(cleanup_errors),
+                )
+            )
+            if run_error is None:
+                run_error = RuntimeError("; ".join(cleanup_errors))
 
     envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
     packets = context_replay(envelopes)

@@ -195,6 +195,21 @@ class VoicePipeline:
         self.engine.ready()
         await self._notify_state(previous, "session ready")
 
+    async def participant_connected(self) -> None:
+        """Re-arm a stopped persistent worker for a newly joined client."""
+        async with self._coordinator:
+            if self.engine.state not in {
+                ConversationState.IDLE,
+                ConversationState.FAILED,
+            }:
+                return
+            previous = self.engine.state
+            self.engine.connect()
+            await self._notify_state(previous, "participant reconnected")
+            previous = self.engine.state
+            self.engine.ready()
+            await self._notify_state(previous, "session ready after reconnect")
+
     async def barge_in(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
         if self.engine.state is ConversationState.PAUSED:
