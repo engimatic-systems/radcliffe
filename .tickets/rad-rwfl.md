@@ -1,6 +1,6 @@
 ---
 id: rad-rwfl
-status: in_progress
+status: closed
 deps: [rad-214n]
 links: [rad-lo0t, rad-chaa, rad-214n, rad-ghti, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z, rad-fvx9]
 created: 2026-07-14T02:47:05Z
@@ -44,3 +44,7 @@ Added a configurable 30s maximum utterance boundary so intermittent noise/echo c
 **2026-07-15T03:43:46Z**
 
 2026-07-14 long-pause ownership increment passes locally: a 1.2s intra-request pause produced zero early agent-audio frames, the replacement clause had exactly one model owner, and first audio arrived in 2.038s. Endpoint tests also hold the first owner through the endpoint candidate before replacement. All automated short/long pause, noise, echo, frame-loss, tap, and speech-barge cases now pass. Remaining acceptance is explicit confirmation that the successful Pixel run used the physical speaker route (rather than headphones/Bluetooth), so the ticket remains open.
+
+**2026-07-16T21:46:31Z**
+
+2026-07-16 acceptance complete. Automated reports cover short/long natural pauses, tap and speech barge-in, rapid replacement, background babble, playback echo, frame loss, single model ownership, and sub-five-second latency; latest full evidence is artifacts/voice-conformance/20260716T214321Z/report.json. The tester then ran both physical Pixel speaker (without earbuds) and earbud paths and reported interruption works. This satisfies the remaining physical route gate.

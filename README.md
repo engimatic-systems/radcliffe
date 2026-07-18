@@ -145,6 +145,20 @@ Protocol v2 envelopes and state, and writes WAV plus JSON evidence under
 make check-voice-local
 ```
 
+Run the complete Oxford-derived local gate—including an isolated real
+control-plane restart, recent-session ordering/resume, exact context
+accounting, safe source-tool recovery, false-turn rejection, and the complete
+voice loop—with:
+
+```sh
+make check-conformance-local
+```
+
+The focused session layer is also available as `make check-session-local`. It
+uses a generated source root and SQLite database under
+`artifacts/session-conformance/`, records a redacted HTTP timeline, and never
+restarts or mutates the live phone control plane.
+
 The focused false-turn corpus is faster and covers digital silence, seeded room
 tone, post-AEC playback echo, nearby speech-like babble, foreground speech over
 continuing babble, a short noise burst, a 30-second sparse-spike endpoint, and
@@ -173,12 +187,12 @@ publication, interrupt acknowledgement, and audible interruption. It does not
 store private phone microphone audio. Use `make benchmark-stt-local` to compare
 the current turbo model and full large-v3 on the identical generated corpus.
 
-This is the first increment of rad-l1jc/rad-enbx. The remaining Oxford scenarios
-are added as their product contracts land: device-authored playback
-acknowledgements, randomized source workspaces, file mutation, broader
-restart/catalog ordering, and agent-controlled safe settings. Phone testing is
-reserved for Android lifecycle, Bluetooth controls, lock-screen behavior,
-network transitions, and UI rendering.
+The suite carries forward Oxford's useful behavioral contracts without copying
+its legacy transport. Unrestricted file mutation and agent-controlled settings
+are intentionally excluded from the current read-only capability policy;
+frontier-model probes remain explicitly budget-gated. Phone testing is reserved
+for Android lifecycle, Bluetooth controls, lock-screen behavior, network
+transitions, and UI rendering.
 
 Conformance rooms are archived after each run. They remain available through
 the authenticated catalog's `include_archived` diagnostic option but do not

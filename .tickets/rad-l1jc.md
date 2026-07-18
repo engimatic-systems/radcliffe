@@ -59,3 +59,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-16T21:45:39Z**
 
 2026-07-16 latest local acceptance evidence: production STT corpus passes 13/13 at macro WER 0.0 (artifacts/stt-conformance/20260716T214311Z/report.json); endpoint rejection corpus passes 14/14 including quiet-onset 'OK', babble, echo, silence, and short commands (artifacts/stt-rejection/20260716T214212Z/report.json); full LiveKit/Whisper/Ollama/TTS run passes 34/34 including babble preservation, speech barge-in, abandoned-turn exclusion, exact source bytes, persisted source resume, and no model emoji (artifacts/voice-conformance/20260716T214321Z/report.json). Dashboard republished under ~/agent-share/radcliffe/voice-tests/.
+
+**2026-07-16T21:55:56Z**
+
+2026-07-16 the unified make check-conformance-local gate is green: isolated durable-session/restart 24/24, false-turn rejection 14/14, STT 13/13 at macro WER 0.0, and full voice 34/34. Dashboard now indexes 85 latest green checks at ~/agent-share/radcliffe/voice-tests/index.html. Latest voice evidence: artifacts/voice-conformance/20260716T215340Z/report.json.
