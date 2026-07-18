@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import subprocess
 import time
 import wave
@@ -723,6 +724,93 @@ async def run(commit: str) -> int:
                 {"latency_seconds": round(source_latency, 3)},
             )
         )
+        await asyncio.sleep(0.8)
+        source_pause_started = time.monotonic()
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    source_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_PAUSED
+                        and event.state_changed.reason == "paused"
+                    ),
+                )
+                is not None
+            ),
+            5,
+        )
+        source_pause_event = _event_after(
+            state,
+            source_index,
+            lambda event: (
+                event.HasField("state_changed")
+                and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_PAUSED
+                and event.state_changed.reason == "paused"
+            ),
+        )
+        assert source_pause_event is not None
+        source_pause_ack = source_pause_event.received_at - source_pause_started
+        await wait_for_output_silence(
+            state,
+            after=source_pause_started,
+            silence_seconds=0.5,
+            limit_seconds=5,
+        )
+        source_audio_after_pause = [
+            item.received_at
+            for item in state.output
+            if source_pause_started < item.received_at <= source_pause_started + 1.2
+            and _active(item.pcm)
+        ]
+        source_pause_stop = (
+            max(source_audio_after_pause) - source_pause_started if source_audio_after_pause else 0
+        )
+        checks.append(
+            Check(
+                "source_pause_stops_heard_audio",
+                source_pause_ack < 0.3 and source_pause_stop < 0.5,
+                (
+                    f"pause acknowledged in {source_pause_ack:.3f}s; "
+                    f"last source audio at {source_pause_stop:.3f}s"
+                ),
+                {
+                    "acknowledgement_seconds": round(source_pause_ack, 3),
+                    "stop_seconds": round(source_pause_stop, 3),
+                },
+            )
+        )
+
+        source_resume_index = len(state.events)
+        source_resume_started = time.monotonic()
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    source_resume_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_READING
+                        and event.state_changed.reason == "resumed"
+                    ),
+                )
+                is not None
+            ),
+            5,
+        )
+        resumed_source_audio = await wait_for_audio_after(state, source_resume_started, 10)
+        source_resume_latency = resumed_source_audio - source_resume_started
+        checks.append(
+            Check(
+                "source_resume_returns_to_reading",
+                source_resume_latency < 3,
+                f"source audio resumed from its persisted boundary in {source_resume_latency:.3f}s",
+                {"latency_seconds": round(source_resume_latency, 3)},
+            )
+        )
         await wait_until(
             lambda: (
                 _event_after(
@@ -751,7 +839,7 @@ async def run(commit: str) -> int:
                 f"post-tool model messages: {source_models!r}",
             )
         )
-        await wait_for_output_silence(state, after=source_audio, limit_seconds=60)
+        await wait_for_output_silence(state, after=resumed_source_audio, limit_seconds=60)
 
         cosmic_index = len(state.events)
         await publish_audio(source, utterances["cosmic"])
@@ -1086,6 +1174,43 @@ async def run(commit: str) -> int:
 
     envelopes = await EventStore(output_dir / "events.sqlite3").replay(session_id)
     packets = context_replay(envelopes)
+    source_envelopes = [item for item in envelopes if item.source.value == "text_source"]
+    if source_envelopes:
+        source_message_id = source_envelopes[0].message_id
+        with sqlite3.connect(output_dir / "events.sqlite3") as database:
+            playback_rows = database.execute(
+                """SELECT segment_id, status, boundary_index
+                FROM playback_acknowledgements
+                WHERE session_id = ? AND segment_id LIKE ?
+                ORDER BY rowid""",
+                (session_id, f"{source_message_id}:%"),
+            ).fetchall()
+        first_segment = f"{source_message_id}:0"
+        started_first = sum(
+            segment_id == first_segment and status == "started"
+            for segment_id, status, _boundary in playback_rows
+        )
+        completed_boundary = max(
+            (
+                int(boundary)
+                for _segment_id, status, boundary in playback_rows
+                if status == "completed"
+            ),
+            default=0,
+        )
+        checks.append(
+            Check(
+                "source_resume_uses_persisted_playback_boundary",
+                len(source_envelopes) == 1
+                and started_first == 2
+                and any(status == "flushed" for _, status, _ in playback_rows)
+                and completed_boundary == 4,
+                (
+                    f"source envelopes={len(source_envelopes)}, first starts={started_first}, "
+                    f"final boundary={completed_boundary}, ledger={playback_rows!r}"
+                ),
+            )
+        )
     if cancelled_user_message_id is not None:
         cancelled_envelope = next(
             item for item in envelopes if item.message_id == cancelled_user_message_id

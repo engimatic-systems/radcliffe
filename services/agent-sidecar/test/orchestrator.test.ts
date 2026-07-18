@@ -5,7 +5,11 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { describe, expect, it, vi } from "vitest";
 
-import { convertRadcliffeContext, PiAgentOrchestrator } from "../src/orchestrator.js";
+import {
+  convertRadcliffeContext,
+  PiAgentOrchestrator,
+  RADCLIFFE_SYSTEM_PROMPT,
+} from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
 import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
 
@@ -32,6 +36,11 @@ function request(packets: ContextPacket[]): TurnRequest {
 }
 
 describe("PiAgentOrchestrator", () => {
+  it("instructs the model to normalize spoken filename punctuation", () => {
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dot M D");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dash");
+  });
+
   it("streams a normal answer and reconstructs projected history", async () => {
     const faux = createFauxCore({ provider: "radcliffe-test" });
     faux.setResponses([fauxAssistantMessage("A concise answer.")]);

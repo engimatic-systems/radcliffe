@@ -2,7 +2,7 @@
 id: rad-rwfl
 status: in_progress
 deps: [rad-214n]
-links: [rad-lo0t, rad-chaa, rad-214n, rad-ghti, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z]
+links: [rad-lo0t, rad-chaa, rad-214n, rad-ghti, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z, rad-fvx9]
 created: 2026-07-14T02:47:05Z
 type: task
 priority: 1

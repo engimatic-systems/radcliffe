@@ -141,9 +141,9 @@ store private phone microphone audio. Use `make benchmark-stt-local` to compare
 the current turbo model and full large-v3 on the identical generated corpus.
 
 This is the first increment of rad-l1jc/rad-enbx. The remaining Oxford scenarios
-are added as their product contracts land: resumable playback boundaries,
-randomized source workspaces, file mutation, session restart/catalog ordering,
-context-budget UI rendering, and agent-controlled safe settings. Phone testing is
+are added as their product contracts land: device-authored playback
+acknowledgements, randomized source workspaces, file mutation, broader
+restart/catalog ordering, and agent-controlled safe settings. Phone testing is
 reserved for Android lifecycle, Bluetooth controls, lock-screen behavior,
 network transitions, and UI rendering.
 
@@ -169,3 +169,6 @@ state/message events, validates an exact canonical source envelope across an
 isolated worker database, and measures both interrupt acknowledgement and the
 last heard audio after interruption. Its isolated database, worker log,
 generated inputs, returned-audio timeline, and report are retained together.
+The source scenario also pauses mid-sentence, verifies audible silence, resumes
+without another model/tool call, and audits flushed and completed sentence
+boundaries in SQLite.

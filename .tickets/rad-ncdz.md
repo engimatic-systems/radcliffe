@@ -2,7 +2,7 @@
 id: rad-ncdz
 status: open
 deps: [rad-l1jc]
-links: []
+links: [rad-l1jc, rad-lezo]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 0
@@ -27,3 +27,11 @@ An installable debug APK and LAN setup sheet are available in /Users/ravd/agent-
 **2026-07-14T02:46:33Z**
 
 User physically verified ordinary Pixel voice conversation and basic app controls on 2026-07-13. Remaining M1 acceptance is the exact read_source/provenance phone scenario plus stricter captured latency, persisted-boundary resume, lock-screen/hardware, and network-path evidence.
+
+**2026-07-15T03:54:21Z**
+
+2026-07-14 automated milestone evidence now includes the exact source plus persisted-boundary pause/resume: pause 3ms, audible stop 67ms, resume audio 535ms, one source envelope/tool execution, final boundary 4. Next manual gate is frontend/device behavior on the existing Pixel app: visible source provenance and app/notification pause-resume while hearing the fixture.
+
+**2026-07-15T04:12:34Z**
+
+2026-07-14 Pixel source-read failure was not an OS permission failure: Whisper/model supplied the literal spoken path 'Radcliffe dash demo dot MD'. Added literal-first, narrowly scoped spoken Markdown filename normalization while preserving original audited arguments and rooted traversal controls. Full suite passes and a deployed control-plane smoke resolved the request to fixtures/sources/radcliffe-demo.md.

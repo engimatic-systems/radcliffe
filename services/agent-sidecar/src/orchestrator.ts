@@ -50,9 +50,12 @@ const EMPTY_USAGE = {
 };
 
 export const RADCLIFFE_SYSTEM_PROMPT =
-  "You are Radcliffe. Use read_source for requests to read a file. Never recreate source text.";
+  "You are Radcliffe. Use read_source for requests to read a file. " +
+  "Convert spoken filename punctuation such as dash, hyphen, and dot M D into path characters. " +
+  "Never recreate source text.";
 export const READ_SOURCE_DESCRIPTION =
-  "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant.";
+  "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
+  "Normalize spoken filename punctuation before passing the path.";
 export const READ_SOURCE_PARAMETERS = Type.Object({
   path: Type.String({ minLength: 1, maxLength: 4096 }),
 });

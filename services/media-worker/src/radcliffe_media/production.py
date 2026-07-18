@@ -170,9 +170,16 @@ class EndpointProcessor(FrameProcessor):
 
     async def pause(self) -> None:
         self.paused = True
-        await self._cancel_current_turn()
+        self.speaking = False
+        self.buffer.clear()
         if self.voice is not None:
             await self.voice.pause()
+        turn_task = self.turn_task
+        if turn_task is not None and not turn_task.done():
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+        if self.turn_task is turn_task:
+            self.turn_task = None
 
     async def resume(self) -> None:
         self.paused = False
@@ -185,9 +192,18 @@ class EndpointProcessor(FrameProcessor):
         if self.voice is not None:
             await self.voice.stop()
 
-    async def publish(self, _segment_id: str, pcm_audio: bytes) -> int:
+    async def publish(
+        self,
+        _segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
         await self.push_frame(OutputAudioRawFrame(pcm_audio, 24000, 1))
-        return int(len(pcm_audio) / (2 * 24000) * 1000)
+        duration_ms = int(len(pcm_audio) / (2 * 24000) * 1000)
+        if wait_for_playback:
+            await asyncio.sleep(duration_ms / 1000)
+        return duration_ms
 
     async def flush(self) -> None:
         await self.push_frame(InterruptionFrame())

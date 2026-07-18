@@ -231,6 +231,15 @@ The server persists this ledger and uses it to:
 - distinguish generated speech from source reading; and
 - provide audio-grounded diagnostics to the acceptance suite.
 
+Until device acknowledgements are wired into the Android audio sink, the local
+foundation profile uses a conservative provisional cursor: canonical source
+segments remain active for their PCM duration, a pause records the unfinished
+sentence as `flushed`, and resume reads the last completed boundary from SQLite
+before replaying. It never marks the whole source complete merely because audio
+was enqueued, and it never invokes the model or source tool again to resume.
+Device-authored acknowledgements replace this provisional timing before the
+production release gate.
+
 ## 7. Message envelopes and the projection seam
 
 This is a mandatory architectural seam, even though the first release will
@@ -487,6 +496,13 @@ no severity-one loss of data, privacy, or recoverable session continuity.
 6. Route the typed `read_source` call through the read-only Tool Gateway and
    deterministic render path.
 7. Run the Milestone 1 conformance scenarios and record the Pixel demo.
+
+Voice-originated source requests may normalize only a small, documented set of
+filename punctuation after an exact path lookup fails: `dash` or `hyphen`
+between words and a terminal `dot M D`. The gateway must retain the original
+tool arguments in its audit event, resolve the normalized candidate beneath an
+explicit readable root, reject traversal and ambiguous case-insensitive
+matches, and keep the canonical source bytes out of the model context.
 
 Ticket-sized commits should follow that order on
 `epic/radcliffe-foundation`. The completed branch is reviewed and merged as one

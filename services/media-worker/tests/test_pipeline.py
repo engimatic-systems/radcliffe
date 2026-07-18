@@ -31,7 +31,14 @@ class FakePublisher:
         self.flushed = False
         self.published = asyncio.Event()
 
-    async def publish(self, segment_id: str, pcm_audio: bytes) -> int:
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        del wait_for_playback
         self.segment_ids.append(segment_id)
         self.audio.append(pcm_audio)
         self.published.set()
@@ -42,23 +49,62 @@ class FakePublisher:
 
 
 class FailFirstPublisher(FakePublisher):
-    async def publish(self, segment_id: str, pcm_audio: bytes) -> int:
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
         if not self.segment_ids:
             self.segment_ids.append(segment_id)
             raise RuntimeError("deterministic publish failure")
-        return await super().publish(segment_id, pcm_audio)
+        return await super().publish(
+            segment_id,
+            pcm_audio,
+            wait_for_playback=wait_for_playback,
+        )
+
+
+class PauseAtSecondBoundaryPublisher(FakePublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_boundary_started = asyncio.Event()
+        self.flush_count = 0
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        assert wait_for_playback
+        self.segment_ids.append(segment_id)
+        self.audio.append(pcm_audio)
+        if len(self.segment_ids) == 2:
+            self.second_boundary_started.set()
+            await asyncio.Event().wait()
+        return len(pcm_audio)
+
+    async def flush(self) -> None:
+        self.flushed = True
+        self.flush_count += 1
 
 
 class FakeEvents:
     def __init__(self) -> None:
         self.messages = []
         self.states = []
+        self.turn_completed = asyncio.Event()
 
     async def message(self, envelope) -> None:
         self.messages.append(envelope)
 
     async def state_changed(self, previous, current, generation, reason, operation=None) -> None:
         self.states.append((previous, current, generation, reason, operation))
+        if reason == "turn complete":
+            self.turn_completed.set()
 
 
 class AnswerOrchestrator:
@@ -74,9 +120,11 @@ class SourceOrchestrator:
     def __init__(self, gateway: ToolGateway, grant: CapabilityGrant) -> None:
         self.gateway = gateway
         self.grant = grant
+        self.calls = 0
 
     async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
         del cancelled
+        self.calls += 1
         result = await self.gateway.read_source(
             call_id="call-1",
             idempotency_key="idem-1",
@@ -313,6 +361,82 @@ async def test_shared_gateway_store_does_not_duplicate_transferred_source(tmp_pa
     sources = [item for item in await store.replay("s1") if item.source is SourceKind.TEXT_SOURCE]
     assert len(sources) == 1
     assert "".join(tts.inputs).encode() == canonical
+
+
+@pytest.mark.asyncio
+async def test_paused_source_resumes_from_persisted_sentence_boundary_without_new_tool_call(
+    tmp_path,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    (root / "demo.md").write_text("First sentence. Second sentence. Third sentence.")
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
+    grant = CapabilityGrant(
+        grant_id="grant-1",
+        session_id="s1",
+        generation=1,
+        readable_roots=(root,),
+        allowed_tools=frozenset({"read_source"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    orchestrator = SourceOrchestrator(ToolGateway(gateway_store), grant)
+    publisher = PauseAtSecondBoundaryPublisher()
+    tts = FakeSynthesizer()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        worker_store,
+        orchestrator,
+        tts,
+        publisher,
+        events,
+    )
+    await pipeline.start()
+
+    first_pass = asyncio.create_task(pipeline.handle_transcript("Read demo.md"))
+    await asyncio.wait_for(publisher.second_boundary_started.wait(), timeout=1)
+    await pipeline.pause()
+    await asyncio.wait_for(first_pass, timeout=1)
+
+    assert pipeline.engine.state is ConversationState.PAUSED
+    source = next(
+        item for item in await worker_store.replay("s1") if item.source is SourceKind.TEXT_SOURCE
+    )
+    assert await worker_store.playback_boundary("s1", f"{source.message_id}:0") == 1
+    assert await worker_store.playback_boundary("s1", f"{source.message_id}:1") == 1
+    assert publisher.flush_count == 1
+
+    await pipeline.resume()
+    await asyncio.wait_for(events.turn_completed.wait(), timeout=1)
+
+    assert orchestrator.calls == 1
+    assert publisher.segment_ids == [
+        f"{source.message_id}:0",
+        f"{source.message_id}:1",
+        f"{source.message_id}:1",
+        f"{source.message_id}:2",
+    ]
+    assert tts.inputs == [
+        "First sentence. ",
+        "Second sentence. ",
+        "Second sentence. ",
+        "Third sentence.",
+    ]
+    assert await worker_store.playback_boundary("s1", f"{source.message_id}:2") == 3
+    dispositions = [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in await worker_store.replay("s1")
+        if item.metadata.get(TURN_DISPOSITION_METADATA)
+    ]
+    assert dispositions == ["completed"]
+    assert [state[1] for state in events.states][-3:] == [
+        ConversationState.PAUSED,
+        ConversationState.READING,
+        ConversationState.LISTENING,
+    ]
 
 
 @pytest.mark.asyncio
