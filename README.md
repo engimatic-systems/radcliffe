@@ -220,4 +220,7 @@ attempt IDs were persisted by the worker. Its isolated database, worker log,
 generated inputs, returned-audio timeline, and report are retained together.
 The source scenario pauses mid-sentence, verifies audible silence, resumes
 without another model/tool call, and audits device-authored flushed and
-completed sentence boundaries in SQLite.
+completed sentence boundaries in SQLite. Successful canonical source rendering
+is terminal for its assistant turn, so a provider postamble cannot add a model
+message after the source; model text is also filtered through the deterministic
+no-emoji output policy before TTS or persistence.

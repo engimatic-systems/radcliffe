@@ -38,6 +38,33 @@ from radcliffe_media.sidecar import SidecarEvent
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
 
 
+def _is_emoji_base(character: str) -> bool:
+    codepoint = ord(character)
+    return 0x1F000 <= codepoint <= 0x1FAFF or 0x2600 <= codepoint <= 0x27BF
+
+
+def _canonical_model_text(value: str) -> str:
+    canonical: list[str] = []
+    removed_emoji = False
+    for index, character in enumerate(value):
+        codepoint = ord(character)
+        next_is_emoji = index + 1 < len(value) and _is_emoji_base(value[index + 1])
+        if _is_emoji_base(character):
+            removed_emoji = True
+            continue
+        if codepoint == 0xFE0F and removed_emoji:
+            continue
+        if codepoint == 0x200D and (removed_emoji or next_is_emoji):
+            removed_emoji = True
+            continue
+        if codepoint == 0x20E3 and canonical and canonical[-1] in "#*0123456789":
+            removed_emoji = False
+            continue
+        canonical.append(character)
+        removed_emoji = False
+    return "".join(canonical)
+
+
 @dataclass(slots=True)
 class _ActiveTurn:
     turn_id: str
@@ -289,8 +316,10 @@ class VoicePipeline:
             if turn.cancelled.is_set():
                 break
             self._assert_owner(turn, operation)
-            if event.type == "model_delta":
-                delta = str(event.payload.get("text", ""))
+            if event.type == "model_delta" and not source_rendered:
+                delta = _canonical_model_text(str(event.payload.get("text", "")))
+                if not delta:
+                    continue
                 if turn.first_model_delta_at is None:
                     turn.first_model_delta_at = monotonic()
                     self._log_phase(
@@ -317,8 +346,11 @@ class VoicePipeline:
                     await self._speak_plan(source, operation, turn)
                     source_rendered = True
                     buffer = ""
-            elif event.type == "model_complete":
-                turn.model_text = str(event.payload.get("text", turn.model_text))
+                    turn.model_text = turn.rendered_model_text
+            elif event.type == "model_complete" and not source_rendered:
+                turn.model_text = _canonical_model_text(
+                    str(event.payload.get("text", turn.model_text))
+                )
             elif event.type == "error":
                 raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
 
