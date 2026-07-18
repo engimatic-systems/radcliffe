@@ -87,7 +87,9 @@ The LAN launcher defaults are:
 - `RADCLIFFE_MODEL_ID=qwen3:8b`
 - `RADCLIFFE_SPEECH_PROVIDER=local`
 - `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
+- `RADCLIFFE_WHISPER_INITIAL_PROMPT=Radcliffe vocabulary: ...`
 - `RADCLIFFE_TTS_VOICE=Samantha`
+- `RADCLIFFE_MODEL_CHUNK_CHARS=240`
 
 Install and cache the local runtime before starting the launchers:
 
@@ -106,12 +108,45 @@ access.
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
-`RADCLIFFE_ENDPOINT_RMS`. If a later endpoint does arrive while a turn is
-active, the newer transcript deterministically supersedes and awaits the old
-turn before model work begins.
+`RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 30
+seconds so intermittent noise cannot hold one endpoint open indefinitely.
+Model speech flushes on sentence and completed-line
+boundaries, with `RADCLIFFE_MODEL_CHUNK_CHARS` providing an upper bound for
+punctuation-poor output. Phase logs report endpointing, transcription, first
+model delta, synthesis, publish, and first-audio timings without message
+content. If a later endpoint does arrive while a turn is active, the newer
+transcript deterministically supersedes and awaits the old turn before model
+work begins.
 
-With the local services and `radcliffe-demo` worker running, exercise the same
-LiveKit audio and Protocol v2 paths without a phone:
+### Local voice conformance
+
+The Oxford-derived local acceptance suite keeps routine voice verification off
+the phone. It generates seeded microphone audio, runs the selected local STT,
+drives the real LiveKit room, captures what the client heard, cross-checks
+Protocol v2 envelopes and state, and writes WAV plus JSON evidence under
+`artifacts/`:
+
+```sh
+make check-voice-local
+```
+
+The current core covers command-level STT WER and vocabulary recall, multiple
+English voices, a natural pause, deterministic noise/echo/frame loss, paused
+microphone suppression, a normal response within five seconds, model-message
+publication, interrupt acknowledgement, and audible interruption. It does not
+store private phone microphone audio. Use `make benchmark-stt-local` to compare
+the current turbo model and full large-v3 on the identical generated corpus.
+
+This is the first increment of rad-l1jc/rad-enbx. The remaining Oxford scenarios
+are added as their product contracts land: resumable playback boundaries,
+randomized source workspaces, file mutation, session restart/catalog ordering,
+context-budget accounting, and agent-controlled safe settings. Phone testing is
+reserved for Android lifecycle, Bluetooth controls, lock-screen behavior,
+network transitions, and UI rendering.
+
+With LiveKit, the control plane, and the Pi sidecar running, exercise the same
+LiveKit audio and Protocol v2 paths without a phone. The harness creates a
+fresh session and starts an isolated worker automatically:
 
 ```sh
 set -a
@@ -121,8 +156,8 @@ RADCLIFFE_CONTROL_URL=http://127.0.0.1:8000 \
   uv run python scripts/livekit-voice-smoke.py
 ```
 
-The smoke client synthesizes microphone input, proves paused speech does not
-become a turn, requires return audio within five seconds, verifies binary
-state/message events, and requires interrupt acknowledgement within 500 ms.
-Its generated user/model envelopes are persisted in the configured demo
-session just like a physical client turn.
+The client synthesizes microphone input, proves paused speech does not become a
+turn, requires five consecutive responses within five seconds, verifies binary
+state/message events, and measures both interrupt acknowledgement and the last
+heard audio after interruption. Its isolated database, worker log, generated
+inputs, returned-audio timeline, and report are retained together.

@@ -2,7 +2,7 @@
 id: rad-l1jc
 status: in_progress
 deps: [rad-wnwh, rad-8i08, rad-h2lv, rad-ihso, rad-g7di, rad-au20, rad-ghti]
-links: [rad-enbx]
+links: [rad-enbx, rad-rwfl, rad-ghti, rad-9e2z]
 created: 2026-07-13T01:37:26Z
 type: task
 priority: 1
@@ -31,3 +31,11 @@ Added scripts/livekit-voice-smoke.py as the first external live-room harness tow
 **2026-07-14T02:46:33Z**
 
 Physical exploratory run confirms the basic Pixel voice/control loop. It also supplied two valuable regression scenarios for the external suite: interrupted unanswered prompts must not bleed into the next projection, and a mid-utterance endpoint split must not create overlapping model completions or invalid state transitions.
+
+**2026-07-14T04:59:00Z**
+
+2026-07-13 tester feedback narrows manual acceptance to frontend-only behavior. Expand the local harness using Oxford audio-first patterns: seeded synthetic microphone audio, heard-output capture, state/envelope cross-checks, transcripts, latency, and retained artifacts. STT corpus and model selection are tracked by rad-9e2z.
+
+**2026-07-14T05:26:25Z**
+
+Oxford-derived black-box harness now creates an isolated LiveKit session and temporary worker store, paces seeded microphone WAVs in real time, captures heard agent audio into a timeline WAV, cross-checks Protocol v2 state/envelopes, and retains inputs/log/report. Local provider run passed pause suppression, exact normal and Cosmic-command STT, five consecutive <5s responses (2.144-2.680s), model content, 9ms interrupt acknowledgement, and 44ms audible stop. Evidence: artifacts/voice-conformance/20260714T052441Z/report.json. Routine backend/audio verification is now local; phone review remains for Android/WebRTC/UI behavior.

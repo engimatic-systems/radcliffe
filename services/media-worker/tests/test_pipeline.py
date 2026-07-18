@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -24,14 +25,26 @@ class FakeSynthesizer:
 class FakePublisher:
     def __init__(self) -> None:
         self.audio: list[bytes] = []
+        self.segment_ids: list[str] = []
         self.flushed = False
+        self.published = asyncio.Event()
 
-    async def publish(self, _segment_id: str, pcm_audio: bytes) -> int:
+    async def publish(self, segment_id: str, pcm_audio: bytes) -> int:
+        self.segment_ids.append(segment_id)
         self.audio.append(pcm_audio)
+        self.published.set()
         return len(pcm_audio)
 
     async def flush(self) -> None:
         self.flushed = True
+
+
+class FailFirstPublisher(FakePublisher):
+    async def publish(self, segment_id: str, pcm_audio: bytes) -> int:
+        if not self.segment_ids:
+            self.segment_ids.append(segment_id)
+            raise RuntimeError("deterministic publish failure")
+        return await super().publish(segment_id, pcm_audio)
 
 
 class FakeEvents:
@@ -115,6 +128,53 @@ class RepeatingInterruptOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class RecoveringOrchestrator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        self.calls += 1
+        if self.calls == 1:
+            yield SidecarEvent("model_delta", {"text": "Audible first. "})
+            yield SidecarEvent("model_delta", {"text": "- **Cosmic touch:** Moon 🌙"})
+            yield SidecarEvent(
+                "model_complete",
+                {"text": "Audible first. - **Cosmic touch:** Moon 🌙"},
+            )
+        else:
+            yield SidecarEvent("model_delta", {"text": "Recovered."})
+            yield SidecarEvent("model_complete", {"text": "Recovered."})
+        yield SidecarEvent("complete", {})
+
+
+class FailSecondSynthesis:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def synthesize(self, canonical_text: str) -> bytes:
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("deterministic synthesis failure")
+        return canonical_text.encode()
+
+
+class PunctuationPoorOrchestrator:
+    def __init__(self) -> None:
+        self.waiting = asyncio.Event()
+        self.release = asyncio.Event()
+        self.text = "- **Cosmic touch:** " + "🌑 🌒 🌓 🌔 🌕 " * 8 + "\n"
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent("model_delta", {"text": self.text})
+        self.waiting.set()
+        await self.release.wait()
+        yield SidecarEvent("model_delta", {"text": "Done."})
+        yield SidecarEvent("model_complete", {"text": self.text + "Done."})
+        yield SidecarEvent("complete", {})
+
+
 @pytest.mark.asyncio
 async def test_interrupt_is_safe_while_listening(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
@@ -194,12 +254,14 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
     await store.migrate()
     orchestrator = InterruptibleOrchestrator()
     publisher = FakePublisher()
+    events = FakeEvents()
     pipeline = VoicePipeline(
         "s1",
         store,
         orchestrator,
         FakeSynthesizer(),
         publisher,
+        events,
     )
     await pipeline.start()
 
@@ -228,6 +290,14 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
     )
     assert pipeline.engine.state is ConversationState.LISTENING
     assert publisher.flushed
+    partial_messages = [
+        item
+        for item in events.messages
+        if item.source is SourceKind.MODEL and item.content.inline_text == "One. "
+    ]
+    assert len(partial_messages) == 1
+    assert partial_messages[0].metadata["radcliffe.partial"] == "true"
+    assert partial_messages[0].metadata["radcliffe.rendered_chars"] == "5"
 
 
 @pytest.mark.asyncio
@@ -266,3 +336,116 @@ async def test_repeated_cancellation_races_never_reinclude_abandoned_prompts(tmp
     assert dispositions.count("superseded") == 10
     assert dispositions.count("completed") == 10
     assert pipeline.engine.state is ConversationState.LISTENING
+
+
+@pytest.mark.asyncio
+async def test_failed_tts_publishes_heard_partial_and_next_turn_recovers(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = FakePublisher()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        RecoveringOrchestrator(),
+        FailSecondSynthesis(),
+        publisher,
+        events,
+    )
+    await pipeline.start()
+
+    with pytest.raises(RuntimeError, match="deterministic synthesis failure"):
+        await pipeline.handle_transcript("Give me a cosmic response")
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert publisher.flushed
+    replay = await store.replay("s1")
+    model_messages = [item for item in replay if item.source is SourceKind.MODEL]
+    assert [item.content.inline_text for item in model_messages] == ["Audible first. "]
+    assert model_messages[0].metadata["radcliffe.partial"] == "true"
+    assert model_messages[0].metadata["radcliffe.rendered_chars"] == "15"
+    published_models = [item for item in events.messages if item.source is SourceKind.MODEL]
+    assert published_models == model_messages
+    assert [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in replay
+        if TURN_DISPOSITION_METADATA in item.metadata
+    ] == ["failed"]
+    assert not any(
+        packet.include and packet.content in {"Give me a cosmic response", "Audible first. "}
+        for packet in context_replay(replay)
+    )
+
+    await pipeline.handle_transcript("Try another turn")
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    replay = await store.replay("s1")
+    assert [item.content.inline_text for item in replay if item.source is SourceKind.MODEL] == [
+        "Audible first. ",
+        "Recovered.",
+    ]
+    assert [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in replay
+        if TURN_DISPOSITION_METADATA in item.metadata
+    ] == ["failed", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_failed_publish_closes_the_playback_audit_and_recovers(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = FailFirstPublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+    )
+    await pipeline.start()
+
+    with pytest.raises(RuntimeError, match="deterministic publish failure"):
+        await pipeline.handle_transcript("Fail this playback")
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert publisher.flushed
+    with sqlite3.connect(store.path) as database:
+        statuses = [
+            row[0]
+            for row in database.execute(
+                "SELECT status FROM playback_acknowledgements ORDER BY rowid"
+            )
+        ]
+    assert statuses == ["started", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_punctuation_poor_output_streams_before_model_completion(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = PunctuationPoorOrchestrator()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        tts,
+        publisher,
+        model_chunk_chars=40,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Make an emoji mandala"))
+    await asyncio.wait_for(publisher.published.wait(), timeout=1)
+    await asyncio.wait_for(orchestrator.waiting.wait(), timeout=1)
+
+    assert not turn.done()
+    assert publisher.audio
+    orchestrator.release.set()
+    await asyncio.wait_for(turn, timeout=1)
+
+    assert "".join(tts.inputs) == orchestrator.text + "Done."
+    assert len(publisher.segment_ids) == len(set(publisher.segment_ids))
+    assert all(len(chunk) <= 40 for chunk in tts.inputs[:-1])

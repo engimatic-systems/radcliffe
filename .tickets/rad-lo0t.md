@@ -1,6 +1,6 @@
 ---
 id: rad-lo0t
-status: open
+status: closed
 deps: []
 links: [rad-rwfl, rad-chaa, rad-214n, rad-ghti, rad-nu8n]
 created: 2026-07-14T04:05:29Z
@@ -21,3 +21,9 @@ On interruption or failure, persist the accumulated model text before its termin
 ## Acceptance Criteria
 
 Audible accumulated model text is persisted and published for completed, interrupted, and failed turns; each logical model response produces no duplicate MODEL envelope; disposition metadata makes partial versus completed reconstruction deterministic; no unheard speculative tail is presented as rendered; failed and interrupted output remains excluded from subsequent LLM context; tests cover the observed heard-then-failed response and an interrupted partial response.
+
+## Notes
+
+**2026-07-14T04:13:51Z**
+
+Implemented on fix/voice-output-hardening: completed responses publish once after successful rendering; interrupted and failed turns publish exactly one partial MODEL envelope containing only the successfully rendered prefix with rendered_chars metadata. Disposition replay excludes failed and interrupted turns from model context. Completed, superseded, and heard-then-failed regressions pass.

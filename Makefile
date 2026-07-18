@@ -1,4 +1,5 @@
-.PHONY: bootstrap check check-python check-node check-android demo generate-protocol test-python test-node
+.PHONY: bootstrap check check-python check-node check-android check-voice-local \
+	benchmark-stt-local demo generate-protocol test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
@@ -30,3 +31,9 @@ test-node:
 
 check-android:
 	JAVA_HOME="$${JAVA_HOME:-$$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home}" ANDROID_HOME="$${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}" ./apps/android/gradlew -p apps/android testDebugUnitTest lint
+
+check-voice-local:
+	./scripts/run-local-conformance.sh
+
+benchmark-stt-local:
+	uv run python scripts/stt-conformance.py --profiles all

@@ -2,23 +2,63 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import subprocess
 import time
+import wave
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import numpy as np
+from google.protobuf.json_format import MessageToDict
 from livekit import rtc
 from radcliffe_media.speech import LocalAppleSpeechProvider
+from radcliffe_media.speech_quality import assess_transcript
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
+ROOT = Path(__file__).resolve().parent.parent
+INPUT_RATE = 16000
+OUTPUT_RATE = 24000
+FRAME_SAMPLES = 320
 
-@dataclass
+
+@dataclass(frozen=True, slots=True)
+class Utterance:
+    text: str
+    speech_pcm: bytes
+    pcm: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class TimedEvent:
+    received_at: float
+    event: protocol_pb2.ServerEvent
+
+
+@dataclass(frozen=True, slots=True)
+class TimedAudio:
+    received_at: float
+    pcm: bytes
+
+
+@dataclass(slots=True)
 class SmokeState:
-    output: bytearray = field(default_factory=bytearray)
-    events: list[protocol_pb2.ServerEvent] = field(default_factory=list)
+    started_at: float = field(default_factory=time.monotonic)
+    events: list[TimedEvent] = field(default_factory=list)
+    output: list[TimedAudio] = field(default_factory=list)
     capture_tasks: list[asyncio.Task[None]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class Check:
+    name: str
+    passed: bool
+    detail: str
+    measured: dict[str, object] = field(default_factory=dict)
 
 
 async def wait_until(predicate, limit_seconds: float = 30.0) -> None:
@@ -27,17 +67,82 @@ async def wait_until(predicate, limit_seconds: float = 30.0) -> None:
             await asyncio.sleep(0.05)
 
 
-async def pcm_16khz_async(provider: LocalAppleSpeechProvider, text: str) -> bytes:
+def _event_after(state: SmokeState, index: int, predicate) -> TimedEvent | None:
+    return next((item for item in state.events[index:] if predicate(item.event)), None)
+
+
+def _active(pcm: bytes, threshold: float = 300) -> bool:
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    if not samples.size:
+        return False
+    return math.sqrt(float(np.mean(samples**2))) >= threshold
+
+
+def _first_audio_after(state: SmokeState, timestamp: float) -> float | None:
+    return next(
+        (
+            item.received_at
+            for item in state.output
+            if item.received_at >= timestamp and _active(item.pcm)
+        ),
+        None,
+    )
+
+
+async def wait_for_audio_after(
+    state: SmokeState, timestamp: float, limit_seconds: float = 30
+) -> float:
+    await wait_until(lambda: _first_audio_after(state, timestamp) is not None, limit_seconds)
+    onset = _first_audio_after(state, timestamp)
+    assert onset is not None
+    return onset
+
+
+async def wait_for_output_silence(
+    state: SmokeState,
+    *,
+    after: float,
+    silence_seconds: float = 0.8,
+    limit_seconds: float = 30,
+) -> None:
+    cursor = 0
+    last_active = max(after, time.monotonic())
+    deadline = time.monotonic() + limit_seconds
+    while time.monotonic() < deadline:
+        for item in state.output[cursor:]:
+            if item.received_at >= after and _active(item.pcm):
+                last_active = item.received_at
+        cursor = len(state.output)
+        if time.monotonic() - last_active >= silence_seconds:
+            return
+        await asyncio.sleep(0.05)
+    raise TimeoutError("agent output never became silent")
+
+
+async def synthesize_utterance(voice: str, text: str) -> Utterance:
+    provider = LocalAppleSpeechProvider(voice=voice)
     pcm_24khz = await provider.synthesize(text)
-    waveform = provider._waveform(pcm_24khz, 24000, 1)
+    waveform = provider._waveform(pcm_24khz, OUTPUT_RATE, 1)
     speech = np.clip(waveform * 32768, -32768, 32767).astype("<i2").tobytes()
-    return speech + b"\x00\x00" * 16000
+    return Utterance(text, speech, speech + b"\x00\x00" * INPUT_RATE)
 
 
-async def publish_audio(source: rtc.AudioSource, pcm: bytes) -> None:
-    for offset in range(0, len(pcm), 320):
-        chunk = pcm[offset : offset + 320].ljust(320, b"\x00")
-        await source.capture_frame(rtc.AudioFrame(chunk, 16000, 1, 160))
+async def publish_audio(source: rtc.AudioSource, utterance: Utterance) -> tuple[float, float]:
+    started_at = time.monotonic()
+    next_frame_at = started_at
+    frame_bytes = FRAME_SAMPLES * 2
+    speech_frames = math.ceil(len(utterance.speech_pcm) / frame_bytes)
+    speech_ended_at = started_at
+    for frame_index, offset in enumerate(range(0, len(utterance.pcm), frame_bytes), start=1):
+        chunk = utterance.pcm[offset : offset + frame_bytes].ljust(frame_bytes, b"\x00")
+        await source.capture_frame(rtc.AudioFrame(chunk, INPUT_RATE, 1, FRAME_SAMPLES))
+        next_frame_at += FRAME_SAMPLES / INPUT_RATE
+        if frame_index == speech_frames:
+            speech_ended_at = next_frame_at
+        delay = next_frame_at - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+    return started_at, speech_ended_at
 
 
 async def send_control(room: rtc.Room, kind: int) -> None:
@@ -56,40 +161,132 @@ async def send_control(room: rtc.Room, kind: int) -> None:
     )
 
 
-async def run() -> None:
+def _write_wav(path: Path, pcm: bytes, sample_rate: int) -> None:
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(pcm)
+
+
+def _output_timeline(state: SmokeState) -> bytes:
+    output = tuple(item for item in state.output if item.received_at >= state.started_at)
+    if not output:
+        return b""
+    final_sample = max(
+        round((item.received_at - state.started_at) * OUTPUT_RATE) + len(item.pcm) // 2
+        for item in output
+    )
+    timeline = np.zeros(final_sample, dtype="<i2")
+    for item in output:
+        start = round((item.received_at - state.started_at) * OUTPUT_RATE)
+        samples = np.frombuffer(item.pcm, dtype="<i2")
+        timeline[start : start + len(samples)] = samples
+    return timeline.tobytes()
+
+
+def _proto_event(item: TimedEvent, started_at: float) -> dict[str, object]:
+    return {
+        "received_seconds": round(item.received_at - started_at, 4),
+        "event": MessageToDict(item.event, preserving_proto_field_name=True),
+    }
+
+
+async def run(commit: str) -> int:
     control_url = os.environ.get("RADCLIFFE_CONTROL_URL", "http://127.0.0.1:8000")
     bootstrap_token = os.environ.get("RADCLIFFE_BOOTSTRAP_TOKEN")
-    session_id = os.environ.get("RADCLIFFE_SESSION_ID", "radcliffe-demo")
+    session_id = os.environ.get(
+        "RADCLIFFE_CONFORMANCE_SESSION_ID",
+        f"radcliffe-conformance-{uuid4().hex[:12]}",
+    )
     if not bootstrap_token:
         raise RuntimeError("RADCLIFFE_BOOTSTRAP_TOKEN is required")
 
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output_dir = ROOT / "artifacts" / "voice-conformance" / stamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    utterances = {
+        "paused": await synthesize_utterance(
+            "Daniel", "This paused speech must not become a message."
+        ),
+        "normal": await synthesize_utterance(
+            "Karen", "What color do red and blue paint make? Reply with one word."
+        ),
+        "turn-two": await synthesize_utterance("Moira", "Reply with exactly blue."),
+        "turn-three": await synthesize_utterance("Fred", "Reply with exactly seven."),
+        "turn-four": await synthesize_utterance("Daniel", "Reply with exactly finished."),
+        "cosmic": await synthesize_utterance(
+            "Samantha",
+            "Please start your response exactly with dash, bold Cosmic touch, "
+            "then give me a moon fact.",
+        ),
+        "interrupt": await synthesize_utterance(
+            "Tessa", "Tell me a five sentence story about a lighthouse."
+        ),
+    }
+    for name, utterance in utterances.items():
+        _write_wav(output_dir / f"user-{name}.wav", utterance.pcm, INPUT_RATE)
+
     async with httpx.AsyncClient(timeout=10) as client:
+        worker_response = await client.post(
+            f"{control_url.rstrip('/')}/v1/sessions",
+            headers={"Authorization": f"Bearer {bootstrap_token}"},
+            json={
+                "session_id": session_id,
+                "participant_identity": "radcliffe-worker",
+                "role": "worker",
+            },
+        )
+        worker_response.raise_for_status()
+        worker_credentials = worker_response.json()
         response = await client.post(
             f"{control_url.rstrip('/')}/v1/sessions",
             headers={"Authorization": f"Bearer {bootstrap_token}"},
             json={
                 "session_id": session_id,
-                "participant_identity": "synthetic-voice-smoke",
+                "participant_identity": "synthetic-voice-conformance",
                 "role": "client",
             },
         )
         response.raise_for_status()
         credentials = response.json()
 
-    provider = LocalAppleSpeechProvider()
-    paused_audio, resumed_audio, interrupted_audio = await asyncio.gather(
-        pcm_16khz_async(provider, "This paused speech must not become a message."),
-        pcm_16khz_async(provider, "Reply with exactly: voice controls work."),
-        pcm_16khz_async(provider, "Tell me a five sentence story about a lighthouse."),
+    worker_environment = {
+        **os.environ,
+        "RADCLIFFE_SESSION_ID": session_id,
+        "RADCLIFFE_LIVEKIT_URL": worker_credentials["livekit_url"],
+        "RADCLIFFE_LIVEKIT_TOKEN": worker_credentials["participant_token"],
+        "RADCLIFFE_DATABASE_PATH": str(output_dir / "events.sqlite3"),
+    }
+    worker = await asyncio.create_subprocess_exec(
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "radcliffe_media.production",
+        cwd=ROOT,
+        env=worker_environment,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
+    worker_log = bytearray()
+
+    async def capture_worker_log() -> None:
+        assert worker.stdout is not None
+        while chunk := await worker.stdout.read(8192):
+            worker_log.extend(chunk)
+
+    worker_log_task = asyncio.create_task(capture_worker_log())
+
     room = rtc.Room()
     state = SmokeState()
+    checks: list[Check] = []
 
     async def capture(track: rtc.Track) -> None:
-        stream = rtc.AudioStream(track, sample_rate=24000, num_channels=1)
+        stream = rtc.AudioStream(track, sample_rate=OUTPUT_RATE, num_channels=1)
         try:
             async for event in stream:
-                state.output.extend(bytes(event.frame.data))
+                state.output.append(TimedAudio(time.monotonic(), bytes(event.frame.data)))
         finally:
             await stream.aclose()
 
@@ -106,113 +303,414 @@ async def run() -> None:
         except Exception:
             return
         if event.protocol_version == 2:
-            state.events.append(event)
+            state.events.append(TimedEvent(time.monotonic(), event))
 
     await room.connect(credentials["livekit_url"], credentials["participant_token"])
-    source = rtc.AudioSource(16000, 1)
+    await wait_until(lambda: "radcliffe-worker" in room.remote_participants, 30)
+    state.started_at = time.monotonic()
+    source = rtc.AudioSource(INPUT_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", source)
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
     await room.local_participant.publish_track(track, options)
     await asyncio.sleep(0.5)
 
-    await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
-    await wait_until(
-        lambda: any(
-            event.HasField("state_changed")
-            and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_PAUSED
-            for event in state.events
+    try:
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    0,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_PAUSED
+                    ),
+                )
+                is not None
+            )
         )
-    )
-    message_count = sum(event.HasField("message") for event in state.events)
-    await publish_audio(source, paused_audio)
-    await asyncio.sleep(1)
-    pause_blocked_turn = sum(event.HasField("message") for event in state.events) == message_count
-
-    state.output.clear()
-    await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME)
-    await wait_until(
-        lambda: any(
-            event.HasField("state_changed")
-            and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
-            and event.state_changed.reason == "resumed"
-            for event in state.events
+        message_count = sum(item.event.HasField("message") for item in state.events)
+        await publish_audio(source, utterances["paused"])
+        await asyncio.sleep(1)
+        pause_blocked = (
+            sum(item.event.HasField("message") for item in state.events) == message_count
         )
-    )
-    started = time.monotonic()
-    await publish_audio(source, resumed_audio)
-    await wait_until(lambda: len(state.output) >= 24000, limit_seconds=90)
-    first_audio_seconds = time.monotonic() - started
-    await wait_until(
-        lambda: any(
-            event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
-            for event in state.events
-        ),
-        limit_seconds=30,
-    )
-    await wait_until(
-        lambda: any(
-            event.HasField("state_changed")
-            and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
-            and event.state_changed.reason == "turn complete"
-            for event in state.events
-        ),
-        limit_seconds=30,
-    )
-
-    state.output.clear()
-    event_index = len(state.events)
-    await publish_audio(source, interrupted_audio)
-    await wait_until(
-        lambda: any(
-            event.HasField("state_changed")
-            and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_SPEAKING
-            for event in state.events[event_index:]
-        ),
-        limit_seconds=90,
-    )
-    await wait_until(lambda: len(state.output) >= 24000, limit_seconds=30)
-    interrupt_started = time.monotonic()
-    await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT)
-    await wait_until(
-        lambda: any(
-            event.HasField("state_changed") and event.state_changed.reason == "interrupted"
-            for event in state.events[event_index:]
+        checks.append(
+            Check(
+                "pause_suppresses_microphone_turn",
+                pause_blocked,
+                "paused synthetic speech produced no envelope"
+                if pause_blocked
+                else "paused synthetic speech produced an envelope",
+            )
         )
-    )
-    interrupt_seconds = time.monotonic() - interrupt_started
 
-    messages = [
-        event.message.content.inline_text
-        for event in state.events
-        if event.HasField("message") and event.message.content.HasField("inline_text")
-    ]
-    states = [
-        protocol_pb2.ConversationState.Name(event.state_changed.current)
-        for event in state.events
-        if event.HasField("state_changed")
-    ]
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    0,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
+                        and event.state_changed.reason == "resumed"
+                    ),
+                )
+                is not None
+            )
+        )
+
+        normal_index = len(state.events)
+        _, normal_speech_end = await publish_audio(source, utterances["normal"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    normal_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                    ),
+                )
+                is not None
+            ),
+            20,
+        )
+        normal_user = _event_after(
+            state,
+            normal_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_USER
+            ),
+        )
+        assert normal_user is not None
+        normal_text = normal_user.event.message.content.inline_text
+        normal_quality = assess_transcript(
+            utterances["normal"].text,
+            normal_text,
+            ("red", "blue", "paint"),
+        )
+        checks.append(
+            Check(
+                "normal_turn_transcript",
+                normal_quality.passed,
+                f"transcribed: {normal_text!r}",
+                {
+                    "word_error_rate": round(normal_quality.word_error_rate, 4),
+                    "keyword_recall": round(normal_quality.keyword_recall, 4),
+                },
+            )
+        )
+        normal_audio_onset = await wait_for_audio_after(state, normal_speech_end, 30)
+        first_audio_seconds = normal_audio_onset - normal_speech_end
+        checks.append(
+            Check(
+                "normal_turn_first_audio",
+                first_audio_seconds < 5,
+                f"first heard audio {first_audio_seconds:.3f}s after synthetic speech ended",
+                {"latency_seconds": round(first_audio_seconds, 3)},
+            )
+        )
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    normal_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        normal_model = _event_after(
+            state,
+            normal_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+            ),
+        )
+        assert normal_model is not None
+        normal_model_text = normal_model.event.message.content.inline_text.casefold()
+        checks.append(
+            Check(
+                "normal_turn_model_content",
+                "purple" in normal_model_text,
+                f"model message: {normal_model_text!r}",
+            )
+        )
+        await wait_for_output_silence(state, after=normal_audio_onset, limit_seconds=30)
+
+        for turn_number, (name, expected) in enumerate(
+            (
+                ("turn-two", "blue"),
+                ("turn-three", "seven"),
+                ("turn-four", "finished"),
+            ),
+            start=2,
+        ):
+            turn_index = len(state.events)
+            _, speech_end = await publish_audio(source, utterances[name])
+            await wait_until(
+                lambda turn_index=turn_index: (
+                    _event_after(
+                        state,
+                        turn_index,
+                        lambda event: (
+                            event.HasField("message")
+                            and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                        ),
+                    )
+                    is not None
+                ),
+                20,
+            )
+            audio_onset = await wait_for_audio_after(state, speech_end, 30)
+            latency = audio_onset - speech_end
+            checks.append(
+                Check(
+                    f"turn_{turn_number}_first_audio",
+                    latency < 5,
+                    f"first heard audio {latency:.3f}s after synthetic speech ended",
+                    {"latency_seconds": round(latency, 3)},
+                )
+            )
+            await wait_until(
+                lambda turn_index=turn_index: (
+                    _event_after(
+                        state,
+                        turn_index,
+                        lambda event: (
+                            event.HasField("message")
+                            and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                        ),
+                    )
+                    is not None
+                ),
+                30,
+            )
+            model = _event_after(
+                state,
+                turn_index,
+                lambda event: (
+                    event.HasField("message")
+                    and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                ),
+            )
+            assert model is not None
+            model_text = model.event.message.content.inline_text.casefold()
+            checks.append(
+                Check(
+                    f"turn_{turn_number}_model_content",
+                    expected in model_text,
+                    f"expected {expected!r} in model message: {model_text!r}",
+                )
+            )
+            await wait_for_output_silence(state, after=audio_onset, limit_seconds=30)
+
+        cosmic_index = len(state.events)
+        await publish_audio(source, utterances["cosmic"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    cosmic_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_USER
+                    ),
+                )
+                is not None
+            ),
+            20,
+        )
+        cosmic_user = _event_after(
+            state,
+            cosmic_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_USER
+            ),
+        )
+        assert cosmic_user is not None
+        cosmic_text = cosmic_user.event.message.content.inline_text
+        cosmic_quality = assess_transcript(
+            utterances["cosmic"].text,
+            cosmic_text,
+            ("dash", "bold", "Cosmic touch", "moon"),
+        )
+        checks.append(
+            Check(
+                "cosmic_command_transcript",
+                cosmic_quality.passed,
+                f"transcribed: {cosmic_text!r}",
+                {
+                    "word_error_rate": round(cosmic_quality.word_error_rate, 4),
+                    "keyword_recall": round(cosmic_quality.keyword_recall, 4),
+                },
+            )
+        )
+        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    cosmic_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.reason == "interrupted"
+                    ),
+                )
+                is not None
+            )
+        )
+        await wait_for_output_silence(state, after=time.monotonic(), limit_seconds=5)
+
+        interrupt_index = len(state.events)
+        _, story_speech_end = await publish_audio(source, utterances["interrupt"])
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    interrupt_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_SPEAKING
+                    ),
+                )
+                is not None
+            ),
+            30,
+        )
+        story_audio = await wait_for_audio_after(state, time.monotonic() - 1, 20)
+        story_first_audio_seconds = story_audio - story_speech_end
+        checks.append(
+            Check(
+                "second_turn_first_audio",
+                story_first_audio_seconds < 5,
+                f"first heard audio {story_first_audio_seconds:.3f}s after synthetic speech ended",
+                {"latency_seconds": round(story_first_audio_seconds, 3)},
+            )
+        )
+        interrupt_started = time.monotonic()
+        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT)
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    interrupt_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.reason == "interrupted"
+                    ),
+                )
+                is not None
+            )
+        )
+        interrupt_event = _event_after(
+            state,
+            interrupt_index,
+            lambda event: (
+                event.HasField("state_changed") and event.state_changed.reason == "interrupted"
+            ),
+        )
+        assert interrupt_event is not None
+        interrupt_ack_seconds = interrupt_event.received_at - interrupt_started
+        await asyncio.sleep(1.2)
+        audible_after_interrupt = [
+            item.received_at
+            for item in state.output
+            if item.received_at > interrupt_started and _active(item.pcm)
+        ]
+        audible_stop_seconds = (
+            max(audible_after_interrupt) - interrupt_started if audible_after_interrupt else 0
+        )
+        checks.append(
+            Check(
+                "interrupt_acknowledgement",
+                interrupt_ack_seconds < 0.5,
+                f"interrupt acknowledged in {interrupt_ack_seconds:.3f}s",
+                {"latency_seconds": round(interrupt_ack_seconds, 3)},
+            )
+        )
+        checks.append(
+            Check(
+                "interrupt_stops_heard_audio",
+                audible_stop_seconds <= 1.2,
+                f"last heard audio was {audible_stop_seconds:.3f}s after interrupt",
+                {
+                    "stop_seconds": round(audible_stop_seconds, 3),
+                    "story_audio_started_seconds": round(story_audio - state.started_at, 3),
+                },
+            )
+        )
+    finally:
+        await room.disconnect()
+        for task in state.capture_tasks:
+            task.cancel()
+        await asyncio.gather(*state.capture_tasks, return_exceptions=True)
+        if worker.returncode is None:
+            worker.terminate()
+        try:
+            await asyncio.wait_for(worker.wait(), timeout=10)
+        except TimeoutError:
+            worker.kill()
+            await worker.wait()
+        await worker_log_task
+
+    _write_wav(output_dir / "agent-timeline.wav", _output_timeline(state), OUTPUT_RATE)
+    (output_dir / "worker.log").write_bytes(worker_log)
     report = {
-        "pause_blocked_turn": pause_blocked_turn,
-        "first_audio_seconds": round(first_audio_seconds, 3),
-        "interrupt_ack_seconds": round(interrupt_seconds, 3),
-        "output_bytes": len(state.output),
-        "messages": messages,
-        "states": states,
+        "schema": "radcliffe-livekit-conformance-v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "commit": commit,
+        "session_id": session_id,
+        "passed": all(check.passed for check in checks),
+        "checks": [
+            {
+                "name": check.name,
+                "passed": check.passed,
+                "detail": check.detail,
+                "measured": check.measured,
+            }
+            for check in checks
+        ],
+        "events": [_proto_event(item, state.started_at) for item in state.events],
+        "artifacts": {
+            "agent_timeline": "agent-timeline.wav",
+            "user_inputs": [f"user-{name}.wav" for name in utterances],
+            "worker_log": "worker.log",
+        },
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
-    if not pause_blocked_turn:
-        raise RuntimeError("pause did not suppress the synthetic turn")
-    if first_audio_seconds >= 5:
-        raise RuntimeError("first return audio exceeded five seconds")
-    if interrupt_seconds >= 0.5:
-        raise RuntimeError("interrupt acknowledgement exceeded 500 ms")
+    report_path = output_dir / "report.json"
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+    print(
+        json.dumps(
+            {
+                "report": str(report_path),
+                "passed": report["passed"],
+                "session_id": session_id,
+                "checks": report["checks"],
+            },
+            indent=2,
+        )
+    )
+    return 0 if report["passed"] else 1
 
-    await room.disconnect()
-    for task in state.capture_tasks:
-        task.cancel()
-    await asyncio.gather(*state.capture_tasks, return_exceptions=True)
+
+def main() -> int:
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    return asyncio.run(run(commit))
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    raise SystemExit(main())

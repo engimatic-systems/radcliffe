@@ -99,7 +99,35 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SILENCE_MS", "1200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_RMS", "700")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "20000")
 
-    assert EndpointSettings.from_environment() == EndpointSettings(700, 300, 1200)
+    assert EndpointSettings.from_environment() == EndpointSettings(700, 300, 1200, 20000)
     with pytest.raises(ValueError, match="positive"):
         EndpointSettings(end_silence_ms=0)
+
+
+@pytest.mark.asyncio
+async def test_maximum_utterance_bounds_intermittent_noise_that_defeats_silence() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(
+        speech,
+        EndpointSettings(
+            minimum_voice_ms=250,
+            end_silence_ms=900,
+            maximum_utterance_ms=2000,
+        ),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    for index in range(100):
+        await endpoint.process_frame(
+            audio_frame(voiced=index < 15 or index in {40, 80}),
+            FrameDirection.DOWNSTREAM,
+        )
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert len(speech.calls) == 1
+    assert len(speech.calls[0]) == 100 * 640
+    assert voice.transcripts == ["transcript-1"]

@@ -10,7 +10,7 @@ from radcliffe_media.speech import LocalAppleSpeechProvider
 async def test_local_tts_produces_24khz_mono_pcm() -> None:
     provider = LocalAppleSpeechProvider(voice="Samantha")
 
-    audio = await provider.synthesize("Radcliffe local speech works.")
+    audio = await provider.synthesize("- **Cosmic touch:** Moon 🌙\n-- still canonical text")
 
     assert len(audio) > 2400
     assert len(audio) % 2 == 0
@@ -42,6 +42,10 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
         "language": "en",
         "condition_on_previous_text": False,
         "no_speech_threshold": 0.7,
+        "initial_prompt": (
+            "Radcliffe vocabulary: dash, bold, Markdown, Cosmic touch, voice controls work, "
+            "read source, metadata."
+        ),
     }
 
 

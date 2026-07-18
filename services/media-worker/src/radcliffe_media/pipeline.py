@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Protocol, cast
 from uuid import uuid4
 
+from loguru import logger
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
     TURN_DISPOSITION_EVENT,
@@ -40,7 +42,12 @@ class _ActiveTurn:
     requested_disposition: str = "interrupted"
     operation: Operation | None = None
     model_text: str = ""
+    rendered_model_text: str = ""
     model_persisted: bool = False
+    next_model_boundary: int = 0
+    started_at: float = field(default_factory=monotonic)
+    first_model_delta_at: float | None = None
+    first_audio_at: float | None = None
 
 
 class Orchestrator(Protocol):
@@ -94,13 +101,18 @@ class VoicePipeline:
         synthesizer: Synthesizer,
         publisher: AudioPublisher,
         events: VoiceEventSink | None = None,
+        *,
+        model_chunk_chars: int = 240,
     ) -> None:
+        if model_chunk_chars <= 0:
+            raise ValueError("model chunk size must be positive")
         self.store = store
         self.engine = SessionEngine(session_id, store)
         self.orchestrator = orchestrator
         self.synthesizer = synthesizer
         self.publisher = publisher
         self.events = events
+        self.model_chunk_chars = model_chunk_chars
         self._active_turn: _ActiveTurn | None = None
         self._coordinator = asyncio.Lock()
         self._turn_serial = asyncio.Lock()
@@ -198,6 +210,13 @@ class VoicePipeline:
             self._assert_owner(turn, operation)
             if event.type == "model_delta":
                 delta = str(event.payload.get("text", ""))
+                if turn.first_model_delta_at is None:
+                    turn.first_model_delta_at = monotonic()
+                    self._log_phase(
+                        turn,
+                        "first_model_delta",
+                        turn.first_model_delta_at - turn.started_at,
+                    )
                 turn.model_text += delta
                 if not source_rendered:
                     buffer += delta
@@ -232,50 +251,62 @@ class VoicePipeline:
                 raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
 
         self._assert_owner(turn, operation)
+        if buffer and not source_rendered:
+            await self._speak_model_chunk(buffer, operation, turn, "model response ready")
         if turn.model_text:
             await self._persist_model(turn, notify=True)
-        if buffer and not source_rendered:
-            if self.engine.state is ConversationState.THINKING:
-                await self._transition(
-                    ConversationState.SPEAKING,
-                    "model response ready",
-                    operation,
-                    turn,
-                )
-            await self._speak(
-                buffer,
-                f"{operation.operation_id}:final",
-                0,
-                operation,
-                turn,
-            )
         await self._finish_completed(turn)
 
     async def _speak_complete_sentences(
         self, buffer: str, operation: Operation, turn: _ActiveTurn
     ) -> str:
-        matches = list(_SENTENCE.finditer(buffer))
-        if not matches:
-            return buffer
+        while chunk := self._next_model_chunk(buffer):
+            await self._speak_model_chunk(chunk, operation, turn, "model chunk ready")
+            buffer = buffer[len(chunk) :]
+        return buffer
+
+    def _next_model_chunk(self, buffer: str) -> str | None:
+        if not buffer:
+            return None
+        boundaries: list[int] = []
+        sentence = _SENTENCE.match(buffer)
+        if sentence is not None:
+            boundaries.append(sentence.end())
+        for newline in re.finditer(r"\n", buffer):
+            end = newline.end()
+            if buffer[:end].strip():
+                boundaries.append(end)
+                break
+        if len(buffer) >= self.model_chunk_chars:
+            end = self.model_chunk_chars
+            whitespace = max(
+                buffer.rfind(" ", 0, end + 1),
+                buffer.rfind("\t", 0, end + 1),
+            )
+            if whitespace >= self.model_chunk_chars // 2:
+                end = whitespace + 1
+            boundaries.append(end)
+        return buffer[: min(boundaries)] if boundaries else None
+
+    async def _speak_model_chunk(
+        self,
+        canonical_text: str,
+        operation: Operation,
+        turn: _ActiveTurn,
+        reason: str,
+    ) -> None:
         if self.engine.state is ConversationState.THINKING:
-            await self._transition(
-                ConversationState.SPEAKING,
-                "model sentence ready",
-                operation,
-                turn,
-            )
-        end = matches[-1].end()
-        start = 0
-        for index, match in enumerate(matches):
-            await self._speak(
-                buffer[start : match.end()],
-                f"{operation.operation_id}:model:{index}",
-                index,
-                operation,
-                turn,
-            )
-            start = match.end()
-        return buffer[end:]
+            await self._transition(ConversationState.SPEAKING, reason, operation, turn)
+        boundary = turn.next_model_boundary
+        await self._speak(
+            canonical_text,
+            f"{operation.operation_id}:model:{boundary}",
+            boundary,
+            operation,
+            turn,
+        )
+        turn.rendered_model_text += canonical_text
+        turn.next_model_boundary += 1
 
     async def _transition(
         self,
@@ -326,7 +357,9 @@ class VoicePipeline:
         turn: _ActiveTurn,
     ) -> None:
         self._assert_owner(turn, operation)
+        synth_started = monotonic()
         audio = await self.synthesizer.synthesize(canonical_text)
+        self._log_phase(turn, "synthesis", monotonic() - synth_started)
         self._assert_owner(turn, operation)
         now = datetime.now(UTC)
         await self.engine.acknowledge(
@@ -341,7 +374,29 @@ class VoicePipeline:
             )
         )
         self._assert_owner(turn, operation)
-        duration = await self.publisher.publish(segment_id, audio)
+        publish_started = monotonic()
+        try:
+            duration = await self.publisher.publish(segment_id, audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            await self.engine.acknowledge(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=str(uuid4()),
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=PlaybackStatus.FAILED,
+                    position_ms=0,
+                    boundary_index=boundary_index,
+                    occurred_at=datetime.now(UTC),
+                    detail=type(error).__name__,
+                )
+            )
+            raise
+        self._log_phase(turn, "publish", monotonic() - publish_started)
+        if turn.first_audio_at is None:
+            turn.first_audio_at = monotonic()
+            self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
         self._assert_owner(turn, operation)
         await self.engine.acknowledge(
             PlaybackAcknowledgement(
@@ -394,8 +449,13 @@ class VoicePipeline:
         async with self._coordinator:
             if self._active_turn is not turn:
                 return
-            if turn.model_text and not turn.model_persisted:
-                await self._persist_model(turn, partial=True)
+            if turn.rendered_model_text and not turn.model_persisted:
+                await self._persist_model(
+                    turn,
+                    partial=True,
+                    notify=True,
+                    text=turn.rendered_model_text,
+                )
             await self._append_disposition(turn, turn.requested_disposition)
             previous = self.engine.state
             if previous in {
@@ -412,10 +472,26 @@ class VoicePipeline:
         async with self._coordinator:
             if self._active_turn is not turn:
                 return
+            try:
+                await self.publisher.flush()
+            except Exception:
+                logger.exception("failed to flush audio after a voice turn error")
+            if turn.rendered_model_text and not turn.model_persisted:
+                await self._persist_model(
+                    turn,
+                    partial=True,
+                    notify=True,
+                    text=turn.rendered_model_text,
+                )
             await self._append_disposition(turn, "failed")
             previous = self.engine.state
-            if previous is not ConversationState.FAILED:
-                self.engine.transition(ConversationState.FAILED)
+            if previous in {
+                ConversationState.THINKING,
+                ConversationState.SPEAKING,
+                ConversationState.READING,
+                ConversationState.PAUSED,
+            }:
+                self.engine.interrupt()
                 await self._notify_state(previous, "turn failed", turn.operation)
             self._active_turn = None
 
@@ -441,10 +517,15 @@ class VoicePipeline:
         *,
         partial: bool = False,
         notify: bool = False,
+        text: str | None = None,
     ) -> None:
-        if turn.model_persisted or not turn.model_text:
+        persisted_text = turn.model_text if text is None else text
+        if turn.model_persisted or not persisted_text:
             return
-        metadata = {TURN_ID_METADATA: turn.turn_id}
+        metadata = {
+            TURN_ID_METADATA: turn.turn_id,
+            "radcliffe.rendered_chars": str(len(turn.rendered_model_text)),
+        }
         if turn.operation is not None:
             metadata["radcliffe.operation_id"] = turn.operation.operation_id
             metadata["radcliffe.generation"] = str(turn.operation.generation)
@@ -453,7 +534,7 @@ class VoicePipeline:
         append_task = asyncio.create_task(
             self._append_text(
                 SourceKind.MODEL,
-                turn.model_text,
+                persisted_text,
                 metadata,
             )
         )
@@ -466,6 +547,18 @@ class VoicePipeline:
         turn.model_persisted = True
         if notify and self.events is not None:
             await self.events.message(envelope)
+
+    def _log_phase(self, turn: _ActiveTurn, phase: str, seconds: float) -> None:
+        operation = turn.operation
+        logger.info(
+            "voice turn phase complete phase={} duration_ms={} session_id={} "
+            "operation_id={} generation={}",
+            phase,
+            round(seconds * 1000, 2),
+            self.engine.session_id,
+            operation.operation_id if operation is not None else "pending",
+            operation.generation if operation is not None else self.engine.generation,
+        )
 
     async def _append_text(
         self,
