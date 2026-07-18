@@ -77,6 +77,19 @@ even if an underlying read finishes concurrently.
   remain local until the user deletes the session. Secret envelopes are
   excluded from model context and diagnostic reports. Logs use IDs and hashes,
   not source bodies or provider keys.
+- **Cloud disclosure and credential spread:** the local launcher forces Ollama
+  and removes cloud keys. The separate live launcher requires an explicit
+  opt-in and a mode-`0600` environment file, pins the reviewed Anthropic model,
+  bridges the protected key to one provider variable, removes the source key
+  name before `exec`, then removes the provider variable from the Node
+  environment after capturing it in memory. Later child processes cannot
+  inherit it. The launcher announces that conversation context leaves the
+  host. Diagnostics and smoke artifacts exclude credentials and request content.
+- **Cloud cost replay or restart bypass:** every sampling call reserves a
+  conservative maximum against a durable per-session ceiling before generation.
+  The owner-only ledger uses pseudonymous session keys; reported usage settles
+  reservations and startup charges abandoned holds. Changed provider/model
+  pricing creates a distinct accounting basis rather than mixing totals.
 - **Media-edge compromise:** LiveKit transports encrypted media but terminates
   it at participants; the edge receives short-lived room credentials, not
   model or filesystem credentials. Room grants restrict identity and room.
@@ -90,6 +103,10 @@ duplicate calls, cancellation races, secret-context redaction, reordered
 envelopes, stale-generation output, malformed Protobuf, replayed commands,
 principal-scoped catalog resolution, create/switch/restart/end transitions,
 confirmation binding, worker failure, and replay after control-plane restart.
+Cloud-profile tests additionally cover explicit opt-in, pinned model selection,
+secret-name removal, local/cloud isolation, owner-only files, conservative token
+accounting, per-turn/session exhaustion, reservation recovery, and content-free
+paid-smoke reports. They use fake providers and fake credentials.
 
 Before web or mutating tools ship, gates additionally cover IPv4/IPv6 SSRF,
 DNS rebinding, redirect chains, decompression bombs, archive traversal,

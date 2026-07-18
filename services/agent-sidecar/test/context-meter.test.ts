@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { hasApi } from "@earendil-works/pi-ai";
 
 import {
+  AnthropicContextMeter,
+  AnthropicPayloadMeter,
   accountingPayload,
+  anthropicAccountingPayload,
   captureOllamaPayload,
   OllamaContextMeter,
 } from "../src/context-meter.js";
@@ -38,6 +43,14 @@ function model(modelId = "qwen3:8b") {
     contextWindow: 100,
     maxTokens: 20,
   });
+}
+
+function anthropicModel() {
+  const selected = builtinModels().getModel("anthropic", "claude-haiku-4-5-20251001");
+  if (!selected || !hasApi(selected, "anthropic-messages")) {
+    throw new Error("pinned Anthropic model is unavailable in Pi");
+  }
+  return { ...selected, maxTokens: 1_024 };
 }
 
 describe("Ollama context accounting", () => {
@@ -197,5 +210,71 @@ describe("Ollama context accounting", () => {
         measurementBasis: "ollama-overflow-lower-bound-v1",
       });
     }
+  });
+});
+
+describe("Anthropic context accounting", () => {
+  it("counts the exact Pi payload shape and labels a conservative estimate", async () => {
+    const payload = {
+      model: "claude-haiku-4-5-20251001",
+      messages: [{ role: "user", content: "Hello" }],
+      system: [{ type: "text", text: "System" }],
+      tools: [{ name: "read_source", input_schema: { type: "object" } }],
+      max_tokens: 1_024,
+      stream: true,
+    };
+    const capturePayload = vi.fn(async () => payload);
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ input_tokens: 100 }));
+    const payloadMeter = new AnthropicPayloadMeter({
+      model: anthropicModel(),
+      apiKey: "fake-anthropic-key",
+      fetchImpl,
+      capturePayload,
+    });
+    const contextMeter = new AnthropicContextMeter(anthropicModel(), payloadMeter);
+    const turn = request([packet("current", "Hello")]);
+
+    const first = await contextMeter.measure(turn);
+    const second = await contextMeter.measure(turn);
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      modelId: "claude-haiku-4-5-20251001",
+      contextLimit: 200_000,
+      projectedInputTokens: 134,
+      reservedOutputTokens: 1_024,
+      remainingTokens: 198_842,
+      projectionVersion: "context-v2",
+      measurementBasis: "anthropic-count-tokens-plus-2pct-32-v1",
+      exact: false,
+      overflow: false,
+    });
+    expect(first.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(String(url)).toBe("https://api.anthropic.com/v1/messages/count_tokens");
+    expect(init?.headers).toMatchObject({
+      "anthropic-version": "2023-06-01",
+      "x-api-key": "fake-anthropic-key",
+    });
+    expect(JSON.parse(String(init?.body))).toEqual(anthropicAccountingPayload(payload));
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("max_tokens");
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("stream");
+    expect(capturePayload).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects missing counts without claiming exact accounting", async () => {
+    const payloadMeter = new AnthropicPayloadMeter({
+      model: anthropicModel(),
+      apiKey: "fake-anthropic-key",
+      fetchImpl: vi.fn<typeof fetch>(async () => Response.json({})),
+      capturePayload: vi.fn(async () => ({
+        model: "claude-haiku-4-5-20251001",
+        messages: [{ role: "user", content: "Hello" }],
+      })),
+    });
+
+    await expect(payloadMeter.measureContext(modelContextFromRequest(request([packet("1", "Hi")]))))
+      .rejects.toThrow("input_tokens");
   });
 });

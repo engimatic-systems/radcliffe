@@ -1,6 +1,6 @@
 ---
 id: rad-e5na
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-17T23:53:29Z
@@ -28,3 +28,7 @@ The live profile selects Anthropic with the pinned Claude Haiku 4.5 model ID and
 **2026-07-18T02:30:35Z**
 
 Claude Haiku 4.5 is a temporary debugging and live-testing profile chosen for speed and cost; production Radcliffe is expected to use a more capable model or model-routing policy.
+
+**2026-07-18T06:43:22Z**
+
+Implemented the non-billable live-debug profile: pinned claude-haiku-4-5-20251001 and reviewed pricing/context contract; explicit cloud/local launch isolation and disclosure; owner-only single-name key bridge with Node environment removal; Anthropic count_tokens accounting labeled as a 2% plus 32-token conservative estimate; per-foreground-turn output and durable per-session USD ceilings; pseudonymous restart-safe reservation ledger; provider/model/budget diagnostics; visible model-excluded exhaustion events; and a doubly gated content-free paid-smoke recorder. Verification: make check passed (242 Python passed, 1 skipped; 39 sidecar tests passed; Android unit tests and lint passed). No Anthropic request or funded key access was performed. Ticket remains in progress pending explicit authorization for the one bounded paid smoke.

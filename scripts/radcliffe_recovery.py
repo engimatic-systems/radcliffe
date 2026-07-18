@@ -497,6 +497,8 @@ class GitRevisionControl:
             "pyproject.toml",
             "scripts/run-local-control.sh",
             "scripts/run-local-sidecar.sh",
+            "scripts/run-live-sidecar.sh",
+            "scripts/run-sidecar-profile.sh",
             "scripts/run-local-worker.sh",
         ):
             self._run("cat-file", "-e", f"{revision}:{path}")

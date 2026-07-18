@@ -1,15 +1,27 @@
 import { createServer, type ServerResponse } from "node:http";
 
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple as streamAnthropicMessages } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Model } from "@earendil-works/pi-ai";
+import { hasApi, type Model } from "@earendil-works/pi-ai";
 
-import { OllamaContextMeter } from "./context-meter.js";
+import { CloudBudgetController, CloudBudgetLedger } from "./cloud-budget.js";
+import {
+  AnthropicContextMeter,
+  AnthropicPayloadMeter,
+  OllamaContextMeter,
+} from "./context-meter.js";
 import { PiAgentOrchestrator } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
 import { warmOllama } from "./ollama-runtime.js";
-import { assertProviderAllowed } from "./provider-policy.js";
+import {
+  ANTHROPIC_DEBUG_PRICING_BASIS,
+  assertAnthropicDebugModelContract,
+  assertProviderAllowed,
+  assertSupportedModelProfile,
+  takeEnvironmentSecret,
+} from "./provider-policy.js";
 import { TelemetrySink } from "./telemetry.js";
 import type {
   SidecarEvent,
@@ -23,6 +35,7 @@ const port = Number(process.env.RADCLIFFE_SIDECAR_PORT ?? "8787");
 const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "ollama";
 const modelId = process.env.RADCLIFFE_MODEL_ID ?? "qwen3:8b";
 assertProviderAllowed(provider, process.env.RADCLIFFE_ALLOW_CLOUD_MODELS);
+assertSupportedModelProfile(provider, modelId);
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
 const internalToken = process.env.RADCLIFFE_INTERNAL_TOKEN;
 const telemetry = new TelemetrySink(
@@ -35,8 +48,27 @@ const ollamaModel = createOllamaModel({
   contextWindow: Number(process.env.RADCLIFFE_MODEL_CONTEXT_LIMIT ?? "40960"),
   maxTokens: Number(process.env.RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS ?? "8192"),
 });
-const model = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
-if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
+const selectedModel = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
+if (!selectedModel) throw new Error(`unknown Pi model ${provider}/${modelId}`);
+if (provider === "anthropic") assertAnthropicDebugModelContract(selectedModel);
+const cloudMaxOutputTokens =
+  provider === "anthropic"
+    ? positiveInteger(
+        "RADCLIFFE_CLOUD_MAX_OUTPUT_TOKENS",
+        process.env.RADCLIFFE_CLOUD_MAX_OUTPUT_TOKENS ?? "1024",
+      )
+    : selectedModel.maxTokens;
+const model: Model<string> =
+  provider === "anthropic"
+    ? { ...selectedModel, maxTokens: Math.min(selectedModel.maxTokens, cloudMaxOutputTokens) }
+    : selectedModel;
+const anthropicApiKey =
+  provider === "anthropic"
+    ? takeEnvironmentSecret(process.env, "ANTHROPIC_API_KEY")
+    : undefined;
+if (provider === "anthropic" && !anthropicApiKey) {
+  throw new Error("ANTHROPIC_API_KEY is required for the cloud profile");
+}
 if (provider === "ollama") {
   await warmOllama({
     baseUrl: ollamaModel.baseUrl,
@@ -52,7 +84,12 @@ const streamFn: StreamFn =
           context,
           { ...options, apiKey: "ollama" },
         )
-    : models.streamSimple;
+    : (selectedModel, context, options) =>
+        streamAnthropicMessages(
+          selectedModel as Model<"anthropic-messages">,
+          context,
+          { ...options, apiKey: anthropicApiKey },
+        );
 
 async function executeTool(
   request: ToolExecutionRequest,
@@ -131,8 +168,44 @@ async function executeTool(
   return (await response.json()) as ToolExecutionResult;
 }
 
-const contextMeter = provider === "ollama" ? new OllamaContextMeter({ model: ollamaModel }) : undefined;
-const orchestrator = new PiAgentOrchestrator(model, streamFn, executeTool, contextMeter);
+let cloudBudget: CloudBudgetController | undefined;
+let contextMeter;
+if (provider === "ollama") {
+  contextMeter = new OllamaContextMeter({ model: ollamaModel });
+} else {
+  if (!hasApi(model, "anthropic-messages")) {
+    throw new Error("the bounded Anthropic profile requires the Messages API");
+  }
+  const payloadMeter = new AnthropicPayloadMeter({ model, apiKey: anthropicApiKey! });
+  contextMeter = new AnthropicContextMeter(model, payloadMeter);
+  const sessionBudgetUsd = positiveNumber(
+    "RADCLIFFE_CLOUD_SESSION_BUDGET_USD",
+    process.env.RADCLIFFE_CLOUD_SESSION_BUDGET_USD ?? "0.25",
+  );
+  const conservativeInputRate = Math.max(
+    model.cost.input,
+    model.cost.cacheWrite,
+    model.cost.input * 2,
+  );
+  cloudBudget = new CloudBudgetController(
+    payloadMeter,
+    new CloudBudgetLedger(
+      ANTHROPIC_DEBUG_PRICING_BASIS,
+      sessionBudgetUsd,
+      model.maxTokens,
+      conservativeInputRate,
+      model.cost.output,
+      process.env.RADCLIFFE_CLOUD_BUDGET_LEDGER_PATH ?? "var/cloud-budget.json",
+    ),
+  );
+}
+const orchestrator = new PiAgentOrchestrator(
+  model,
+  streamFn,
+  executeTool,
+  contextMeter,
+  cloudBudget ? (request) => cloudBudget.streamForTurn(streamFn, request.sessionId) : undefined,
+);
 let activeTurns = 0;
 let cancelledTurns = 0;
 
@@ -140,14 +213,52 @@ function writeEvent(response: ServerResponse, event: SidecarEvent): void {
   response.write(`${JSON.stringify(event)}\n`);
 }
 
+function positiveInteger(name: string, value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function positiveNumber(name: string, value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return parsed;
+}
+
 createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/healthz") {
+    const budget = cloudBudget?.ledger.summary();
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
       JSON.stringify({
         status: "ok",
         active_turns: activeTurns,
         cancelled_turns: cancelledTurns,
+        provider,
+        model_id: model.id,
+        data_boundary: provider === "ollama" ? "local" : "cloud_anthropic",
+        context_accounting:
+          provider === "ollama"
+            ? "ollama_openai_prompt_tokens_exact"
+            : "anthropic_count_tokens_conservative_estimate",
+        ...(budget
+          ? {
+              cloud_budget: {
+                basis: budget.basis,
+                limit_usd: budget.limitUsd,
+                max_output_tokens_per_turn: budget.maxOutputTokensPerTurn,
+                session_count: budget.sessionCount,
+                spent_usd: budget.spentUsd,
+                held_usd: budget.heldUsd,
+                requests: budget.requests,
+                recovered_reservations: budget.recoveredReservations,
+              },
+            }
+          : {}),
       }),
     );
     return;

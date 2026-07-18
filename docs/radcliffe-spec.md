@@ -541,6 +541,23 @@ inexact overflow lower bound, not as an exact count. Provider adapters that
 cannot supply exact preflight accounting must label estimates and may not
 silently claim token precision.
 
+The temporary live-debug cloud profile is a separate explicit launch path. It
+accepts only Anthropic `claude-haiku-4-5-20251001`; an alias or different cloud
+model is a startup error until a new production profile is reviewed. Anthropic's
+token-count endpoint receives the same structured model context and is treated
+as an estimate: Radcliffe adds 2% plus 32 tokens, reports `exact=false`, and
+includes the provider/model in the accounting basis. No count is reused across
+a model or projection change.
+
+Before every cloud sampling call, the sidecar reserves conservative input cost
+at the highest enabled cache-write rate plus the maximum affordable output.
+The configurable output cap applies across all sampling calls in one foreground
+turn, while a durable per-session USD ceiling covers the whole session. The
+owner-only ledger contains only session pseudonyms, the provider/model/pricing
+basis, token totals, cost, and outstanding reservations. A sidecar restart
+charges an abandoned reservation rather than reopening budget. Exhaustion is a
+visible terminal event emitted before another paid generation request.
+
 Replaying the same envelopes, model configuration, and projection version must
 produce the same provider payload digest and accounting result. Interrupted,
 superseded, failed, secret, tool-call, and canonical text-source envelopes
@@ -723,6 +740,11 @@ for that process. A cloud-provider acceptance run should be made only after
 the deterministic local suite passes, should use a bounded scenario set, and
 should record provider, model, token usage, and reported cost so one controlled
 run can be evaluated before another is authorized.
+
+The Haiku acceptance smoke adds a second one-run approval phrase and writes an
+owner-only, content-free report. The report may contain provider, pinned model,
+token classes, estimated USD cost, budget basis, and pass/fail status; it must
+not contain the prompt, model response, key, request payload, or raw session ID.
 
 Release requires repeated clean conformance runs, all security tests passing,
 SLOs met under isolated and realistic load, and two weeks of dogfood use with

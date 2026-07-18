@@ -128,13 +128,48 @@ def http_check(
     payload = observation.payload if isinstance(observation.payload, dict) else {}
     if observation.status_code is not None and 200 <= observation.status_code < 300:
         if expected_status is None or payload.get("status") == expected_status:
-            details = {
+            details: dict[str, object] = {
                 key: int(value)
                 for key, value in payload.items()
                 if key in {"active_turns", "cancelled_turns"}
                 and isinstance(value, int)
                 and not isinstance(value, bool)
             }
+            for key in ("provider", "model_id", "data_boundary", "context_accounting"):
+                value = payload.get(key)
+                if (
+                    isinstance(value, str)
+                    and 1 <= len(value) <= 128
+                    and all(character.isalnum() or character in "._:/-" for character in value)
+                ):
+                    details[key] = value
+            budget = payload.get("cloud_budget")
+            if isinstance(budget, dict):
+                safe_budget = {
+                    key: value
+                    for key, value in budget.items()
+                    if key
+                    in {
+                        "limit_usd",
+                        "max_output_tokens_per_turn",
+                        "session_count",
+                        "spent_usd",
+                        "held_usd",
+                        "requests",
+                        "recovered_reservations",
+                    }
+                    and isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                    and 0 <= value <= 1_000_000_000
+                }
+                basis = budget.get("basis")
+                if (
+                    isinstance(basis, str)
+                    and 1 <= len(basis) <= 128
+                    and all(character.isalnum() or character in "._:/-" for character in basis)
+                ):
+                    safe_budget["basis"] = basis
+                details["cloud_budget"] = safe_budget
             return OperationalCheck(component, "ok", f"{component}_ready", details)
     return OperationalCheck(component, "failed", f"{component}_unavailable", {})
 

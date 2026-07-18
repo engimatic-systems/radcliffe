@@ -17,6 +17,7 @@ TURN_DISPOSITION_METADATA = "radcliffe.turn_disposition"
 TURN_DISPOSITION_EVENT = "turn_disposition"
 CONFIGURATION_EVENT = "configuration_changed"
 SESSION_TRANSITION_EVENT = "session_transition"
+PROVIDER_BUDGET_EVENT = "provider_budget_exhausted"
 EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 DELIVERY_RATE_METADATA_PREFIX = "radcliffe.delivery.rate."
 DELIVERY_SUMMARY_METADATA = "radcliffe.delivery.summary"
@@ -251,11 +252,13 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
     is_disposition = event == TURN_DISPOSITION_EVENT
     is_configuration = event == CONFIGURATION_EVENT
     is_session_transition = event == SESSION_TRANSITION_EVENT
+    is_provider_budget = event == PROVIDER_BUDGET_EVENT
     include = (
         envelope.sensitivity is not Sensitivity.SECRET
         and not is_disposition
         and not is_configuration
         and not is_session_transition
+        and not is_provider_budget
     )
     text = envelope.content.inline_text or ""
     if envelope.sensitivity is Sensitivity.SECRET:
@@ -266,6 +269,8 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
         text = "[excluded: configuration audit]"
     elif is_session_transition:
         text = "[excluded: session transition audit]"
+    elif is_provider_budget:
+        text = "[excluded: provider budget audit]"
     annotations = tuple(
         sorted(
             {

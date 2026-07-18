@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { assertProviderAllowed } from "../src/provider-policy.js";
+import {
+  ANTHROPIC_DEBUG_MODEL_ID,
+  assertAnthropicDebugModelContract,
+  assertProviderAllowed,
+  assertSupportedModelProfile,
+  takeEnvironmentSecret,
+} from "../src/provider-policy.js";
 
 describe("model provider cost guard", () => {
   it("allows the local provider without an opt-in", () => {
@@ -11,5 +17,40 @@ describe("model provider cost guard", () => {
     expect(() => assertProviderAllowed(provider, undefined)).toThrow(/cloud model provider/);
     expect(() => assertProviderAllowed(provider, "0")).toThrow(/cloud model provider/);
     expect(() => assertProviderAllowed(provider, "1")).not.toThrow();
+  });
+
+  it("requires the pinned bounded Anthropic debug model", () => {
+    expect(() => assertSupportedModelProfile("anthropic", ANTHROPIC_DEBUG_MODEL_ID)).not.toThrow();
+    expect(() => assertSupportedModelProfile("anthropic", "claude-haiku-4-5")).toThrow(
+      /pinned model/,
+    );
+    expect(() => assertSupportedModelProfile("openai", "anything")).toThrow(
+      /no bounded Radcliffe profile/,
+    );
+    expect(() => assertSupportedModelProfile("ollama", "qwen3:8b")).not.toThrow();
+  });
+
+  it("captures a provider key once and removes it from the process environment", () => {
+    const environment = { ANTHROPIC_API_KEY: "fake-provider-key", SAFE_VALUE: "retained" };
+
+    const captured = takeEnvironmentSecret(environment, "ANTHROPIC_API_KEY");
+
+    expect(captured).toBe("fake-provider-key");
+    expect(environment).toEqual({ SAFE_VALUE: "retained" });
+  });
+
+  it("fails closed if the pinned model pricing or context contract drifts", () => {
+    const reviewed = {
+      contextWindow: 200_000,
+      cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+    };
+
+    expect(() => assertAnthropicDebugModelContract(reviewed)).not.toThrow();
+    expect(() =>
+      assertAnthropicDebugModelContract({
+        ...reviewed,
+        cost: { ...reviewed.cost, output: 6 },
+      }),
+    ).toThrow(/contract changed/);
   });
 });
