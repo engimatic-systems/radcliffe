@@ -28,6 +28,9 @@ invent a second event shape.
 - Reconnect reports the last envelope acknowledged by the client and its most
   recent playback acknowledgement. The server replays only later envelopes and
   resumes source audio from the acknowledged boundary.
+- Each published audio segment has a unique playback-attempt ID. The client
+  acknowledges decoded audio against that ID; retries or resumed segments get a
+  new ID so stale acknowledgements cannot advance the durable cursor.
 
 The compatibility test serializes fixtures with one binding and parses them
 with the other. Generated files are reviewed only as compiler output; contract

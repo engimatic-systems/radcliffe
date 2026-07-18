@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import time
 import wave
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,6 +80,116 @@ class RecordingAudioSource:
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         self.state.input.append(TimedAudio(time.monotonic(), bytes(frame.data)))
         await self.source.capture_frame(frame)
+
+
+@dataclass(slots=True)
+class PendingPlayback:
+    segment: protocol_pb2.PlaybackSegment
+    started: bool = False
+    position_ms: int = 0
+    last_reported_position_ms: int = 0
+
+
+@dataclass(slots=True)
+class ClientPlaybackTracker:
+    pending: deque[PendingPlayback] = field(default_factory=deque)
+    known_playback_ids: set[str] = field(default_factory=set)
+    sent: list[protocol_pb2.PlaybackAcknowledgement] = field(default_factory=list)
+
+    def announce(self, segment: protocol_pb2.PlaybackSegment) -> bool:
+        if not segment.playback_id or not segment.segment_id or not segment.duration_ms:
+            return False
+        if segment.playback_id in self.known_playback_ids:
+            return False
+        self.known_playback_ids.add(segment.playback_id)
+        self.pending.append(PendingPlayback(segment))
+        return True
+
+    def audio_frame(
+        self,
+        pcm: bytes,
+        sample_rate: int,
+    ) -> list[protocol_pb2.PlaybackAcknowledgement]:
+        if not self.pending or sample_rate <= 0:
+            return []
+        active = self.pending[0]
+        if not active.started and not _active(pcm):
+            return []
+        acknowledgements: list[protocol_pb2.PlaybackAcknowledgement] = []
+        if not active.started:
+            active.started = True
+            acknowledgements.append(
+                self._acknowledgement(
+                    active,
+                    protocol_pb2.PLAYBACK_STATUS_STARTED,
+                    0,
+                    active.segment.boundary_index,
+                )
+            )
+        duration_ms = max(1, round(len(pcm) / 2 / sample_rate * 1000))
+        active.position_ms = min(
+            active.position_ms + duration_ms,
+            active.segment.duration_ms,
+        )
+        if active.position_ms >= active.segment.duration_ms:
+            acknowledgements.append(
+                self._acknowledgement(
+                    active,
+                    protocol_pb2.PLAYBACK_STATUS_COMPLETED,
+                    active.segment.duration_ms,
+                    active.segment.boundary_index + 1,
+                )
+            )
+            self.pending.popleft()
+        elif active.position_ms - active.last_reported_position_ms >= 250:
+            active.last_reported_position_ms = active.position_ms
+            acknowledgements.append(
+                self._acknowledgement(
+                    active,
+                    protocol_pb2.PLAYBACK_STATUS_POSITION,
+                    active.position_ms,
+                    active.segment.boundary_index,
+                )
+            )
+        self.sent.extend(acknowledgements)
+        return acknowledgements
+
+    def flush(self, detail: str) -> list[protocol_pb2.PlaybackAcknowledgement]:
+        acknowledgements: list[protocol_pb2.PlaybackAcknowledgement] = []
+        while self.pending:
+            active = self.pending.popleft()
+            acknowledgements.append(
+                self._acknowledgement(
+                    active,
+                    protocol_pb2.PLAYBACK_STATUS_FLUSHED,
+                    active.position_ms,
+                    active.segment.boundary_index,
+                    detail,
+                )
+            )
+        self.sent.extend(acknowledgements)
+        return acknowledgements
+
+    @staticmethod
+    def _acknowledgement(
+        active: PendingPlayback,
+        status: int,
+        position_ms: int,
+        boundary_index: int,
+        detail: str = "",
+    ) -> protocol_pb2.PlaybackAcknowledgement:
+        acknowledgement = protocol_pb2.PlaybackAcknowledgement(
+            acknowledgement_id=str(uuid4()),
+            playback_id=active.segment.playback_id,
+            operation=active.segment.operation,
+            segment_id=active.segment.segment_id,
+            status=status,
+            position_ms=position_ms,
+            boundary_index=boundary_index,
+            detail=detail,
+        )
+        acknowledgement.occurred_at.GetCurrentTime()
+        return acknowledgement
 
 
 async def wait_until(predicate, limit_seconds: float = 30.0) -> None:
@@ -209,7 +320,33 @@ async def publish_audio(source: RecordingAudioSource, utterance: Utterance) -> t
     return started_at, speech_ended_at
 
 
-async def send_control(room: rtc.Room, kind: int) -> None:
+async def send_playback_acknowledgement(
+    room: rtc.Room,
+    acknowledgement: protocol_pb2.PlaybackAcknowledgement,
+) -> None:
+    packet = protocol_pb2.ClientEvent(
+        protocol_version=2,
+        playback_acknowledgement=acknowledgement,
+    )
+    await room.local_participant.publish_data(
+        packet.SerializeToString(deterministic=True),
+        reliable=True,
+        destination_identities=["radcliffe-worker"],
+    )
+
+
+async def send_control(
+    room: rtc.Room,
+    kind: int,
+    playback: ClientPlaybackTracker | None = None,
+) -> None:
+    if playback is not None and kind in {
+        protocol_pb2.ControlCommand.KIND_INTERRUPT,
+        protocol_pb2.ControlCommand.KIND_PAUSE,
+        protocol_pb2.ControlCommand.KIND_STOP,
+    }:
+        for acknowledgement in playback.flush("control flushed synthetic audio sink"):
+            await send_playback_acknowledgement(room, acknowledgement)
     packet = protocol_pb2.ClientEvent(
         protocol_version=2,
         control_command=protocol_pb2.ControlCommand(
@@ -401,6 +538,7 @@ async def run(commit: str) -> int:
 
     room = rtc.Room()
     state = SmokeState()
+    playback = ClientPlaybackTracker()
     checks: list[Check] = []
     cancelled_user_message_id: str | None = None
     run_error: Exception | None = None
@@ -409,7 +547,10 @@ async def run(commit: str) -> int:
         stream = rtc.AudioStream(track, sample_rate=OUTPUT_RATE, num_channels=1)
         try:
             async for event in stream:
-                state.output.append(TimedAudio(time.monotonic(), bytes(event.frame.data)))
+                pcm = bytes(event.frame.data)
+                state.output.append(TimedAudio(time.monotonic(), pcm))
+                for acknowledgement in playback.audio_frame(pcm, OUTPUT_RATE):
+                    await send_playback_acknowledgement(room, acknowledgement)
         finally:
             await stream.aclose()
 
@@ -427,6 +568,8 @@ async def run(commit: str) -> int:
             return
         if event.protocol_version == 2:
             state.events.append(TimedEvent(time.monotonic(), event))
+            if event.HasField("playback_segment"):
+                playback.announce(event.playback_segment)
 
     try:
         await room.connect(credentials["livekit_url"], credentials["participant_token"])
@@ -440,7 +583,7 @@ async def run(commit: str) -> int:
         await room.local_participant.publish_track(track, options)
         await asyncio.sleep(0.5)
 
-        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -470,7 +613,7 @@ async def run(commit: str) -> int:
             )
         )
 
-        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -800,7 +943,7 @@ async def run(commit: str) -> int:
         )
         await asyncio.sleep(0.8)
         source_pause_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -859,7 +1002,7 @@ async def run(commit: str) -> int:
 
         source_resume_index = len(state.events)
         source_resume_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -956,7 +1099,7 @@ async def run(commit: str) -> int:
                 },
             )
         )
-        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -999,7 +1142,7 @@ async def run(commit: str) -> int:
             )
         )
         interrupt_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -1330,7 +1473,7 @@ async def run(commit: str) -> int:
         source_message_id = source_envelopes[0].message_id
         with sqlite3.connect(output_dir / "events.sqlite3") as database:
             playback_rows = database.execute(
-                """SELECT segment_id, status, boundary_index
+                """SELECT playback_id, segment_id, status, boundary_index
                 FROM playback_acknowledgements
                 WHERE session_id = ? AND segment_id LIKE ?
                 ORDER BY rowid""",
@@ -1339,26 +1482,44 @@ async def run(commit: str) -> int:
         first_segment = f"{source_message_id}:0"
         started_first = sum(
             segment_id == first_segment and status == "started"
-            for segment_id, status, _boundary in playback_rows
+            for _playback_id, segment_id, status, _boundary in playback_rows
         )
         completed_boundary = max(
             (
                 int(boundary)
-                for _segment_id, status, boundary in playback_rows
+                for _playback_id, _segment_id, status, boundary in playback_rows
                 if status == "completed"
             ),
             default=0,
         )
+        client_playback_ids = {acknowledgement.playback_id for acknowledgement in playback.sent}
+        persisted_playback_ids = {
+            playback_id for playback_id, _segment_id, _status, _boundary in playback_rows
+        }
         checks.append(
             Check(
                 "source_resume_uses_persisted_playback_boundary",
                 len(source_envelopes) == 1
                 and started_first == 2
-                and any(status == "flushed" for _, status, _ in playback_rows)
+                and any(status == "flushed" for _, _, status, _ in playback_rows)
                 and completed_boundary == 4,
                 (
                     f"source envelopes={len(source_envelopes)}, first starts={started_first}, "
                     f"final boundary={completed_boundary}, ledger={playback_rows!r}"
+                ),
+            )
+        )
+        checks.append(
+            Check(
+                "source_playback_is_device_acknowledged",
+                bool(persisted_playback_ids) and persisted_playback_ids <= client_playback_ids,
+                (
+                    "every persisted source playback attempt came from the decoded-audio client"
+                    if persisted_playback_ids and persisted_playback_ids <= client_playback_ids
+                    else (
+                        f"persisted={sorted(persisted_playback_ids)!r}, "
+                        f"client={sorted(client_playback_ids)!r}"
+                    )
                 ),
             )
         )

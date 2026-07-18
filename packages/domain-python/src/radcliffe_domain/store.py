@@ -174,12 +174,15 @@ class EventStore:
         boundary_index: int,
         occurred_at: datetime,
         detail: str = "",
+        playback_id: str = "",
     ) -> bool:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
-                """INSERT OR IGNORE INTO playback_acknowledgements VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )""",
+                """INSERT OR IGNORE INTO playback_acknowledgements(
+                    acknowledgement_id, session_id, generation, operation_id,
+                    segment_id, status, position_ms, boundary_index, occurred_at,
+                    detail, playback_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     acknowledgement_id,
                     session_id,
@@ -191,6 +194,7 @@ class EventStore:
                     boundary_index,
                     occurred_at.astimezone(UTC).isoformat(),
                     detail,
+                    playback_id,
                 ),
             )
             await db.commit()

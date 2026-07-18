@@ -82,5 +82,16 @@ public interface ServerEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.ProtocolError getError();
 
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   * @return Whether the playbackSegment field is set.
+   */
+  boolean hasPlaybackSegment();
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   * @return The playbackSegment.
+   */
+  works.ravd.radcliffe.protocol.v2.PlaybackSegment getPlaybackSegment();
+
   public works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase getPayloadCase();
 }

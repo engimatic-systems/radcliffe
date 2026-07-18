@@ -3,12 +3,17 @@ import base64
 import hashlib
 import sqlite3
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.projection import TURN_DISPOSITION_METADATA, context_replay
-from radcliffe_domain.session import ConversationState
+from radcliffe_domain.session import (
+    ConversationState,
+    PlaybackAcknowledgement,
+    PlaybackStatus,
+)
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolGateway
 from radcliffe_media.pipeline import VoicePipeline
@@ -30,6 +35,9 @@ class FakePublisher:
         self.segment_ids: list[str] = []
         self.flushed = False
         self.published = asyncio.Event()
+
+    def duration_ms(self, pcm_audio: bytes) -> int:
+        return len(pcm_audio)
 
     async def publish(
         self,
@@ -97,6 +105,8 @@ class FakeEvents:
         self.messages = []
         self.states = []
         self.turn_completed = asyncio.Event()
+        self.playback_segments = []
+        self.playback_announced = asyncio.Event()
 
     async def message(self, envelope) -> None:
         self.messages.append(envelope)
@@ -105,6 +115,29 @@ class FakeEvents:
         self.states.append((previous, current, generation, reason, operation))
         if reason == "turn complete":
             self.turn_completed.set()
+
+    async def playback_segment(
+        self,
+        operation,
+        playback_id,
+        segment_id,
+        boundary_index,
+        duration_ms,
+        canonical_sha256,
+        source,
+    ) -> None:
+        self.playback_segments.append(
+            (
+                operation,
+                playback_id,
+                segment_id,
+                boundary_index,
+                duration_ms,
+                canonical_sha256,
+                source,
+            )
+        )
+        self.playback_announced.set()
 
 
 class AnswerOrchestrator:
@@ -328,6 +361,133 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
     source = next(item for item in worker_history if item.source is SourceKind.TEXT_SOURCE)
     assert source.content.canonical_bytes() == canonical
     assert source.sequence == 2
+
+
+@pytest.mark.asyncio
+async def test_client_audio_sink_is_authoritative_for_source_boundary(tmp_path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    canonical = b"One exact sentence."
+    (root / "demo.md").write_bytes(canonical)
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
+    grant = CapabilityGrant(
+        grant_id="grant-1",
+        session_id="s1",
+        generation=1,
+        readable_roots=(root,),
+        allowed_tools=frozenset({"read_source"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        worker_store,
+        SourceOrchestrator(ToolGateway(gateway_store), grant),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Read demo.md"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    (
+        operation,
+        playback_id,
+        segment_id,
+        boundary_index,
+        duration_ms,
+        canonical_sha256,
+        source_kind,
+    ) = events.playback_segments[0]
+    assert source_kind is SourceKind.TEXT_SOURCE
+    assert canonical_sha256 == hashlib.sha256(canonical).digest()
+    assert await worker_store.playback_boundary("s1", segment_id) == 0
+
+    with pytest.raises(ValueError, match="invalid boundary"):
+        await pipeline.playback_acknowledgement(
+            PlaybackAcknowledgement(
+                acknowledgement_id="wrong-boundary",
+                operation=operation,
+                segment_id=segment_id,
+                status=PlaybackStatus.STARTED,
+                position_ms=0,
+                boundary_index=boundary_index + 1,
+                occurred_at=datetime.now(UTC),
+                playback_id=playback_id,
+            )
+        )
+
+    for acknowledgement_id, status, position, boundary in (
+        ("device-started", PlaybackStatus.STARTED, 0, boundary_index),
+        ("device-position", PlaybackStatus.POSITION, duration_ms // 2, boundary_index),
+        ("device-completed", PlaybackStatus.COMPLETED, duration_ms, boundary_index + 1),
+    ):
+        acknowledgement = PlaybackAcknowledgement(
+            acknowledgement_id=acknowledgement_id,
+            operation=operation,
+            segment_id=segment_id,
+            status=status,
+            position_ms=position,
+            boundary_index=boundary,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        )
+        if status is PlaybackStatus.POSITION:
+            with pytest.raises(ValueError, match="announced duration"):
+                await pipeline.playback_acknowledgement(
+                    replace(acknowledgement, position_ms=duration_ms + 1)
+                )
+        assert await pipeline.playback_acknowledgement(acknowledgement)
+    await asyncio.wait_for(turn, timeout=1)
+
+    assert await worker_store.playback_boundary("s1", segment_id) == 1
+    with sqlite3.connect(worker_store.path) as database:
+        rows = list(
+            database.execute(
+                "SELECT status, playback_id FROM playback_acknowledgements ORDER BY rowid"
+            )
+        )
+    assert rows == [
+        ("started", playback_id),
+        ("position", playback_id),
+        ("completed", playback_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_playback_acknowledgements_reject_unknown_attempts(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        FakeEvents(),
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+    operation = pipeline.engine.begin(ConversationState.THINKING)
+
+    with pytest.raises(ValueError, match="unknown attempt"):
+        await pipeline.playback_acknowledgement(
+            PlaybackAcknowledgement(
+                acknowledgement_id="unknown",
+                operation=operation,
+                segment_id="unknown",
+                status=PlaybackStatus.STARTED,
+                position_ms=0,
+                boundary_index=0,
+                occurred_at=datetime.now(UTC),
+                playback_id="unknown-attempt",
+            )
+        )
 
 
 @pytest.mark.asyncio

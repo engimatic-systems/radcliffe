@@ -26,6 +26,7 @@ public  final class ServerEvent extends
     TOOL_PROGRESS(5),
     TOOL_RESULT(6),
     ERROR(7),
+    PLAYBACK_SEGMENT(8),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -47,6 +48,7 @@ public  final class ServerEvent extends
         case 5: return TOOL_PROGRESS;
         case 6: return TOOL_RESULT;
         case 7: return ERROR;
+        case 8: return PLAYBACK_SEGMENT;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -401,6 +403,58 @@ public  final class ServerEvent extends
    */
   private void clearError() {
     if (payloadCase_ == 7) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int PLAYBACK_SEGMENT_FIELD_NUMBER = 8;
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   */
+  @java.lang.Override
+  public boolean hasPlaybackSegment() {
+    return payloadCase_ == 8;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.PlaybackSegment getPlaybackSegment() {
+    if (payloadCase_ == 8) {
+       return (works.ravd.radcliffe.protocol.v2.PlaybackSegment) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.PlaybackSegment.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setPlaybackSegment(works.ravd.radcliffe.protocol.v2.PlaybackSegment value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 8;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergePlaybackSegment(works.ravd.radcliffe.protocol.v2.PlaybackSegment value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 8 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.PlaybackSegment.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.PlaybackSegment.newBuilder((works.ravd.radcliffe.protocol.v2.PlaybackSegment) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 8;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+   */
+  private void clearPlaybackSegment() {
+    if (payloadCase_ == 8) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -831,6 +885,54 @@ public  final class ServerEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    @java.lang.Override
+    public boolean hasPlaybackSegment() {
+      return instance.hasPlaybackSegment();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.PlaybackSegment getPlaybackSegment() {
+      return instance.getPlaybackSegment();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    public Builder setPlaybackSegment(works.ravd.radcliffe.protocol.v2.PlaybackSegment value) {
+      copyOnWrite();
+      instance.setPlaybackSegment(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    public Builder setPlaybackSegment(
+        works.ravd.radcliffe.protocol.v2.PlaybackSegment.Builder builderForValue) {
+      copyOnWrite();
+      instance.setPlaybackSegment(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    public Builder mergePlaybackSegment(works.ravd.radcliffe.protocol.v2.PlaybackSegment value) {
+      copyOnWrite();
+      instance.mergePlaybackSegment(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackSegment playback_segment = 8;</code>
+     */
+    public Builder clearPlaybackSegment() {
+      copyOnWrite();
+      instance.clearPlaybackSegment();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ServerEvent)
   }
   @java.lang.Override
@@ -856,10 +958,11 @@ public  final class ServerEvent extends
             works.ravd.radcliffe.protocol.v2.ToolProgress.class,
             works.ravd.radcliffe.protocol.v2.ToolResult.class,
             works.ravd.radcliffe.protocol.v2.ProtocolError.class,
+            works.ravd.radcliffe.protocol.v2.PlaybackSegment.class,
           };
           java.lang.String info =
-              "\u0000\u0007\u0001\u0000\u0001\u0007\u0007\u0000\u0000\u0000\u0001\u000b\u0002<\u0000" +
-              "\u0003<\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000";
+              "\u0000\b\u0001\u0000\u0001\b\b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
+              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

@@ -90,4 +90,16 @@ public interface PlaybackAcknowledgementOrBuilder extends
    */
   com.google.protobuf.ByteString
       getDetailBytes();
+
+  /**
+   * <code>string playback_id = 9;</code>
+   * @return The playbackId.
+   */
+  java.lang.String getPlaybackId();
+  /**
+   * <code>string playback_id = 9;</code>
+   * @return The bytes for playbackId.
+   */
+  com.google.protobuf.ByteString
+      getPlaybackIdBytes();
 }

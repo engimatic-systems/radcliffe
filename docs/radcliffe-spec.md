@@ -231,14 +231,22 @@ The server persists this ledger and uses it to:
 - distinguish generated speech from source reading; and
 - provide audio-grounded diagnostics to the acceptance suite.
 
-Until device acknowledgements are wired into the Android audio sink, the local
-foundation profile uses a conservative provisional cursor: canonical source
-segments remain active for their PCM duration, a pause records the unfinished
-sentence as `flushed`, and resume reads the last completed boundary from SQLite
-before replaying. It never marks the whole source complete merely because audio
-was enqueued, and it never invokes the model or source tool again to resume.
-Device-authored acknowledgements replace this provisional timing before the
-production release gate.
+Before publishing a segment, the worker announces its immutable operation,
+segment, boundary, duration, content digest, source kind, and unique playback
+attempt ID over the reliable data channel. The Android service attaches a sink
+to the decoded LiveKit audio track and emits acknowledgements from PCM consumed
+by that sink—not from server enqueue time or a timer. Pause, interrupt, and stop
+flush unfinished attempts before their corresponding control; track loss fails
+them while the data channel remains available. The worker rejects unknown attempts,
+metadata mismatches, invalid transitions, backwards positions, and premature
+completion; it advances a source boundary only after a valid device-authored
+`completed` acknowledgement. A resumed segment gets a fresh playback attempt
+ID, so delayed acknowledgements from an earlier attempt cannot advance it.
+
+The local LiveKit acceptance client implements the same decoded-audio contract
+and cross-checks every persisted source attempt against the acknowledgements it
+sent. Unit tests retain an explicit server-timed compatibility mode only for
+isolated pipeline fixtures; production workers always require client authority.
 
 ## 7. Message envelopes and the projection seam
 

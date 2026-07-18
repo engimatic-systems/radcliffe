@@ -14,6 +14,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
+from radcliffe_domain.session import PlaybackAcknowledgement
 from radcliffe_domain.store import EventStore
 
 from radcliffe_media.control import ClientControlHandler
@@ -483,6 +484,15 @@ class EndpointProcessor(FrameProcessor):
         if self.voice is not None:
             await self.voice.stop()
 
+    async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> None:
+        if self.voice is None:
+            raise RuntimeError("voice pipeline is not ready")
+        await self.voice.playback_acknowledgement(acknowledgement)
+
+    @staticmethod
+    def duration_ms(pcm_audio: bytes) -> int:
+        return int(len(pcm_audio) / (2 * 24000) * 1000)
+
     async def publish(
         self,
         _segment_id: str,
@@ -491,7 +501,7 @@ class EndpointProcessor(FrameProcessor):
         wait_for_playback: bool = False,
     ) -> int:
         await self.push_frame(OutputAudioRawFrame(pcm_audio, 24000, 1))
-        duration_ms = int(len(pcm_audio) / (2 * 24000) * 1000)
+        duration_ms = self.duration_ms(pcm_audio)
         if wait_for_playback:
             await asyncio.sleep(duration_ms / 1000)
         return duration_ms
@@ -560,6 +570,10 @@ async def run() -> None:
         endpoint,
         LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or ""),
         model_chunk_chars=int(os.environ.get("RADCLIFFE_MODEL_CHUNK_CHARS", "240")),
+        client_playback_acknowledgements=True,
+        playback_ack_timeout_seconds=float(
+            os.environ.get("RADCLIFFE_PLAYBACK_ACK_TIMEOUT_SECONDS", "2")
+        ),
     )
     endpoint.voice = voice
     await voice.start()
