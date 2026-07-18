@@ -21,3 +21,9 @@ Make the deployment boundary, not a maze of per-command prompts, the primary saf
 
 The user can select a documented restricted profile or an advanced host-trust sandbox profile; in host-trust mode the job agent can execute arbitrary Unix commands, create and modify files, install workspace-local dependencies, access the user-authorized internet, download bounded data, and run long analyses without per-command confirmation; the conversational model invokes one idempotent run_job operation and receives bounded progress plus final summaries and artifact references rather than every shell call; the job has a separate replayable context and workspace; cancellation, timeout, disk, CPU, process, and output limits are enforceable by the chosen sandbox; Radcliffe service credentials, host keychains, GitHub credentials, LAN access, and unrelated mounts are absent unless explicitly delegated; prompt-injected downloaded content cannot escape the sandbox boundary; artifacts and provenance are durable and inspectable; and conformance covers web acquisition, multi-step analysis, code execution, large output compaction, restart/resume, cancellation, attempted secret access, and network-boundary escape.
 
+
+## Notes
+
+**2026-07-18T00:47:41Z**
+
+2026-07-17 target workflow: during an hour-long hands-free drive, the foreground agent can launch a six-month lab-paper search, keep chatting or remain quietly listening, announce completion safely, resolve a spoken reference to one returned paper, read its abstract exactly, search the full paper for applications, then launch a sandboxed website/TAM analysis while the conversation stays responsive. Background tool transcripts remain separate; only selected findings, sources, calculations, and artifacts are promoted.
