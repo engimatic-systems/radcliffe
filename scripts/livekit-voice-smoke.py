@@ -324,6 +324,7 @@ async def publish_audio(source: RecordingAudioSource, utterance: Utterance) -> t
 async def send_playback_acknowledgement(
     room: rtc.Room,
     acknowledgement: protocol_pb2.PlaybackAcknowledgement,
+    worker_identity: str,
 ) -> None:
     packet = protocol_pb2.ClientEvent(
         protocol_version=2,
@@ -332,13 +333,14 @@ async def send_playback_acknowledgement(
     await room.local_participant.publish_data(
         packet.SerializeToString(deterministic=True),
         reliable=True,
-        destination_identities=["radcliffe-worker"],
+        destination_identities=[worker_identity],
     )
 
 
 async def send_control(
     room: rtc.Room,
     kind: int,
+    worker_identity: str,
     playback: ClientPlaybackTracker | None = None,
 ) -> None:
     if playback is not None and kind in {
@@ -347,7 +349,7 @@ async def send_control(
         protocol_pb2.ControlCommand.KIND_STOP,
     }:
         for acknowledgement in playback.flush("control flushed synthetic audio sink"):
-            await send_playback_acknowledgement(room, acknowledgement)
+            await send_playback_acknowledgement(room, acknowledgement, worker_identity)
     packet = protocol_pb2.ClientEvent(
         protocol_version=2,
         control_command=protocol_pb2.ControlCommand(
@@ -359,7 +361,7 @@ async def send_control(
     await room.local_participant.publish_data(
         packet.SerializeToString(deterministic=True),
         reliable=True,
-        destination_identities=["radcliffe-worker"],
+        destination_identities=[worker_identity],
     )
 
 
@@ -515,6 +517,7 @@ async def run(commit: str) -> int:
         )
         worker_response.raise_for_status()
         worker_credentials = worker_response.json()
+        worker_identity = str(worker_credentials["participant_identity"])
 
     worker_environment = {
         **os.environ,
@@ -557,13 +560,13 @@ async def run(commit: str) -> int:
                 pcm = bytes(event.frame.data)
                 state.output.append(TimedAudio(time.monotonic(), pcm))
                 for acknowledgement in playback.audio_frame(pcm, OUTPUT_RATE):
-                    await send_playback_acknowledgement(room, acknowledgement)
+                    await send_playback_acknowledgement(room, acknowledgement, worker_identity)
         finally:
             await stream.aclose()
 
     @room.on("track_subscribed")
     def on_track_subscribed(track, _publication, participant) -> None:
-        if participant.identity == "radcliffe-worker" and track.kind == rtc.TrackKind.KIND_AUDIO:
+        if participant.identity == worker_identity and track.kind == rtc.TrackKind.KIND_AUDIO:
             state.capture_tasks.append(asyncio.create_task(capture(track)))
 
     @room.on("data_received")
@@ -580,7 +583,7 @@ async def run(commit: str) -> int:
 
     try:
         await room.connect(credentials["livekit_url"], credentials["participant_token"])
-        await wait_until(lambda: "radcliffe-worker" in room.remote_participants, 30)
+        await wait_until(lambda: worker_identity in room.remote_participants, 30)
         state.started_at = time.monotonic()
         livekit_source = rtc.AudioSource(INPUT_RATE, 1)
         source = RecordingAudioSource(livekit_source, state)
@@ -590,7 +593,7 @@ async def run(commit: str) -> int:
         await room.local_participant.publish_track(track, options)
         await asyncio.sleep(0.5)
 
-        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, playback)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, worker_identity, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -620,7 +623,7 @@ async def run(commit: str) -> int:
             )
         )
 
-        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, playback)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, worker_identity, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -950,7 +953,7 @@ async def run(commit: str) -> int:
         )
         await asyncio.sleep(0.8)
         source_pause_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, playback)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, worker_identity, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -1009,7 +1012,7 @@ async def run(commit: str) -> int:
 
         source_resume_index = len(state.events)
         source_resume_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, playback)
+        await send_control(room, protocol_pb2.ControlCommand.KIND_RESUME, worker_identity, playback)
         await wait_until(
             lambda: (
                 _event_after(
@@ -1106,7 +1109,9 @@ async def run(commit: str) -> int:
                 },
             )
         )
-        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT, playback)
+        await send_control(
+            room, protocol_pb2.ControlCommand.KIND_INTERRUPT, worker_identity, playback
+        )
         await wait_until(
             lambda: (
                 _event_after(
@@ -1149,7 +1154,9 @@ async def run(commit: str) -> int:
             )
         )
         interrupt_started = time.monotonic()
-        await send_control(room, protocol_pb2.ControlCommand.KIND_INTERRUPT, playback)
+        await send_control(
+            room, protocol_pb2.ControlCommand.KIND_INTERRUPT, worker_identity, playback
+        )
         await wait_until(
             lambda: (
                 _event_after(
@@ -1450,7 +1457,7 @@ async def run(commit: str) -> int:
         async with httpx.AsyncClient(timeout=10) as client:
             archive = await client.patch(
                 f"{control_url.rstrip('/')}/v1/sessions/{session_id}",
-                headers={"Authorization": f"Bearer {bootstrap_token}"},
+                headers=enrolled.headers,
                 json={"status": "archived"},
             )
             archive.raise_for_status()

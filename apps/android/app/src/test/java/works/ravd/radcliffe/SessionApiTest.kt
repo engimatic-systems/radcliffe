@@ -9,6 +9,27 @@ import org.json.JSONObject
 
 class SessionApiTest {
     @Test
+    fun enrollmentParserReturnsOnlyServerOwnedIdentity() {
+        val enrollment = SessionApi.parseEnrollment(
+            JSONObject(
+                """{
+                    "device_id": "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "participant_identity": "radcliffe-dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "display_name": "Pixel",
+                    "created_at": "2026-07-17T00:00:00Z",
+                    "last_authenticated_at": null,
+                    "revoked": false
+                }""".trimIndent(),
+            ),
+        )
+        assertEquals("dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", enrollment.deviceId)
+        assertEquals(
+            "radcliffe-dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            enrollment.participantIdentity,
+        )
+    }
+
+    @Test
     fun pixelModelProducesAContractSafeParticipantIdentity() {
         assertEquals("pixel-Pixel-8-Pro", SessionApi.participantIdentity("Pixel 8 Pro"))
     }

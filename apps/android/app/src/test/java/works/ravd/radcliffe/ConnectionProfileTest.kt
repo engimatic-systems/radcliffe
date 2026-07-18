@@ -93,6 +93,48 @@ class ConnectionProfileTest {
         assertEquals("ses_generated", recreated.profile.first().sessionId)
         assertTrue(recreated.beginSessionCreation() != pending)
     }
+
+    @Test
+    fun enrollmentPreparationSurvivesLostResponseAndCompletionDeletesBootstrap() = runBlocking {
+        val dataStore = MemoryDataStore()
+        val cipher = TestCipher()
+        val credential = "rdc_dev_" + "a".repeat(43)
+        val first = ConnectionProfileRepository(
+            dataStore,
+            cipher,
+            installationIdFactory = { "android-installation-1234" },
+            deviceCredentialFactory = { credential },
+        )
+        first.save(ConnectionProfile("http://localhost:8000", "bootstrap-secret"))
+
+        val prepared = first.prepareEnrollment()
+        val retry = ConnectionProfileRepository(
+            dataStore,
+            cipher,
+            installationIdFactory = { error("must reuse installation") },
+            deviceCredentialFactory = { error("must reuse credential") },
+        ).prepareEnrollment()
+
+        assertEquals(prepared.installationId, retry.installationId)
+        assertEquals(credential, retry.deviceCredential)
+        assertEquals("bootstrap-secret", retry.bootstrapToken)
+        assertFalse(dataStore.snapshot().asMap().values.any { it == credential })
+        first.completeEnrollment(
+            "dev_" + "b".repeat(32),
+            "radcliffe-dev_" + "b".repeat(32),
+        )
+        val enrolled = first.profile.first()
+        assertTrue(enrolled.isEnrolled)
+        assertTrue(enrolled.isConfigured)
+        assertEquals("", enrolled.bootstrapToken)
+        assertEquals(credential, enrolled.deviceCredential)
+
+        first.invalidateEnrollment()
+        val invalidated = first.profile.first()
+        assertFalse(invalidated.isConfigured)
+        assertEquals("", invalidated.deviceCredential)
+        assertEquals("", invalidated.installationId)
+    }
 }
 
 private class MemoryDataStore(initial: Preferences = emptyPreferences()) : DataStore<Preferences> {

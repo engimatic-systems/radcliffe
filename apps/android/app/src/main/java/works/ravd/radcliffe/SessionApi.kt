@@ -12,6 +12,11 @@ data class SessionCredentials(
     val participantToken: String,
 )
 
+data class DeviceEnrollment(
+    val deviceId: String,
+    val participantIdentity: String,
+)
+
 data class SessionSummary(
     val sessionId: String,
     val createdAt: Instant,
@@ -59,8 +64,24 @@ object SessionApi {
         return "pixel-$sanitized"
     }
 
-    fun testConnection(baseUrl: String, bootstrapToken: String) {
-        list(baseUrl, bootstrapToken, limit = 1)
+    fun enroll(
+        baseUrl: String,
+        bootstrapToken: String,
+        installationId: String,
+        displayName: String,
+        deviceCredential: String,
+    ): DeviceEnrollment {
+        val body = JSONObject()
+            .put("installation_id", installationId)
+            .put("display_name", displayName)
+            .put("credential", deviceCredential)
+        return parseEnrollment(
+            request(baseUrl, bootstrapToken, "POST", "/v1/devices/enroll", body),
+        )
+    }
+
+    fun testConnection(baseUrl: String, deviceCredential: String) {
+        request(baseUrl, deviceCredential, "GET", "/v1/devices/me")
     }
 
     fun list(
@@ -223,9 +244,14 @@ object SessionApi {
         participantToken = json.getString("participant_token"),
     )
 
+    internal fun parseEnrollment(json: JSONObject): DeviceEnrollment = DeviceEnrollment(
+        deviceId = json.getString("device_id"),
+        participantIdentity = json.getString("participant_identity"),
+    )
+
     private fun request(
         baseUrl: String,
-        bootstrapToken: String,
+        bearerCredential: String,
         method: String,
         path: String,
         body: JSONObject? = null,
@@ -235,7 +261,7 @@ object SessionApi {
             connection.requestMethod = method
             connection.connectTimeout = 5_000
             connection.readTimeout = 120_000
-            connection.setRequestProperty("Authorization", "Bearer $bootstrapToken")
+            connection.setRequestProperty("Authorization", "Bearer $bearerCredential")
             connection.setRequestProperty("Accept", "application/json")
             if (body != null) {
                 connection.doOutput = true

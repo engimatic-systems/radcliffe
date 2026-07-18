@@ -177,8 +177,9 @@ developer and desktop client, but it is not the mobile reliability baseline.
   control plane stores only its digest, binds room identity server-side, rejects
   bootstrap authorization on ordinary session routes, and supports immediate
   operator revocation. Android persists the enrolled credential through the
-  same Keystore-backed repository boundary and then deletes the legacy key and
-  ciphertext.
+  same Keystore-backed repository boundary and then deletes the bootstrap
+  ciphertext; the non-exportable key remains because it protects the enrolled
+  credential.
 - **Realtime:** the official LiveKit Android SDK, configured for two-way
   communication audio. The app publishes microphone audio and subscribes to
   the agent’s audio track; control events use LiveKit data packets.
