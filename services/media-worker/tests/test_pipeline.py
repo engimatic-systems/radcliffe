@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import json
 import sqlite3
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -15,6 +16,7 @@ from radcliffe_domain.session import (
     PlaybackStatus,
 )
 from radcliffe_domain.store import EventStore
+from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolGateway
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarEvent
@@ -388,6 +390,36 @@ async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None
         ConversationState.SPEAKING,
         ConversationState.LISTENING,
     ]
+
+
+@pytest.mark.asyncio
+async def test_turn_emits_content_free_correlated_phase_telemetry(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "private-session-name",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        FakeEvents(),
+        TelemetrySink(path, strict=True),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("private transcript content")
+
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    trace_ids = {item["trace_id"] for item in records if item["trace_id"]}
+    assert len(trace_ids) == 1
+    assert all(item["operation"] for item in records if item["trace_id"])
+    assert any(item["outcome"] == "started" and item["event"] == "turn" for item in records)
+    assert any(item["outcome"] == "completed" and item["event"] == "turn" for item in records)
+    assert any(item["phase"] == "first_audio" for item in records)
+    encoded = path.read_text()
+    assert "private-session-name" not in encoded
+    assert "private transcript content" not in encoded
 
 
 @pytest.mark.asyncio

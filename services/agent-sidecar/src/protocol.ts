@@ -15,7 +15,20 @@ export interface TurnRequest {
   requestId: string;
   sessionId: string;
   generation: number;
+  operationId?: string;
+  traceId?: string;
   packets: ContextPacket[];
+}
+
+const TRACE_ID = /^trc_[0-9a-f]{32}$/;
+
+export function validTurnIdentity(turn: TurnRequest): boolean {
+  return (
+    typeof turn.operationId === "string" &&
+    turn.operationId.length >= 16 &&
+    typeof turn.traceId === "string" &&
+    TRACE_ID.test(turn.traceId)
+  );
 }
 
 export interface ContextUsage {
@@ -63,6 +76,8 @@ export type SidecarEvent =
 interface ToolExecutionRequestBase {
   sessionId: string;
   generation: number;
+  operationId: string;
+  traceId: string;
   callId: string;
   idempotencyKey: string;
 }

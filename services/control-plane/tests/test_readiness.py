@@ -19,6 +19,7 @@ def settings(tmp_path, *, managed_workers_enabled: bool = False) -> Settings:
         internal_token="internal-token-1234",
         database_path=tmp_path / "events.sqlite3",
         source_root=source_root,
+        telemetry_path=tmp_path / "telemetry.jsonl",
         sidecar_url="http://127.0.0.1:8787",
         managed_workers_enabled=managed_workers_enabled,
     )

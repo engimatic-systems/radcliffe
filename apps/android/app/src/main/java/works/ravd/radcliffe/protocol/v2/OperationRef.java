@@ -18,6 +18,7 @@ public  final class OperationRef extends
     sessionId_ = "";
     operationId_ = "";
     cancellationId_ = "";
+    traceId_ = "";
   }
   public static final int SESSION_ID_FIELD_NUMBER = 1;
   private java.lang.String sessionId_;
@@ -186,6 +187,54 @@ public  final class OperationRef extends
       com.google.protobuf.ByteString value) {
     checkByteStringIsUtf8(value);
     cancellationId_ = value.toStringUtf8();
+
+  }
+
+  public static final int TRACE_ID_FIELD_NUMBER = 5;
+  private java.lang.String traceId_;
+  /**
+   * <code>string trace_id = 5;</code>
+   * @return The traceId.
+   */
+  @java.lang.Override
+  public java.lang.String getTraceId() {
+    return traceId_;
+  }
+  /**
+   * <code>string trace_id = 5;</code>
+   * @return The bytes for traceId.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getTraceIdBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(traceId_);
+  }
+  /**
+   * <code>string trace_id = 5;</code>
+   * @param value The traceId to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setTraceId(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    traceId_ = value;
+  }
+  /**
+   * <code>string trace_id = 5;</code>
+   */
+  private void clearTraceId() {
+
+    traceId_ = getDefaultInstance().getTraceId();
+  }
+  /**
+   * <code>string trace_id = 5;</code>
+   * @param value The bytes for traceId to set.
+   */
+  private void setTraceIdBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    traceId_ = value.toStringUtf8();
 
   }
 
@@ -461,6 +510,55 @@ public  final class OperationRef extends
       return this;
     }
 
+    /**
+     * <code>string trace_id = 5;</code>
+     * @return The traceId.
+     */
+    @java.lang.Override
+    public java.lang.String getTraceId() {
+      return instance.getTraceId();
+    }
+    /**
+     * <code>string trace_id = 5;</code>
+     * @return The bytes for traceId.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getTraceIdBytes() {
+      return instance.getTraceIdBytes();
+    }
+    /**
+     * <code>string trace_id = 5;</code>
+     * @param value The traceId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTraceId(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setTraceId(value);
+      return this;
+    }
+    /**
+     * <code>string trace_id = 5;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearTraceId() {
+      copyOnWrite();
+      instance.clearTraceId();
+      return this;
+    }
+    /**
+     * <code>string trace_id = 5;</code>
+     * @param value The bytes for traceId to set.
+     * @return This builder for chaining.
+     */
+    public Builder setTraceIdBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setTraceIdBytes(value);
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.OperationRef)
   }
   @java.lang.Override
@@ -481,10 +579,11 @@ public  final class OperationRef extends
             "generation_",
             "operationId_",
             "cancellationId_",
+            "traceId_",
           };
           java.lang.String info =
-              "\u0000\u0004\u0000\u0000\u0001\u0004\u0004\u0000\u0000\u0000\u0001\u0208\u0002\u0003" +
-              "\u0003\u0208\u0004\u0208";
+              "\u0000\u0005\u0000\u0000\u0001\u0005\u0005\u0000\u0000\u0000\u0001\u0208\u0002\u0003" +
+              "\u0003\u0208\u0004\u0208\u0005\u0208";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

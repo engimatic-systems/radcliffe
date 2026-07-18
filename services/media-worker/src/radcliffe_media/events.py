@@ -52,6 +52,7 @@ class LiveKitEventSink:
             generation=generation,
             operation_id=operation.operation_id if operation else "",
             cancellation_id=operation.cancellation_id if operation else "",
+            trace_id=operation.trace_id if operation else "",
         )
         event = protocol_pb2.ServerEvent(
             protocol_version=2,
@@ -83,6 +84,7 @@ class LiveKitEventSink:
                     generation=operation.generation,
                     operation_id=operation.operation_id,
                     cancellation_id=operation.cancellation_id,
+                    trace_id=operation.trace_id,
                 ),
                 playback_id=playback_id,
                 segment_id=segment_id,

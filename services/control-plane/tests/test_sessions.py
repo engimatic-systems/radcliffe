@@ -80,6 +80,7 @@ def settings(tmp_path) -> Settings:
         owner_id="test-owner",
         database_path=tmp_path / "events.sqlite3",
         source_root=source_root,
+        telemetry_path=tmp_path / "telemetry.jsonl",
         managed_workers_enabled=False,
     )
 

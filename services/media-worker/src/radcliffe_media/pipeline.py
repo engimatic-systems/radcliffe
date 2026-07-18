@@ -31,6 +31,7 @@ from radcliffe_domain.session import (
     SessionEngine,
 )
 from radcliffe_domain.store import EventStore
+from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_media.sidecar import SidecarEvent
@@ -160,6 +161,7 @@ class VoicePipeline:
         synthesizer: Synthesizer,
         publisher: AudioPublisher,
         events: VoiceEventSink | None = None,
+        telemetry: TelemetrySink | None = None,
         *,
         model_chunk_chars: int = 240,
         client_playback_acknowledgements: bool = False,
@@ -175,6 +177,7 @@ class VoicePipeline:
         self.synthesizer = synthesizer
         self.publisher = publisher
         self.events = events
+        self.telemetry = telemetry or TelemetrySink(None)
         self.model_chunk_chars = model_chunk_chars
         self.client_playback_acknowledgements = client_playback_acknowledgements
         self.playback_ack_timeout_seconds = playback_ack_timeout_seconds
@@ -209,6 +212,14 @@ class VoicePipeline:
             previous = self.engine.state
             self.engine.ready()
             await self._notify_state(previous, "session ready after reconnect")
+            self.telemetry.emit(
+                component="media_worker",
+                event="reconnect",
+                outcome="reconnected",
+                session_id=self.engine.session_id,
+                generation=self.engine.generation,
+                phase="session",
+            )
 
     async def barge_in(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
@@ -312,6 +323,15 @@ class VoicePipeline:
         previous = self.engine.state
         operation = self.engine.begin(ConversationState.THINKING)
         turn.operation = operation
+        self.telemetry.emit(
+            component="media_worker",
+            event="turn",
+            outcome="started",
+            session_id=self.engine.session_id,
+            generation=operation.generation,
+            phase="orchestration",
+            operation=operation,
+        )
         await self._notify_state(previous, "transcription complete", operation)
         history = await self.store.replay(self.engine.session_id)
         packets = context_replay(history)
@@ -320,6 +340,8 @@ class VoicePipeline:
             "requestId": request_id,
             "sessionId": self.engine.session_id,
             "generation": self.engine.generation,
+            "operationId": operation.operation_id,
+            "traceId": operation.trace_id,
             "packets": [
                 packet.to_wire(int(item.created_at.timestamp() * 1000))
                 for item, packet in zip(history, packets, strict=True)
@@ -679,6 +701,23 @@ class VoicePipeline:
                 raise ValueError("unsupported playback acknowledgement status")
             pending.latest_position_ms = acknowledgement.position_ms
             persisted = await self.engine.acknowledge(acknowledgement)
+            self.telemetry.emit(
+                component="android",
+                event="playback",
+                outcome=(
+                    "failed"
+                    if acknowledgement.status is PlaybackStatus.FAILED
+                    else "interrupted"
+                    if acknowledgement.status is PlaybackStatus.FLUSHED
+                    else "completed"
+                    if acknowledgement.status is PlaybackStatus.COMPLETED
+                    else "succeeded"
+                ),
+                session_id=self.engine.session_id,
+                generation=acknowledgement.operation.generation,
+                phase="acknowledgement",
+                operation=acknowledgement.operation,
+            )
             if pending.terminal_status is not None:
                 pending.terminal.set()
             return persisted
@@ -718,6 +757,7 @@ class VoicePipeline:
             self._active_turn = None
             self._paused_source = None
             await self._notify_state(previous, "turn complete", turn.operation)
+            self._emit_turn_outcome(turn, "completed")
 
     async def _finish_cancelled(self, turn: _ActiveTurn) -> None:
         async with self._coordinator:
@@ -754,6 +794,10 @@ class VoicePipeline:
                 self.engine.interrupt()
                 await self._notify_state(previous, turn.requested_disposition, turn.operation)
             self._active_turn = None
+            self._emit_turn_outcome(
+                turn,
+                "interrupted" if turn.requested_disposition == "interrupted" else "cancelled",
+            )
 
     async def _finish_failed(self, turn: _ActiveTurn) -> None:
         async with self._coordinator:
@@ -782,6 +826,7 @@ class VoicePipeline:
                 self.engine.interrupt()
                 await self._notify_state(previous, "turn failed", turn.operation)
             self._active_turn = None
+            self._emit_turn_outcome(turn, "failed")
 
     async def _append_disposition(self, turn: _ActiveTurn, disposition: str) -> MessageEnvelope:
         operation = turn.operation
@@ -846,6 +891,31 @@ class VoicePipeline:
             self.engine.session_id,
             operation.operation_id if operation is not None else "pending",
             operation.generation if operation is not None else self.engine.generation,
+        )
+        self.telemetry.emit(
+            component="media_worker",
+            event="phase",
+            outcome="succeeded",
+            session_id=self.engine.session_id,
+            generation=operation.generation if operation is not None else self.engine.generation,
+            phase=phase,
+            operation=operation,
+            duration_ms=seconds * 1000,
+        )
+
+    def _emit_turn_outcome(self, turn: _ActiveTurn, outcome: str) -> None:
+        operation = turn.operation
+        if operation is None:
+            return
+        self.telemetry.emit(
+            component="media_worker",
+            event="turn",
+            outcome=outcome,
+            session_id=self.engine.session_id,
+            generation=operation.generation,
+            phase="orchestration",
+            operation=operation,
+            duration_ms=(monotonic() - turn.started_at) * 1000,
         )
 
     @staticmethod

@@ -36,7 +36,9 @@ from radcliffe_domain.projection import (
     TURN_EVENT_METADATA,
     context_replay,
 )
+from radcliffe_domain.session import Operation
 from radcliffe_domain.store import EventStore
+from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 
 from radcliffe_control.context_usage import (
@@ -224,6 +226,8 @@ class ToolCallRequest(BaseModel):
 
     session_id: str
     generation: int
+    operation_id: str = Field(min_length=16, max_length=128)
+    trace_id: str = Field(pattern=r"^trc_[0-9a-f]{32}$")
     call_id: str
     idempotency_key: str
     tool_name: Literal["list_sources", "read_source"]
@@ -264,6 +268,7 @@ class Runtime:
     context_usage: ContextUsageClient
     devices: DeviceRegistry
     readiness: ReadinessProbe
+    telemetry: TelemetrySink
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -377,6 +382,7 @@ def create_app(
             context_usage_client or SidecarContextUsageClient(settings.sidecar_url),
             DeviceRegistry(settings.database_path),
             readiness_probe or ReadinessProbe(settings),
+            TelemetrySink(settings.telemetry_path),
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -461,6 +467,14 @@ def create_app(
         report = await active.readiness.check(
             worker_supervisor_available=active.workers is not None,
             worker_maintenance_running=maintenance is not None and not maintenance.done(),
+        )
+        active.telemetry.emit(
+            component="control",
+            event="readiness",
+            outcome="ready" if report.status == "ready" else "failed",
+            session_id="control-plane",
+            generation=0,
+            phase="dependencies",
         )
         if report.status != "ready":
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -919,11 +933,45 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> ToolCallResponse:
         _bearer(authorization, active.settings.internal_token)
+        operation = Operation(
+            session_id=request.session_id,
+            generation=request.generation,
+            operation_id=request.operation_id,
+            cancellation_id="",
+            trace_id=request.trace_id,
+        )
+        active.telemetry.emit(
+            component="control",
+            event="tool",
+            outcome="started",
+            session_id=request.session_id,
+            generation=request.generation,
+            phase="authorization",
+            operation=operation,
+        )
         async with active.lock:
             session = active.sessions.get(request.session_id)
             if session is None:
+                active.telemetry.emit(
+                    component="control",
+                    event="tool_error",
+                    outcome="failed",
+                    session_id=request.session_id,
+                    generation=request.generation,
+                    phase="authorization",
+                    operation=operation,
+                )
                 raise HTTPException(status_code=403, detail="unknown session")
             if request.generation < session.latest_operation_generation:
+                active.telemetry.emit(
+                    component="control",
+                    event="tool_error",
+                    outcome="failed",
+                    session_id=request.session_id,
+                    generation=request.generation,
+                    phase="authorization",
+                    operation=operation,
+                )
                 raise HTTPException(status_code=403, detail="stale operation generation")
             grant = session.grant
             if request.generation > session.latest_operation_generation:
@@ -951,6 +999,15 @@ def create_app(
                         sort_keys=True,
                         separators=(",", ":"),
                     )
+                    active.telemetry.emit(
+                        component="control",
+                        event="tool",
+                        outcome="completed",
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        phase="execution",
+                        operation=operation,
+                    )
                     return ToolCallResponse(
                         model_content=model_content,
                         details={
@@ -967,9 +1024,38 @@ def create_app(
                     raw_arguments=request.arguments.model_dump(),
                 )
             except ToolDeniedError as exc:
+                active.telemetry.emit(
+                    component="control",
+                    event="tool_error",
+                    outcome="failed",
+                    session_id=request.session_id,
+                    generation=request.generation,
+                    phase="authorization",
+                    operation=operation,
+                )
                 raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except Exception:
+                active.telemetry.emit(
+                    component="control",
+                    event="tool_error",
+                    outcome="failed",
+                    session_id=request.session_id,
+                    generation=request.generation,
+                    phase="execution",
+                    operation=operation,
+                )
+                raise
         source = result.source_envelope
         source_wire = source.to_proto().SerializeToString(deterministic=True)
+        active.telemetry.emit(
+            component="control",
+            event="tool",
+            outcome="completed",
+            session_id=request.session_id,
+            generation=request.generation,
+            phase="execution",
+            operation=operation,
+        )
         return ToolCallResponse(
             model_content=(
                 f"Canonical source {source.message_id} was authorized and handed directly "

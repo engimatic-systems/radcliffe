@@ -176,6 +176,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         const toolRequest: ToolExecutionRequest = {
           sessionId: request.sessionId,
           generation: request.generation,
+          operationId: request.operationId!,
+          traceId: request.traceId!,
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "list_sources",
@@ -211,6 +213,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         const toolRequest: ToolExecutionRequest = {
           sessionId: request.sessionId,
           generation: request.generation,
+          operationId: request.operationId!,
+          traceId: request.traceId!,
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "read_source",

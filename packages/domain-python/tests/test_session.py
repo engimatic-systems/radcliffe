@@ -20,6 +20,8 @@ async def test_interrupt_invalidates_output_and_playback_boundary_is_durable(tmp
     engine.ready()
     engine.begin(ConversationState.THINKING)
     speaking = engine.begin(ConversationState.SPEAKING)
+    assert speaking.trace_id.startswith("trc_")
+    assert len(speaking.trace_id) == 36
     ack = PlaybackAcknowledgement(
         acknowledgement_id="ack-1",
         operation=speaking,

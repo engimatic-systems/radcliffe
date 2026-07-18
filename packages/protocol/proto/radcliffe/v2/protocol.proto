@@ -93,6 +93,7 @@ message OperationRef {
   uint64 generation = 2;
   string operation_id = 3;
   string cancellation_id = 4;
+  string trace_id = 5;
 }
 
 message SessionStart {

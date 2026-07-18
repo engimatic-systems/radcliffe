@@ -16,6 +16,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
 from radcliffe_domain.session import PlaybackAcknowledgement
 from radcliffe_domain.store import EventStore
+from radcliffe_domain.telemetry import TelemetrySink
 
 from radcliffe_media.control import ClientControlHandler
 from radcliffe_media.events import LiveKitEventSink
@@ -576,6 +577,7 @@ async def run() -> None:
         speech,
         endpoint,
         LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or ""),
+        TelemetrySink.from_environment(),
         model_chunk_chars=int(os.environ.get("RADCLIFFE_MODEL_CHUNK_CHARS", "240")),
         client_playback_acknowledgements=True,
         playback_ack_timeout_seconds=float(

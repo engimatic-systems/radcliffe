@@ -96,6 +96,23 @@ public object OperationRefKt {
     public fun clearCancellationId() {
       _builder.clearCancellationId()
     }
+
+    /**
+     * `string trace_id = 5;`
+     */
+    public var traceId: kotlin.String
+      @kotlin.jvm.JvmName("getTraceId")
+        get() = _builder.traceId
+      @kotlin.jvm.JvmName("setTraceId")
+        set(value) {
+        _builder.traceId = value
+      }
+    /**
+     * `string trace_id = 5;`
+     */
+    public fun clearTraceId() {
+      _builder.clearTraceId()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.OperationRef.copy(block: `works.ravd.radcliffe.protocol.v2`.OperationRefKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.OperationRef =

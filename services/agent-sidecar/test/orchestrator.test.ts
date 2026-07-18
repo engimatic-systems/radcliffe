@@ -32,7 +32,14 @@ function packet(
 }
 
 function request(packets: ContextPacket[]): TurnRequest {
-  return { requestId: "request-1", sessionId: "session-1", generation: 1, packets };
+  return {
+    requestId: "request-1",
+    sessionId: "session-1",
+    generation: 1,
+    operationId: "operation-123456",
+    traceId: `trc_${"c".repeat(32)}`,
+    packets,
+  };
 }
 
 describe("PiAgentOrchestrator", () => {

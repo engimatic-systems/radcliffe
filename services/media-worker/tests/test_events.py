@@ -29,7 +29,7 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     )
     await sink.message(envelope)
     await sink.playback_segment(
-        Operation("s1", 1, "operation-1", "cancel-1"),
+        Operation("s1", 1, "operation-1", "cancel-1", "trc_" + "a" * 32),
         "playback-1",
         "segment-1",
         2,
@@ -48,3 +48,4 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     assert playback.playback_segment.segment_id == "segment-1"
     assert playback.playback_segment.duration_ms == 1250
     assert playback.playback_segment.source == protocol_pb2.SOURCE_KIND_TEXT_SOURCE
+    assert playback.playback_segment.operation.trace_id == "trc_" + "a" * 32

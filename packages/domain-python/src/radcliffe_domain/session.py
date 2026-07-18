@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,6 +28,17 @@ class PlaybackStatus(StrEnum):
     COMPLETED = "completed"
     FLUSHED = "flushed"
     FAILED = "failed"
+
+
+TRACE_ID_PATTERN = re.compile(r"^trc_[0-9a-f]{32}$")
+
+
+def trace_id_for_operation(operation_id: str) -> str:
+    return f"trc_{hashlib.sha256(operation_id.encode()).hexdigest()[:32]}"
+
+
+def valid_trace_id(trace_id: str) -> bool:
+    return TRACE_ID_PATTERN.fullmatch(trace_id) is not None
 
 
 _TRANSITIONS: dict[ConversationState, frozenset[ConversationState]] = {
@@ -92,6 +105,7 @@ class Operation:
     generation: int
     operation_id: str
     cancellation_id: str
+    trace_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +162,7 @@ class SessionEngine:
             generation=self.generation,
             operation_id=str(uuid4()),
             cancellation_id=str(uuid4()),
+            trace_id=f"trc_{uuid4().hex}",
         )
 
     def assert_current(self, operation: Operation) -> None:
