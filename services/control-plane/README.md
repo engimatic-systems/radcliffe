@@ -1,14 +1,32 @@
 # Radcliffe control plane
 
 The control plane owns the durable single-user session catalog and issues
-short-lived, room-scoped LiveKit credentials. All `/v1/sessions` routes require
-the configured bootstrap bearer token. The authenticated principal comes from
-`RADCLIFFE_OWNER_ID`; clients cannot select or override it.
+short-lived, room-scoped LiveKit credentials. The configured bootstrap bearer is
+accepted only by `POST /v1/devices/enroll`; ordinary `/v1/sessions` routes require
+an active per-installation device credential. The authenticated owner comes from
+`RADCLIFFE_OWNER_ID`, and the server—not the request—selects the enrolled
+participant identity.
+
+## Device API
+
+- `POST /v1/devices/enroll` accepts a stable installation ID and a client-generated
+  256-bit `rdc_dev_...` credential under bootstrap authorization. Retrying the
+  identical pair is safe; changing either side of an existing binding conflicts.
+  Only the SHA-256 credential digest is stored, and the response never echoes the
+  secret.
+- `GET /v1/devices/me` verifies the device credential and returns non-secret
+  enrollment metadata.
+- `POST /v1/devices/{device_id}/revoke` is an operator-only route protected by
+  the internal service token. Revocation denies the next control request; an
+  already issued room token remains bounded by its short TTL.
+
+Enrollment, conflict, failed-authentication, and revocation events are recorded
+without request bodies, credentials, or conversational content.
 
 ## Session API
 
-- `POST /v1/sessions` creates a session and returns client or worker room
-  credentials. `session_id` is optional; omitting it creates a collision-resistant
+- `POST /v1/sessions` creates a session and returns client room credentials bound
+  to the enrolled device. `session_id` is optional; omitting it creates a collision-resistant
   `ses_...` identifier. Supply a stable `idempotency_key` when retrying automatic
   creation. Explicit IDs remain available for the compatibility demo and tests.
 - `GET /v1/sessions?limit=20&cursor=...` lists metadata newest-first. The opaque
@@ -28,6 +46,8 @@ the configured bootstrap bearer token. The authenticated principal comes from
   status (`active`, `ended`, or `archived`).
 - `POST /v1/sessions/{session_id}/credentials` reopens a durable session with a
   fresh least-privilege room token.
+- `POST /v1/internal/sessions/{session_id}/worker-credentials` is the only HTTP
+  path that can mint a worker-role token and requires the internal service token.
 
 Catalog rows and envelope events share the configured SQLite/WAL database.
 Envelope, playback, and tool-call inserts advance session recency through

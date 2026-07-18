@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from device_auth import enroll_device
 from radcliffe_domain.envelope import MessageEnvelope
 from radcliffe_protocol.radcliffe.v2.protocol_pb2 import MessageEnvelope as ProtoEnvelope
 
@@ -131,7 +132,7 @@ class SessionConformance:
         self.started = time.monotonic()
         self.checks: list[Check] = []
         self.timeline: list[dict[str, object]] = []
-        self.headers = {"Authorization": f"Bearer {BOOTSTRAP_TOKEN}"}
+        self.headers: dict[str, str] = {}
         self.internal_headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}"}
 
     def check(
@@ -200,6 +201,25 @@ class SessionConformance:
             unauthorized.status_code == 401,
             f"unauthenticated catalog returned HTTP {unauthorized.status_code}",
         )
+        enrolled = await enroll_device(
+            client,
+            control_url=server.url,
+            bootstrap_token=BOOTSTRAP_TOKEN,
+            installation_id=f"session-conformance-{self.seed}",
+            display_name="Session conformance client",
+        )
+        self.headers = enrolled.headers
+        bootstrap_catalog = await self.request(
+            client,
+            "GET",
+            f"{server.url}/v1/sessions",
+            headers={"Authorization": f"Bearer {BOOTSTRAP_TOKEN}"},
+        )
+        self.check(
+            "bootstrap_is_limited_to_device_enrollment",
+            bootstrap_catalog.status_code == 401,
+            f"bootstrap catalog request returned HTTP {bootstrap_catalog.status_code}",
+        )
 
         sessions: list[dict[str, object]] = []
         for index, title in enumerate(("Morning notes", "Project review", "Evening recap"), 1):
@@ -222,6 +242,12 @@ class SessionConformance:
             )
             body = response.json()
             sessions.append(body)
+            self.check(
+                f"session_{index}_uses_enrolled_device_identity",
+                body["participant_identity"] == enrolled.participant_identity
+                and body["participant_identity"] != f"conformance-client-{index}",
+                "room credential identity is owned by the enrolled device",
+            )
             if index == 1:
                 retry = await self.request(
                     client,
@@ -440,6 +466,18 @@ class SessionConformance:
         order_before_restart = reordered_ids[:3]
         await server.stop()
         await server.start(client)
+        restored_device = await self.request(
+            client,
+            "GET",
+            f"{server.url}/v1/devices/me",
+            headers=self.headers,
+        )
+        self.check(
+            "device_authentication_survives_control_plane_restart",
+            restored_device.status_code == 200
+            and restored_device.json()["device_id"] == enrolled.device_id,
+            "the same enrolled device authenticated after restart",
+        )
         after_restart = await self.request(
             client,
             "GET",

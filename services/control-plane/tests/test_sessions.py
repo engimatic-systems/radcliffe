@@ -14,7 +14,9 @@ from radcliffe_domain.projection import (
 )
 from radcliffe_domain.store import EventStore
 
-AUTHORIZATION = {"Authorization": "Bearer bootstrap-token-123"}
+BOOTSTRAP_AUTHORIZATION = {"Authorization": "Bearer bootstrap-token-123"}
+DEVICE_CREDENTIAL = "rdc_dev_" + "a" * 43
+AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
 
 
 class FakeContextUsageClient:
@@ -83,6 +85,16 @@ def settings(tmp_path) -> Settings:
 
 
 def create(client: TestClient, **values):
+    enrollment = client.post(
+        "/v1/devices/enroll",
+        headers=BOOTSTRAP_AUTHORIZATION,
+        json={
+            "installation_id": "test-installation-1234",
+            "display_name": "Test Pixel",
+            "credential": DEVICE_CREDENTIAL,
+        },
+    )
+    assert enrollment.status_code == 200
     request = {"participant_identity": "pixel", **values}
     return client.post("/v1/sessions", headers=AUTHORIZATION, json=request)
 
@@ -115,11 +127,31 @@ def test_generated_session_idempotency_and_least_privilege_reopen(tmp_path) -> N
             config.livekit_api_key,
             config.livekit_api_secret,
         ).verify(body["participant_token"])
-        assert claims.identity == "pixel"
+        assert claims.identity == body["participant_identity"]
+        assert claims.identity != "pixel"
         assert claims.video.room_join
         assert claims.video.room == body["session_id"]
         assert claims.video.can_publish_sources == ["microphone"]
         assert not claims.video.room_admin
+
+        worker_escalation = client.post(
+            "/v1/sessions",
+            headers=AUTHORIZATION,
+            json={"participant_identity": "attacker", "role": "worker"},
+        )
+        assert worker_escalation.status_code == 422
+        worker = client.post(
+            f"/v1/internal/sessions/{body['session_id']}/worker-credentials",
+            headers={"Authorization": "Bearer internal-token-1234"},
+            json={},
+        )
+        assert worker.status_code == 200
+        worker_claims = api.TokenVerifier(
+            config.livekit_api_key,
+            config.livekit_api_secret,
+        ).verify(worker.json()["participant_token"])
+        assert worker_claims.identity.startswith("radcliffe-worker-")
+        assert worker_claims.video.can_publish_sources is None
 
         reopened = client.post(
             f"/v1/sessions/{body['session_id']}/credentials",
@@ -199,7 +231,7 @@ def test_catalog_survives_control_plane_restart(tmp_path) -> None:
         credential = restarted.post(
             f"/v1/sessions/{session_id}/credentials",
             headers=AUTHORIZATION,
-            json={"participant_identity": "worker", "role": "worker"},
+            json={"participant_identity": "pixel-restarted"},
         )
         assert credential.status_code == 200
         assert credential.json()["generation"] == 1
