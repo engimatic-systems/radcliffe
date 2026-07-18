@@ -165,6 +165,54 @@ public object ClientEventKt {
     public fun hasMessage(): kotlin.Boolean {
       return _builder.hasMessage()
     }
+
+    /**
+     * `.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;`
+     */
+    public var agentControlConfirmation: works.ravd.radcliffe.protocol.v2.AgentControlConfirmation
+      @kotlin.jvm.JvmName("getAgentControlConfirmation")
+        get() = _builder.agentControlConfirmation
+      @kotlin.jvm.JvmName("setAgentControlConfirmation")
+        set(value) {
+        _builder.agentControlConfirmation = value
+      }
+    /**
+     * `.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;`
+     */
+    public fun clearAgentControlConfirmation() {
+      _builder.clearAgentControlConfirmation()
+    }
+    /**
+     * `.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;`
+     * @return Whether the agentControlConfirmation field is set.
+     */
+    public fun hasAgentControlConfirmation(): kotlin.Boolean {
+      return _builder.hasAgentControlConfirmation()
+    }
+
+    /**
+     * `.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;`
+     */
+    public var agentControlCancellation: works.ravd.radcliffe.protocol.v2.AgentControlCancellation
+      @kotlin.jvm.JvmName("getAgentControlCancellation")
+        get() = _builder.agentControlCancellation
+      @kotlin.jvm.JvmName("setAgentControlCancellation")
+        set(value) {
+        _builder.agentControlCancellation = value
+      }
+    /**
+     * `.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;`
+     */
+    public fun clearAgentControlCancellation() {
+      _builder.clearAgentControlCancellation()
+    }
+    /**
+     * `.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;`
+     * @return Whether the agentControlCancellation field is set.
+     */
+    public fun hasAgentControlCancellation(): kotlin.Boolean {
+      return _builder.hasAgentControlCancellation()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ClientEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -191,3 +239,9 @@ public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.controlCommandO
 
 public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.messageOrNull: works.ravd.radcliffe.protocol.v2.MessageEnvelope?
   get() = if (hasMessage()) getMessage() else null
+
+public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.agentControlConfirmationOrNull: works.ravd.radcliffe.protocol.v2.AgentControlConfirmation?
+  get() = if (hasAgentControlConfirmation()) getAgentControlConfirmation() else null
+
+public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.agentControlCancellationOrNull: works.ravd.radcliffe.protocol.v2.AgentControlCancellation?
+  get() = if (hasAgentControlCancellation()) getAgentControlCancellation() else null

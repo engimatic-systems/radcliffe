@@ -102,3 +102,252 @@ export type ToolExecutor = (
   signal?: AbortSignal,
   onUpdate?: (update: unknown) => void,
 ) => Promise<ToolExecutionResult>;
+
+export const AGENT_CONTROL_SCHEMA_VERSION = 1 as const;
+
+export const AGENT_CONTROL_ACTION_WIRE_IDS = {
+  "speech_delivery.set_rate": 1,
+  "configuration.set": 2,
+  "session.create": 3,
+  "session.switch": 4,
+  "session.restart": 5,
+} as const;
+
+export type AgentControlActionId = keyof typeof AGENT_CONTROL_ACTION_WIRE_IDS;
+export type AgentControlScope = "snippet" | "turn" | "session" | "device" | "operator_default";
+export type AgentControlConfirmation = "none" | "user" | "operator";
+export type SpeechRate = "0.75x" | "1.0x" | "1.25x" | "1.5x";
+export type ResponseDetail = "brief" | "standard" | "detailed";
+
+export interface AgentControlOrigin {
+  source: SourceKind;
+  actorId: string;
+  sourceMessageId: string;
+  toolCallId?: string;
+}
+
+export interface AgentControlTarget {
+  scope: AgentControlScope;
+  sessionId: string;
+  deviceId?: string;
+  turnId?: string;
+  snippetId?: string;
+}
+
+interface AgentControlRequestBase {
+  schemaVersion: typeof AGENT_CONTROL_SCHEMA_VERSION;
+  requestId: string;
+  sessionId: string;
+  generation: number;
+  operationId: string;
+  cancellationId: string;
+  traceId: string;
+  requestSequence: number;
+  idempotencyKey: string;
+  origin: AgentControlOrigin;
+  target: AgentControlTarget;
+  confirmation: AgentControlConfirmation;
+}
+
+export type AgentControlRequest =
+  | (AgentControlRequestBase & {
+      actionId: "speech_delivery.set_rate";
+      arguments: { rate: SpeechRate };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "configuration.set";
+      arguments:
+        | { key: "response_detail"; value: ResponseDetail }
+        | { key: "default_speech_rate"; value: SpeechRate };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "session.create";
+      arguments: Record<string, never>;
+    })
+  | (AgentControlRequestBase & {
+      actionId: "session.switch";
+      arguments: { destinationSessionId: string };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "session.restart";
+      arguments: Record<string, never>;
+    });
+
+const CONTROL_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+const CONTROL_TRACE_ID = /^trc_[0-9a-f]{32}$/;
+const CONTROL_SOURCES = new Set<SourceKind>([
+  "user",
+  "model",
+  "call",
+  "text_source",
+  "system",
+]);
+const CONTROL_SCOPES = new Set<AgentControlScope>([
+  "snippet",
+  "turn",
+  "session",
+  "device",
+  "operator_default",
+]);
+const SPEECH_RATES = new Set<SpeechRate>(["0.75x", "1.0x", "1.25x", "1.5x"]);
+const RESPONSE_DETAILS = new Set<ResponseDetail>(["brief", "standard", "detailed"]);
+const REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "requestId",
+  "sessionId",
+  "generation",
+  "operationId",
+  "cancellationId",
+  "traceId",
+  "requestSequence",
+  "idempotencyKey",
+  "origin",
+  "target",
+  "confirmation",
+  "actionId",
+  "arguments",
+]);
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function exactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => key in value) && Object.keys(value).every((key) => allowed.has(key));
+}
+
+function identifier(value: unknown): value is string {
+  return typeof value === "string" && CONTROL_IDENTIFIER.test(value);
+}
+
+function validOrigin(value: unknown): value is AgentControlOrigin {
+  const item = record(value);
+  if (!item || !exactKeys(item, ["source", "actorId", "sourceMessageId"], ["toolCallId"])) {
+    return false;
+  }
+  if (
+    typeof item.source !== "string" ||
+    !CONTROL_SOURCES.has(item.source as SourceKind) ||
+    !identifier(item.actorId) ||
+    !identifier(item.sourceMessageId)
+  ) {
+    return false;
+  }
+  return item.source === "call" ? identifier(item.toolCallId) : item.toolCallId === undefined;
+}
+
+function validTarget(value: unknown): value is AgentControlTarget {
+  const item = record(value);
+  if (
+    !item ||
+    !exactKeys(item, ["scope", "sessionId"], ["deviceId", "turnId", "snippetId"]) ||
+    typeof item.scope !== "string" ||
+    !CONTROL_SCOPES.has(item.scope as AgentControlScope) ||
+    !identifier(item.sessionId)
+  ) {
+    return false;
+  }
+  return [item.deviceId, item.turnId, item.snippetId].every(
+    (candidate) => candidate === undefined || identifier(candidate),
+  );
+}
+
+function requiredConfirmation(actionId: AgentControlActionId, scope: AgentControlScope) {
+  if (actionId === "speech_delivery.set_rate") return scope === "snippet" ? "none" : undefined;
+  if (actionId === "configuration.set") {
+    if (scope === "turn" || scope === "session") return "none";
+    if (scope === "device") return "user";
+    if (scope === "operator_default") return "operator";
+    return undefined;
+  }
+  if (actionId === "session.create") return scope === "session" ? "none" : undefined;
+  if (actionId === "session.switch" || actionId === "session.restart") {
+    return scope === "session" ? "user" : undefined;
+  }
+  return undefined;
+}
+
+function validArguments(
+  actionId: AgentControlActionId,
+  value: unknown,
+  currentSessionId: string,
+): boolean {
+  const args = record(value);
+  if (!args) return false;
+  if (actionId === "speech_delivery.set_rate") {
+    return (
+      exactKeys(args, ["rate"]) &&
+      typeof args.rate === "string" &&
+      SPEECH_RATES.has(args.rate as SpeechRate)
+    );
+  }
+  if (actionId === "configuration.set") {
+    if (!exactKeys(args, ["key", "value"])) return false;
+    if (args.key === "response_detail") {
+      return typeof args.value === "string" && RESPONSE_DETAILS.has(args.value as ResponseDetail);
+    }
+    if (args.key === "default_speech_rate") {
+      return typeof args.value === "string" && SPEECH_RATES.has(args.value as SpeechRate);
+    }
+    return false;
+  }
+  if (actionId === "session.switch") {
+    return (
+      exactKeys(args, ["destinationSessionId"]) &&
+      identifier(args.destinationSessionId) &&
+      args.destinationSessionId !== currentSessionId
+    );
+  }
+  return exactKeys(args, []);
+}
+
+export function isAgentControlRequest(value: unknown): value is AgentControlRequest {
+  const item = record(value);
+  if (!item || Object.keys(item).some((key) => !REQUEST_KEYS.has(key))) return false;
+  if (
+    item.schemaVersion !== AGENT_CONTROL_SCHEMA_VERSION ||
+    !identifier(item.requestId) ||
+    !identifier(item.sessionId) ||
+    !Number.isSafeInteger(item.generation) ||
+    Number(item.generation) < 1 ||
+    !identifier(item.operationId) ||
+    !identifier(item.cancellationId) ||
+    typeof item.traceId !== "string" ||
+    !CONTROL_TRACE_ID.test(item.traceId) ||
+    !Number.isSafeInteger(item.requestSequence) ||
+    Number(item.requestSequence) < 1 ||
+    !identifier(item.idempotencyKey) ||
+    !validOrigin(item.origin) ||
+    !validTarget(item.target) ||
+    typeof item.actionId !== "string" ||
+    !(item.actionId in AGENT_CONTROL_ACTION_WIRE_IDS)
+  ) {
+    return false;
+  }
+  const target = item.target;
+  const actionId = item.actionId as AgentControlActionId;
+  if (target.sessionId !== item.sessionId) return false;
+  if (requiredConfirmation(actionId, target.scope) !== item.confirmation) return false;
+  if (actionId === "speech_delivery.set_rate") {
+    if (!target.turnId || !target.snippetId || target.deviceId) return false;
+  } else if (actionId === "configuration.set") {
+    if (target.scope === "turn" && (!target.turnId || target.deviceId || target.snippetId)) {
+      return false;
+    }
+    if (target.scope === "device" && (!target.deviceId || target.turnId || target.snippetId)) {
+      return false;
+    }
+    if (
+      target.scope !== "turn" &&
+      target.scope !== "device" &&
+      (target.deviceId || target.turnId || target.snippetId)
+    ) {
+      return false;
+    }
+  } else if (target.deviceId || target.turnId || target.snippetId) {
+    return false;
+  }
+  return validArguments(actionId, item.arguments, item.sessionId as string);
+}

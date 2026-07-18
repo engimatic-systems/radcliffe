@@ -27,6 +27,8 @@ public  final class ServerEvent extends
     TOOL_RESULT(6),
     ERROR(7),
     PLAYBACK_SEGMENT(8),
+    AGENT_CONTROL_REQUEST(9),
+    AGENT_CONTROL_RESULT(10),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -49,6 +51,8 @@ public  final class ServerEvent extends
         case 6: return TOOL_RESULT;
         case 7: return ERROR;
         case 8: return PLAYBACK_SEGMENT;
+        case 9: return AGENT_CONTROL_REQUEST;
+        case 10: return AGENT_CONTROL_RESULT;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -455,6 +459,110 @@ public  final class ServerEvent extends
    */
   private void clearPlaybackSegment() {
     if (payloadCase_ == 8) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int AGENT_CONTROL_REQUEST_FIELD_NUMBER = 9;
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   */
+  @java.lang.Override
+  public boolean hasAgentControlRequest() {
+    return payloadCase_ == 9;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.AgentControlActionRequest getAgentControlRequest() {
+    if (payloadCase_ == 9) {
+       return (works.ravd.radcliffe.protocol.v2.AgentControlActionRequest) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setAgentControlRequest(works.ravd.radcliffe.protocol.v2.AgentControlActionRequest value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 9;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeAgentControlRequest(works.ravd.radcliffe.protocol.v2.AgentControlActionRequest value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 9 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.newBuilder((works.ravd.radcliffe.protocol.v2.AgentControlActionRequest) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 9;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   */
+  private void clearAgentControlRequest() {
+    if (payloadCase_ == 9) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int AGENT_CONTROL_RESULT_FIELD_NUMBER = 10;
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   */
+  @java.lang.Override
+  public boolean hasAgentControlResult() {
+    return payloadCase_ == 10;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.AgentControlActionResult getAgentControlResult() {
+    if (payloadCase_ == 10) {
+       return (works.ravd.radcliffe.protocol.v2.AgentControlActionResult) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.AgentControlActionResult.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setAgentControlResult(works.ravd.radcliffe.protocol.v2.AgentControlActionResult value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 10;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeAgentControlResult(works.ravd.radcliffe.protocol.v2.AgentControlActionResult value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 10 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.AgentControlActionResult.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.AgentControlActionResult.newBuilder((works.ravd.radcliffe.protocol.v2.AgentControlActionResult) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 10;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   */
+  private void clearAgentControlResult() {
+    if (payloadCase_ == 10) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -933,6 +1041,102 @@ public  final class ServerEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    @java.lang.Override
+    public boolean hasAgentControlRequest() {
+      return instance.hasAgentControlRequest();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.AgentControlActionRequest getAgentControlRequest() {
+      return instance.getAgentControlRequest();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    public Builder setAgentControlRequest(works.ravd.radcliffe.protocol.v2.AgentControlActionRequest value) {
+      copyOnWrite();
+      instance.setAgentControlRequest(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    public Builder setAgentControlRequest(
+        works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.Builder builderForValue) {
+      copyOnWrite();
+      instance.setAgentControlRequest(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    public Builder mergeAgentControlRequest(works.ravd.radcliffe.protocol.v2.AgentControlActionRequest value) {
+      copyOnWrite();
+      instance.mergeAgentControlRequest(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+     */
+    public Builder clearAgentControlRequest() {
+      copyOnWrite();
+      instance.clearAgentControlRequest();
+      return this;
+    }
+
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    @java.lang.Override
+    public boolean hasAgentControlResult() {
+      return instance.hasAgentControlResult();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.AgentControlActionResult getAgentControlResult() {
+      return instance.getAgentControlResult();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    public Builder setAgentControlResult(works.ravd.radcliffe.protocol.v2.AgentControlActionResult value) {
+      copyOnWrite();
+      instance.setAgentControlResult(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    public Builder setAgentControlResult(
+        works.ravd.radcliffe.protocol.v2.AgentControlActionResult.Builder builderForValue) {
+      copyOnWrite();
+      instance.setAgentControlResult(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    public Builder mergeAgentControlResult(works.ravd.radcliffe.protocol.v2.AgentControlActionResult value) {
+      copyOnWrite();
+      instance.mergeAgentControlResult(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+     */
+    public Builder clearAgentControlResult() {
+      copyOnWrite();
+      instance.clearAgentControlResult();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ServerEvent)
   }
   @java.lang.Override
@@ -959,10 +1163,13 @@ public  final class ServerEvent extends
             works.ravd.radcliffe.protocol.v2.ToolResult.class,
             works.ravd.radcliffe.protocol.v2.ProtocolError.class,
             works.ravd.radcliffe.protocol.v2.PlaybackSegment.class,
+            works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.class,
+            works.ravd.radcliffe.protocol.v2.AgentControlActionResult.class,
           };
           java.lang.String info =
-              "\u0000\b\u0001\u0000\u0001\b\b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
-              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000";
+              "\u0000\n\u0001\u0000\u0001\n\n\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
+              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000\n<\u0000" +
+              "";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

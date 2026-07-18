@@ -25,6 +25,8 @@ public  final class ClientEvent extends
     PLAYBACK_ACKNOWLEDGEMENT(4),
     CONTROL_COMMAND(5),
     MESSAGE(6),
+    AGENT_CONTROL_CONFIRMATION(7),
+    AGENT_CONTROL_CANCELLATION(8),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -45,6 +47,8 @@ public  final class ClientEvent extends
         case 4: return PLAYBACK_ACKNOWLEDGEMENT;
         case 5: return CONTROL_COMMAND;
         case 6: return MESSAGE;
+        case 7: return AGENT_CONTROL_CONFIRMATION;
+        case 8: return AGENT_CONTROL_CANCELLATION;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -347,6 +351,110 @@ public  final class ClientEvent extends
    */
   private void clearMessage() {
     if (payloadCase_ == 6) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int AGENT_CONTROL_CONFIRMATION_FIELD_NUMBER = 7;
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   */
+  @java.lang.Override
+  public boolean hasAgentControlConfirmation() {
+    return payloadCase_ == 7;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.AgentControlConfirmation getAgentControlConfirmation() {
+    if (payloadCase_ == 7) {
+       return (works.ravd.radcliffe.protocol.v2.AgentControlConfirmation) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setAgentControlConfirmation(works.ravd.radcliffe.protocol.v2.AgentControlConfirmation value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 7;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeAgentControlConfirmation(works.ravd.radcliffe.protocol.v2.AgentControlConfirmation value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 7 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.newBuilder((works.ravd.radcliffe.protocol.v2.AgentControlConfirmation) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 7;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   */
+  private void clearAgentControlConfirmation() {
+    if (payloadCase_ == 7) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int AGENT_CONTROL_CANCELLATION_FIELD_NUMBER = 8;
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   */
+  @java.lang.Override
+  public boolean hasAgentControlCancellation() {
+    return payloadCase_ == 8;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.AgentControlCancellation getAgentControlCancellation() {
+    if (payloadCase_ == 8) {
+       return (works.ravd.radcliffe.protocol.v2.AgentControlCancellation) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.AgentControlCancellation.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setAgentControlCancellation(works.ravd.radcliffe.protocol.v2.AgentControlCancellation value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 8;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeAgentControlCancellation(works.ravd.radcliffe.protocol.v2.AgentControlCancellation value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 8 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.AgentControlCancellation.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.AgentControlCancellation.newBuilder((works.ravd.radcliffe.protocol.v2.AgentControlCancellation) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 8;
+  }
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   */
+  private void clearAgentControlCancellation() {
+    if (payloadCase_ == 8) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -729,6 +837,102 @@ public  final class ClientEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    @java.lang.Override
+    public boolean hasAgentControlConfirmation() {
+      return instance.hasAgentControlConfirmation();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.AgentControlConfirmation getAgentControlConfirmation() {
+      return instance.getAgentControlConfirmation();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    public Builder setAgentControlConfirmation(works.ravd.radcliffe.protocol.v2.AgentControlConfirmation value) {
+      copyOnWrite();
+      instance.setAgentControlConfirmation(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    public Builder setAgentControlConfirmation(
+        works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.Builder builderForValue) {
+      copyOnWrite();
+      instance.setAgentControlConfirmation(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    public Builder mergeAgentControlConfirmation(works.ravd.radcliffe.protocol.v2.AgentControlConfirmation value) {
+      copyOnWrite();
+      instance.mergeAgentControlConfirmation(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+     */
+    public Builder clearAgentControlConfirmation() {
+      copyOnWrite();
+      instance.clearAgentControlConfirmation();
+      return this;
+    }
+
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    @java.lang.Override
+    public boolean hasAgentControlCancellation() {
+      return instance.hasAgentControlCancellation();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.AgentControlCancellation getAgentControlCancellation() {
+      return instance.getAgentControlCancellation();
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    public Builder setAgentControlCancellation(works.ravd.radcliffe.protocol.v2.AgentControlCancellation value) {
+      copyOnWrite();
+      instance.setAgentControlCancellation(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    public Builder setAgentControlCancellation(
+        works.ravd.radcliffe.protocol.v2.AgentControlCancellation.Builder builderForValue) {
+      copyOnWrite();
+      instance.setAgentControlCancellation(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    public Builder mergeAgentControlCancellation(works.ravd.radcliffe.protocol.v2.AgentControlCancellation value) {
+      copyOnWrite();
+      instance.mergeAgentControlCancellation(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+     */
+    public Builder clearAgentControlCancellation() {
+      copyOnWrite();
+      instance.clearAgentControlCancellation();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ClientEvent)
   }
   @java.lang.Override
@@ -753,10 +957,12 @@ public  final class ClientEvent extends
             works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement.class,
             works.ravd.radcliffe.protocol.v2.ControlCommand.class,
             works.ravd.radcliffe.protocol.v2.MessageEnvelope.class,
+            works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.class,
+            works.ravd.radcliffe.protocol.v2.AgentControlCancellation.class,
           };
           java.lang.String info =
-              "\u0000\u0006\u0001\u0000\u0001\u0006\u0006\u0000\u0000\u0000\u0001\u000b\u0002<\u0000" +
-              "\u0003<\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000";
+              "\u0000\b\u0001\u0000\u0001\b\b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
+              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

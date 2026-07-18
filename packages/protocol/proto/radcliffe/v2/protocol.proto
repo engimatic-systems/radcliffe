@@ -56,6 +56,82 @@ enum ToolOutcome {
   TOOL_OUTCOME_FAILED = 7;
 }
 
+enum AgentControlScope {
+  AGENT_CONTROL_SCOPE_UNSPECIFIED = 0;
+  AGENT_CONTROL_SCOPE_SNIPPET = 1;
+  AGENT_CONTROL_SCOPE_TURN = 2;
+  AGENT_CONTROL_SCOPE_SESSION = 3;
+  AGENT_CONTROL_SCOPE_DEVICE = 4;
+  AGENT_CONTROL_SCOPE_OPERATOR_DEFAULT = 5;
+}
+
+enum AgentControlActionId {
+  AGENT_CONTROL_ACTION_ID_UNSPECIFIED = 0;
+  AGENT_CONTROL_ACTION_ID_SPEECH_DELIVERY_SET_RATE = 1;
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_SET = 2;
+  AGENT_CONTROL_ACTION_ID_SESSION_CREATE = 3;
+  AGENT_CONTROL_ACTION_ID_SESSION_SWITCH = 4;
+  AGENT_CONTROL_ACTION_ID_SESSION_RESTART = 5;
+}
+
+enum AgentControlConfirmationRequirement {
+  AGENT_CONTROL_CONFIRMATION_REQUIREMENT_UNSPECIFIED = 0;
+  AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE = 1;
+  AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER = 2;
+  AGENT_CONTROL_CONFIRMATION_REQUIREMENT_OPERATOR = 3;
+}
+
+enum AgentControlDisposition {
+  AGENT_CONTROL_DISPOSITION_UNSPECIFIED = 0;
+  AGENT_CONTROL_DISPOSITION_REQUESTED = 1;
+  AGENT_CONTROL_DISPOSITION_AWAITING_CONFIRMATION = 2;
+  AGENT_CONTROL_DISPOSITION_AUTHORIZED = 3;
+  AGENT_CONTROL_DISPOSITION_APPLIED = 4;
+  AGENT_CONTROL_DISPOSITION_REJECTED = 5;
+  AGENT_CONTROL_DISPOSITION_DUPLICATE = 6;
+  AGENT_CONTROL_DISPOSITION_CANCELLED = 7;
+  AGENT_CONTROL_DISPOSITION_FAILED = 8;
+  AGENT_CONTROL_DISPOSITION_SUPERSEDED = 9;
+}
+
+enum AgentControlRejectionCode {
+  AGENT_CONTROL_REJECTION_CODE_UNSPECIFIED = 0;
+  AGENT_CONTROL_REJECTION_CODE_UNSUPPORTED_SCHEMA_VERSION = 1;
+  AGENT_CONTROL_REJECTION_CODE_MALFORMED = 2;
+  AGENT_CONTROL_REJECTION_CODE_UNREGISTERED_ACTION = 3;
+  AGENT_CONTROL_REJECTION_CODE_UNAUTHORIZED = 4;
+  AGENT_CONTROL_REJECTION_CODE_INVALID_SCOPE = 5;
+  AGENT_CONTROL_REJECTION_CODE_INVALID_TARGET = 6;
+  AGENT_CONTROL_REJECTION_CODE_INVALID_ARGUMENT = 7;
+  AGENT_CONTROL_REJECTION_CODE_STALE_GENERATION = 8;
+  AGENT_CONTROL_REJECTION_CODE_IDEMPOTENCY_CONFLICT = 9;
+  AGENT_CONTROL_REJECTION_CODE_CONFLICT = 10;
+  AGENT_CONTROL_REJECTION_CODE_CONFIRMATION_POLICY_MISMATCH = 11;
+  AGENT_CONTROL_REJECTION_CODE_CANCELLED = 12;
+  AGENT_CONTROL_REJECTION_CODE_ALREADY_APPLIED = 13;
+}
+
+enum SpeechRate {
+  SPEECH_RATE_UNSPECIFIED = 0;
+  SPEECH_RATE_SLOW_0_75X = 1;
+  SPEECH_RATE_NORMAL_1_0X = 2;
+  SPEECH_RATE_FAST_1_25X = 3;
+  SPEECH_RATE_VERY_FAST_1_5X = 4;
+}
+
+enum AgentConfigurationKey {
+  AGENT_CONFIGURATION_KEY_UNSPECIFIED = 0;
+  AGENT_CONFIGURATION_KEY_RESPONSE_DETAIL = 1;
+  AGENT_CONFIGURATION_KEY_DEFAULT_SPEECH_RATE = 2;
+}
+
+enum ResponseDetail {
+  RESPONSE_DETAIL_UNSPECIFIED = 0;
+  RESPONSE_DETAIL_BRIEF = 1;
+  RESPONSE_DETAIL_STANDARD = 2;
+  RESPONSE_DETAIL_DETAILED = 3;
+}
+
 message ContentRef {
   string mime_type = 1;
   uint64 byte_length = 2;
@@ -173,6 +249,97 @@ message ToolResult {
   string error_message = 5;
 }
 
+message AgentControlOrigin {
+  SourceKind source = 1;
+  string actor_id = 2;
+  string source_message_id = 3;
+  string tool_call_id = 4;
+}
+
+message AgentControlTarget {
+  AgentControlScope scope = 1;
+  string session_id = 2;
+  string device_id = 3;
+  string turn_id = 4;
+  string snippet_id = 5;
+}
+
+message SpeechDeliveryAction {
+  SpeechRate rate = 1;
+}
+
+message ConfigurationAction {
+  AgentConfigurationKey key = 1;
+  oneof value {
+    ResponseDetail response_detail = 2;
+    SpeechRate speech_rate = 3;
+  }
+}
+
+message SessionCreateAction {}
+
+message SessionSwitchAction {
+  string destination_session_id = 1;
+}
+
+message SessionRestartAction {}
+
+message AgentControlActionRequest {
+  uint32 schema_version = 1;
+  string request_id = 2;
+  OperationRef operation = 3;
+  AgentControlOrigin origin = 4;
+  AgentControlTarget target = 5;
+  AgentControlActionId action_id = 6;
+  uint64 request_sequence = 7;
+  string idempotency_key = 8;
+  AgentControlConfirmationRequirement confirmation = 9;
+  oneof action {
+    SpeechDeliveryAction speech_delivery = 10;
+    ConfigurationAction configuration = 11;
+    SessionCreateAction session_create = 12;
+    SessionSwitchAction session_switch = 13;
+    SessionRestartAction session_restart = 14;
+  }
+  google.protobuf.Timestamp requested_at = 15;
+}
+
+message AgentControlConfirmation {
+  uint32 schema_version = 1;
+  string confirmation_id = 2;
+  string request_id = 3;
+  OperationRef operation = 4;
+  AgentControlOrigin origin = 5;
+  bool approved = 6;
+  string idempotency_key = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+
+message AgentControlCancellation {
+  uint32 schema_version = 1;
+  string cancellation_id = 2;
+  string request_id = 3;
+  OperationRef operation = 4;
+  AgentControlOrigin origin = 5;
+  string idempotency_key = 6;
+  google.protobuf.Timestamp occurred_at = 7;
+}
+
+message AgentControlActionResult {
+  uint32 schema_version = 1;
+  string request_id = 2;
+  OperationRef operation = 3;
+  AgentControlActionId action_id = 4;
+  AgentControlDisposition disposition = 5;
+  AgentControlRejectionCode rejection_code = 6;
+  string idempotency_key = 7;
+  bytes request_sha256 = 8;
+  bytes state_sha256 = 9;
+  uint64 applied_sequence = 10;
+  google.protobuf.Timestamp occurred_at = 11;
+  bool retryable = 12;
+}
+
 message Reconnect {
   string request_id = 1;
   string session_id = 2;
@@ -212,6 +379,8 @@ message ClientEvent {
     PlaybackAcknowledgement playback_acknowledgement = 4;
     ControlCommand control_command = 5;
     MessageEnvelope message = 6;
+    AgentControlConfirmation agent_control_confirmation = 7;
+    AgentControlCancellation agent_control_cancellation = 8;
   }
 }
 
@@ -225,5 +394,7 @@ message ServerEvent {
     ToolResult tool_result = 6;
     ProtocolError error = 7;
     PlaybackSegment playback_segment = 8;
+    AgentControlActionRequest agent_control_request = 9;
+    AgentControlActionResult agent_control_result = 10;
   }
 }
