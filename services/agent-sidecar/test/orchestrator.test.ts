@@ -60,16 +60,28 @@ describe("PiAgentOrchestrator", () => {
 
   it("executes read_source sequentially and emits its lifecycle", async () => {
     const faux = createFauxCore({ provider: "radcliffe-tool-test" });
+    const sourceEnvelope = "opaque-canonical-envelope-base64";
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("read_source", { path: "demo.md" }, { id: "call-1" }), {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage("I handed the canonical source to Radcliffe."),
+      (context) => {
+        const toolResult = context.messages.find((message) => message.role === "toolResult");
+        expect(toolResult?.content).toEqual([{ type: "text", text: "source:demo.md" }]);
+        expect(JSON.stringify(toolResult?.content)).not.toContain(sourceEnvelope);
+        return fauxAssistantMessage("I handed the canonical source to Radcliffe.");
+      },
     ]);
     const events: SidecarEvent[] = [];
     const tool = vi.fn(async (_request, _signal, onUpdate) => {
       onUpdate?.({ status: "reading" });
-      return { modelContent: "source:demo.md", details: { sourceMessageId: "source-1" } };
+      return {
+        modelContent: "source:demo.md",
+        details: {
+          sourceMessageId: "source-1",
+          sourceEnvelopeProtoBase64: sourceEnvelope,
+        },
+      };
     });
     const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
 
@@ -91,6 +103,9 @@ describe("PiAgentOrchestrator", () => {
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["tool_start", "tool_update", "tool_end", "model_complete"]),
     );
+    expect(events.find((event) => event.type === "tool_end")).toMatchObject({
+      result: { details: { sourceEnvelopeProtoBase64: sourceEnvelope } },
+    });
   });
 
   it("filters excluded packets and labels canonical sources", () => {

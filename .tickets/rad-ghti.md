@@ -47,3 +47,7 @@ Five consecutive real local-provider turns now pass through the black-box LiveKi
 **2026-07-14T12:02:23Z**
 
 2026-07-14 local-provider readiness no longer depends on an accidentally warm Ollama cache. Sidecar startup now loads qwen3:8b through Ollama's native API and retains it by default before reporting healthy. A forced-unload restart followed by the full live suite passed first audio at 2.651 s and all cancellation checks.
+
+**2026-07-15T03:43:46Z**
+
+2026-07-14 repeated local-provider evidence remains within budget after adding long-pause and exact-source scenarios. Latest full external run: ordinary/three exact turns 2.170-2.473s, replacement 2.245s, source audio 2.857s, tap acknowledgement 8ms, speech-barge acknowledgement 206ms; all checks passed in artifacts/voice-conformance/20260715T034110Z/report.json.

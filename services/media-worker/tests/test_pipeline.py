@@ -1,10 +1,12 @@
 import asyncio
+import base64
+import hashlib
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from radcliffe_domain.envelope import SourceKind
+from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.projection import TURN_DISPOSITION_METADATA, context_replay
 from radcliffe_domain.session import ConversationState
 from radcliffe_domain.store import EventStore
@@ -87,8 +89,30 @@ class SourceOrchestrator:
             "tool_end",
             {
                 "isError": False,
-                "result": {"details": {"sourceMessageId": result.source_envelope.message_id}},
+                "result": {
+                    "details": {
+                        "sourceMessageId": result.source_envelope.message_id,
+                        "contentSha256": result.source_envelope.content_sha256.hex(),
+                        "locator": result.source_envelope.provenance.locator,
+                        "sourceEnvelopeProtoBase64": base64.b64encode(
+                            result.source_envelope.to_proto().SerializeToString(deterministic=True)
+                        ).decode("ascii"),
+                    }
+                },
             },
+        )
+        yield SidecarEvent("complete", {})
+
+
+class StaticToolResultOrchestrator:
+    def __init__(self, details: dict[str, str]) -> None:
+        self.details = details
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {"isError": False, "result": {"details": self.details}},
         )
         yield SidecarEvent("complete", {})
 
@@ -224,8 +248,10 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
     root.mkdir()
     canonical = b"# Canonical\n\nFirst sentence.  Second sentence!\n"
     (root / "demo.md").write_bytes(canonical)
-    store = EventStore(tmp_path / "events.sqlite3")
-    await store.migrate()
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
     grant = CapabilityGrant(
         grant_id="grant-1",
         session_id="s1",
@@ -237,7 +263,11 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
     tts = FakeSynthesizer()
     publisher = FakePublisher()
     pipeline = VoicePipeline(
-        "s1", store, SourceOrchestrator(ToolGateway(store), grant), tts, publisher
+        "s1",
+        worker_store,
+        SourceOrchestrator(ToolGateway(gateway_store), grant),
+        tts,
+        publisher,
     )
     await pipeline.start()
 
@@ -245,7 +275,94 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
 
     assert "".join(tts.inputs).encode() == canonical
     assert b"".join(publisher.audio) == canonical
-    assert SourceKind.TEXT_SOURCE in [item.source for item in await store.replay("s1")]
+    worker_history = await worker_store.replay("s1")
+    assert SourceKind.TEXT_SOURCE in [item.source for item in worker_history]
+    source = next(item for item in worker_history if item.source is SourceKind.TEXT_SOURCE)
+    assert source.content.canonical_bytes() == canonical
+    assert source.sequence == 2
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_store_does_not_duplicate_transferred_source(tmp_path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    canonical = b"One canonical sentence.\n"
+    (root / "demo.md").write_bytes(canonical)
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    grant = CapabilityGrant(
+        grant_id="grant-1",
+        session_id="s1",
+        generation=1,
+        readable_roots=(root,),
+        allowed_tools=frozenset({"read_source"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SourceOrchestrator(ToolGateway(store), grant),
+        tts,
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Read demo.md")
+
+    sources = [item for item in await store.replay("s1") if item.source is SourceKind.TEXT_SOURCE]
+    assert len(sources) == 1
+    assert "".join(tts.inputs).encode() == canonical
+
+
+@pytest.mark.asyncio
+async def test_transferred_source_from_another_session_fails_closed(tmp_path) -> None:
+    canonical = "Never render this source."
+    digest = hashlib.sha256(canonical.encode()).digest()
+    source = MessageEnvelope.text(
+        session_id="another-session",
+        sequence=1,
+        source=SourceKind.TEXT_SOURCE,
+        text=canonical,
+        message_id="source:call-1",
+        provenance=Provenance(
+            locator="demo.md",
+            display_name="demo.md",
+            source_sha256=digest,
+            permission_basis="grant-1",
+        ),
+    )
+    details = {
+        "sourceMessageId": source.message_id,
+        "contentSha256": source.content_sha256.hex(),
+        "locator": source.provenance.locator,
+        "sourceEnvelopeProtoBase64": base64.b64encode(
+            source.to_proto().SerializeToString(deterministic=True)
+        ).decode("ascii"),
+    }
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        StaticToolResultOrchestrator(details),
+        tts,
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    with pytest.raises(ValueError, match="another session"):
+        await pipeline.handle_transcript("Read demo.md")
+
+    assert tts.inputs == []
+    history = await store.replay("s1")
+    assert SourceKind.TEXT_SOURCE not in [item.source for item in history]
+    assert [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in history
+        if item.metadata.get(TURN_DISPOSITION_METADATA)
+    ] == ["failed"]
 
 
 @pytest.mark.asyncio

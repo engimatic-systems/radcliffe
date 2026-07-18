@@ -84,6 +84,11 @@ async def test_new_speech_cancels_and_awaits_the_previous_endpoint_task() -> Non
     await feed(endpoint, voiced=False, frames=45)
     await asyncio.wait_for(voice.first_started.wait(), timeout=1)
 
+    # A deliberate pause longer than the endpoint threshold creates a candidate
+    # first turn, but the later clause still has exclusive ownership.
+    await feed(endpoint, voiced=False, frames=15)
+    assert voice.active == 1
+
     await feed(endpoint, voiced=True, frames=1)
     assert voice.active == 0
     await feed(endpoint, voiced=True, frames=14)

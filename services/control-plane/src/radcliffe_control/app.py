@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -174,7 +175,7 @@ class ToolCallResponse(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ActiveSession:
-    generation: int
+    latest_operation_generation: int
     grant: CapabilityGrant
 
 
@@ -613,21 +614,36 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> ToolCallResponse:
         _bearer(authorization, active.settings.internal_token)
-        session = active.sessions.get(request.session_id)
-        if session is None:
-            raise HTTPException(status_code=403, detail="unknown session")
-        try:
-            result = await active.gateway.read_source(
-                call_id=request.call_id,
-                idempotency_key=request.idempotency_key,
-                session_id=request.session_id,
-                generation=request.generation,
-                grant=session.grant,
-                raw_arguments=request.arguments.model_dump(),
-            )
-        except ToolDeniedError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        async with active.lock:
+            session = active.sessions.get(request.session_id)
+            if session is None:
+                raise HTTPException(status_code=403, detail="unknown session")
+            if request.generation < session.latest_operation_generation:
+                raise HTTPException(status_code=403, detail="stale operation generation")
+            grant = session.grant
+            if request.generation > session.latest_operation_generation:
+                grant = replace(
+                    grant,
+                    grant_id=f"source:{request.session_id}:operation-{request.generation}",
+                    generation=request.generation,
+                )
+                active.sessions[request.session_id] = ActiveSession(
+                    request.generation,
+                    grant,
+                )
+            try:
+                result = await active.gateway.read_source(
+                    call_id=request.call_id,
+                    idempotency_key=request.idempotency_key,
+                    session_id=request.session_id,
+                    generation=request.generation,
+                    grant=grant,
+                    raw_arguments=request.arguments.model_dump(),
+                )
+            except ToolDeniedError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
         source = result.source_envelope
+        source_wire = source.to_proto().SerializeToString(deterministic=True)
         return ToolCallResponse(
             model_content=(
                 f"Canonical source {source.message_id} was authorized and handed directly "
@@ -637,6 +653,7 @@ def create_app(
                 "sourceMessageId": source.message_id,
                 "contentSha256": source.content_sha256.hex(),
                 "locator": source.provenance.locator,
+                "sourceEnvelopeProtoBase64": base64.b64encode(source_wire).decode("ascii"),
             },
         )
 

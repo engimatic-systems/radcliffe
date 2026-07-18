@@ -28,10 +28,15 @@ class CorpusCase:
     echo_delay_ms: int = 0
     echo_gain: float = 0
     frame_dropout_rate: float = 0
+    transcript_reference: str | None = None
+
+    @property
+    def spoken_text(self) -> str:
+        return " ".join(self.segments)
 
     @property
     def reference(self) -> str:
-        return " ".join(self.segments)
+        return self.transcript_reference or self.spoken_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +107,13 @@ CASES = (
         ("lunar field notes", "word for word", "metadata"),
     ),
     CorpusCase(
+        "source-reading-fixture-command",
+        ("Use the read source tool to read radcliffe dash demo dot M D word for word.",),
+        "Karen",
+        ("read source", "radcliffe", "demo", "word for word"),
+        transcript_reference=("Use the read source tool to read radcliffe-demo.md word for word."),
+    ),
+    CorpusCase(
         "multi-clause-natural-pause",
         (
             "Tell me a short joke,",
@@ -110,6 +122,16 @@ CASES = (
         "Fred",
         ("joke", "different topic"),
         pause_ms=600,
+    ),
+    CorpusCase(
+        "multi-clause-long-pause",
+        (
+            "Tell me a dirty joke.",
+            "Actually, ignore that and reply with exactly changed subject.",
+        ),
+        "Fred",
+        ("dirty joke", "ignore", "changed subject"),
+        pause_ms=1200,
     ),
 )
 
@@ -256,6 +278,7 @@ async def run(args: argparse.Namespace) -> int:
             {
                 "id": case.case_id,
                 "voice": case.voice,
+                "spoken_text": case.spoken_text,
                 "reference": case.reference,
                 "required_keywords": list(case.required_keywords),
                 "pause_ms": case.pause_ms,
