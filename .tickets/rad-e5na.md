@@ -8,11 +8,11 @@ type: feature
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, anthropic, haiku, model, cost, privacy]
+tags: [radcliffe, anthropic, haiku, model, cost, privacy, debug]
 ---
-# Switch the live agent profile to budget-capped Claude Haiku 4.5
+# Switch the debug live-testing profile to budget-capped Claude Haiku 4.5
 
-Use Claude Haiku 4.5 as the normal cloud-backed live conversation model, retaining an explicit local profile and a deliberate Sonnet upgrade path.
+Use Claude Haiku 4.5 as the temporary cloud-backed debugging and live-testing model, retaining an explicit local profile and a deliberate production upgrade path to a more capable model or router.
 
 ## Design
 
@@ -22,3 +22,9 @@ Pin the Anthropic model snapshot, bridge the protected Radcliffe key into the pr
 
 The live profile selects Anthropic with the pinned Claude Haiku 4.5 model ID and requires the explicit cloud opt-in; the funded key remains owner-only, outside logs, child-process listings, artifacts, and model-visible tools; per-turn output and cumulative session spend have conservative configurable ceilings with a visible exhaustion result; exact provider token counting or an explicitly labeled conservative estimate keeps context accounting truthful; model/provider changes create a new accounting basis; cloud transmission is disclosed and local Ollama remains an explicit selectable fallback rather than a silent privacy-changing failover; cancellation, tools, source rendering, no-emoji policy, interruption, and first-audio gates pass; and one user-authorized bounded paid smoke records token usage and estimated cost without storing prompt content.
 
+
+## Notes
+
+**2026-07-18T02:30:35Z**
+
+Claude Haiku 4.5 is a temporary debugging and live-testing profile chosen for speed and cost; production Radcliffe is expected to use a more capable model or model-routing policy.

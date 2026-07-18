@@ -1,7 +1,7 @@
 ---
 id: rad-nhai
 status: open
-deps: []
+deps: [rad-7h1e]
 links: []
 created: 2026-07-18T00:47:41Z
 type: feature
