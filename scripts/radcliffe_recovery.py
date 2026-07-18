@@ -36,6 +36,7 @@ DATA_TABLES = (
     "device_auth_audit",
     "configuration_values",
     "configuration_mutations",
+    "session_transitions",
 )
 
 

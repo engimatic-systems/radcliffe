@@ -21,8 +21,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import works.ravd.radcliffe.protocol.v2.ClientEvent
+import works.ravd.radcliffe.protocol.v2.AgentControlActionId
+import works.ravd.radcliffe.protocol.v2.AgentControlConfirmation
+import works.ravd.radcliffe.protocol.v2.AgentControlConfirmationRequirement
+import works.ravd.radcliffe.protocol.v2.AgentControlOrigin
 import works.ravd.radcliffe.protocol.v2.ControlCommand
 import works.ravd.radcliffe.protocol.v2.ConversationState
 import works.ravd.radcliffe.protocol.v2.OperationRef
@@ -33,12 +39,14 @@ import livekit.org.webrtc.AudioTrackSink
 
 class VoiceSessionService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val profiles by lazy { ConnectionProfileRepository.create(this) }
     private var room: Room? = null
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
     private var sessionId: String = ""
     private val playbackTracker = DevicePlaybackTracker()
     private val playbackSinks = mutableMapOf<RemoteAudioTrack, AudioTrackSink>()
+    private val handledTransitions = mutableSetOf<String>()
 
     override fun onCreate() {
         super.onCreate()
@@ -59,6 +67,8 @@ class VoiceSessionService : MediaSessionService() {
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> requestStop()
+            ACTION_CONFIRM_AGENT_CONTROL -> respondToAgentControl(intent, true)
+            ACTION_REJECT_AGENT_CONTROL -> respondToAgentControl(intent, false)
         }
         return START_NOT_STICKY
     }
@@ -73,17 +83,12 @@ class VoiceSessionService : MediaSessionService() {
         }
         val url = intent.getStringExtra(EXTRA_URL) ?: return
         val token = intent.getStringExtra(EXTRA_TOKEN) ?: return
-        sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return
+        val requestedSessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return
         startForeground(NOTIFICATION_ID, notification("Connecting", false))
         SessionModel.state(VoiceState.CONNECTING)
         scope.launch {
             runCatching {
-                LiveKit.create(this@VoiceSessionService).also {
-                    room = it
-                    observe(it)
-                    it.connect(url, token)
-                    it.localParticipant.setMicrophoneEnabled(true)
-                }
+                connectRoom(url, token, requestedSessionId)
             }.onSuccess {
                 notify("Waiting for microphone", false)
             }.onFailure {
@@ -92,6 +97,15 @@ class VoiceSessionService : MediaSessionService() {
                 stopSession(resetState = false)
             }
         }
+    }
+
+    private suspend fun connectRoom(url: String, token: String, destinationSessionId: String) {
+        val connected = LiveKit.create(this@VoiceSessionService)
+        room = connected
+        sessionId = destinationSessionId
+        observe(connected)
+        connected.connect(url, token)
+        connected.localParticipant.setMicrophoneEnabled(true)
     }
 
     private fun interrupt() {
@@ -174,6 +188,7 @@ class VoiceSessionService : MediaSessionService() {
     private fun observe(activeRoom: Room) {
         scope.launch {
             activeRoom.events.events.collect { event ->
+                if (room !== activeRoom) return@collect
                 when (event) {
                     is RoomEvent.Reconnecting -> SessionModel.state(VoiceState.RECONNECTING)
                     is RoomEvent.Reconnected -> SessionModel.state(VoiceState.CONNECTING)
@@ -214,8 +229,46 @@ class VoiceSessionService : MediaSessionService() {
             SessionModel.state(current)
             if (current == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
         }
+        if (event.hasAgentControlRequest()) {
+            val request = event.agentControlRequest
+            if (
+                request.operation.sessionId == sessionId &&
+                request.operation.generation >= 1 &&
+                request.confirmation ==
+                AgentControlConfirmationRequirement.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER
+            ) {
+                val pending = when (request.actionId) {
+                    AgentControlActionId.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH -> {
+                        PendingAgentControl(
+                            request,
+                            "Switch conversation?",
+                            "Switch to ${request.sessionSwitch.destinationSessionId}?",
+                        )
+                    }
+                    AgentControlActionId.AGENT_CONTROL_ACTION_ID_SESSION_RESTART -> {
+                        PendingAgentControl(
+                            request,
+                            "Restart conversation?",
+                            "End this interaction and continue in a fresh conversation?",
+                        )
+                    }
+                    AgentControlActionId.AGENT_CONTROL_ACTION_ID_SESSION_END -> {
+                        PendingAgentControl(
+                            request,
+                            "End conversation?",
+                            "End the current voice conversation?",
+                        )
+                    }
+                    else -> null
+                }
+                pending?.let(AgentControlModel::request)
+            }
+        }
         if (event.hasMessage() && event.message.content.hasInlineText()) {
             val message = event.message
+            if (message.metadataMap["radcliffe.event"] == "session_transition") {
+                applySessionTransition(message.metadataMap)
+            }
             if (message.metadataMap["radcliffe.event"] == "configuration_changed") {
                 val key = message.metadataMap["radcliffe.configuration.key"]
                 val value = message.metadataMap["radcliffe.configuration.value"]
@@ -253,6 +306,143 @@ class VoiceSessionService : MediaSessionService() {
                 ),
             )
         }
+    }
+
+    private fun respondToAgentControl(intent: Intent, approved: Boolean) {
+        val requestId = intent.getStringExtra(EXTRA_AGENT_CONTROL_REQUEST_ID) ?: return
+        val pending = AgentControlModel.pending.value ?: return
+        if (pending.request.requestId != requestId) return
+        val activeRoom = room ?: return
+        scope.launch {
+            runCatching {
+                val profile = profiles.profile.first()
+                require(profile.isEnrolled) { "device enrollment is unavailable" }
+                val now = java.time.Instant.now()
+                val confirmation = AgentControlConfirmation.newBuilder()
+                    .setSchemaVersion(1)
+                    .setConfirmationId(java.util.UUID.randomUUID().toString())
+                    .setRequestId(requestId)
+                    .setOperation(pending.request.operation)
+                    .setOrigin(
+                        AgentControlOrigin.newBuilder()
+                            .setSource(SourceKind.SOURCE_KIND_USER)
+                            .setActorId(profile.participantIdentity)
+                            .setSourceMessageId(java.util.UUID.randomUUID().toString())
+                            .build(),
+                    )
+                    .setApproved(approved)
+                    .setIdempotencyKey(java.util.UUID.randomUUID().toString())
+                    .setOccurredAt(
+                        com.google.protobuf.Timestamp.newBuilder()
+                            .setSeconds(now.epochSecond)
+                            .setNanos(now.nano)
+                            .build(),
+                    )
+                    .build()
+                val event = ClientEvent.newBuilder()
+                    .setProtocolVersion(2)
+                    .setAgentControlConfirmation(confirmation)
+                    .build()
+                activeRoom.localParticipant.publishData(
+                    event.toByteArray(),
+                    DataPublishReliability.RELIABLE,
+                )
+            }.onSuccess {
+                AgentControlModel.clear(requestId)
+                notify(if (approved) "Applying conversation change" else "Conversation change canceled", false)
+            }.onFailure { error ->
+                SessionModel.message(
+                    DisplayMessage(
+                        "agent-control-confirmation-error-$requestId",
+                        MessageKind.SYSTEM,
+                        "Could not send confirmation: ${error.message ?: "unknown error"}",
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun applySessionTransition(metadata: Map<String, String>) {
+        if (metadata["radcliffe.session_transition.status"] != "applied") return
+        val requestId = metadata["radcliffe.session_transition.request_id"] ?: return
+        if (!handledTransitions.add(requestId)) return
+        val action = metadata["radcliffe.session_transition.action"] ?: return
+        val destination = metadata["radcliffe.session_transition.destination_session_id"].orEmpty()
+        AgentControlModel.clear(requestId)
+        scope.launch {
+            if (action == "end") {
+                runCatching { profiles.clearSessionSelection() }
+                SessionModel.prepare()
+                stopSession()
+                return@launch
+            }
+            if (action !in setOf("create", "switch", "restart") || destination.isBlank()) {
+                SessionModel.message(
+                    DisplayMessage(
+                        "session-transition-error-$requestId",
+                        MessageKind.SYSTEM,
+                        "Conversation transition was invalid",
+                    ),
+                )
+                return@launch
+            }
+            SessionModel.state(VoiceState.RECONNECTING)
+            notify("Switching conversation", false)
+            runCatching {
+                val profile = profiles.profile.first()
+                require(profile.isEnrolled) { "device enrollment is unavailable" }
+                profiles.selectSession(destination)
+                val (timeline, credentials) = withContext(Dispatchers.IO) {
+                    val history = if (action == "switch") {
+                        SessionApi.timeline(
+                            profile.controlUrl,
+                            profile.deviceCredential,
+                            destination,
+                        )
+                    } else {
+                        emptyList()
+                    }
+                    history to SessionApi.reopen(
+                        profile.controlUrl,
+                        profile.deviceCredential,
+                        destination,
+                    )
+                }
+                replaceSession(credentials, timeline, destination)
+            }.onFailure { error ->
+                SessionModel.state(VoiceState.FAILED)
+                SessionModel.message(
+                    DisplayMessage(
+                        "session-transition-error-$requestId",
+                        MessageKind.SYSTEM,
+                        "Conversation transition failed: ${error.message ?: "unknown error"}",
+                    ),
+                )
+                stopSession(resetState = false)
+            }
+        }
+    }
+
+    private suspend fun replaceSession(
+        credentials: SessionCredentials,
+        timeline: List<DisplayMessage>,
+        destination: String,
+    ) {
+        val previousRoom = room
+        if (previousRoom != null) {
+            playbackTracker.flush("conversation transition").forEach {
+                runCatching { publishPlaybackAcknowledgement(previousRoom, it) }
+            }
+        }
+        playbackSinks.toMap().forEach { (track, sink) -> track.removeSink(sink) }
+        playbackSinks.clear()
+        previousRoom?.disconnect()
+        previousRoom?.release()
+        room = null
+        SessionModel.open(destination, timeline)
+        SessionModel.state(VoiceState.CONNECTING)
+        connectRoom(credentials.liveKitUrl, credentials.participantToken, destination)
+        notify("Waiting for microphone", false)
     }
 
     private fun attachPlaybackSink(track: io.livekit.android.room.track.Track) {
@@ -356,9 +546,12 @@ class VoiceSessionService : MediaSessionService() {
         const val ACTION_PAUSE = "works.ravd.radcliffe.PAUSE"
         const val ACTION_RESUME = "works.ravd.radcliffe.RESUME"
         const val ACTION_STOP = "works.ravd.radcliffe.STOP"
+        const val ACTION_CONFIRM_AGENT_CONTROL = "works.ravd.radcliffe.CONFIRM_AGENT_CONTROL"
+        const val ACTION_REJECT_AGENT_CONTROL = "works.ravd.radcliffe.REJECT_AGENT_CONTROL"
         const val EXTRA_URL = "livekit_url"
         const val EXTRA_TOKEN = "participant_token"
         const val EXTRA_SESSION_ID = "session_id"
+        const val EXTRA_AGENT_CONTROL_REQUEST_ID = "agent_control_request_id"
         private const val CHANNEL_ID = "voice-session"
         private const val NOTIFICATION_ID = 1001
     }

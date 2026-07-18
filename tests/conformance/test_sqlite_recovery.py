@@ -110,6 +110,20 @@ def populated_database(path: Path, *, suffix: str = "one") -> Path:
                 now,
             ),
         )
+        database.execute(
+            "INSERT INTO session_transitions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"transition-{suffix}",
+                f"transition-key-{suffix}",
+                b"t" * 32,
+                "owner",
+                f"session-{suffix}",
+                1,
+                "end",
+                None,
+                now,
+            ),
+        )
         database.commit()
     path.chmod(0o600)
     return path
@@ -183,7 +197,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 7,
+        "schema_migrations": 8,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
@@ -192,6 +206,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
         "device_auth_audit": 1,
         "configuration_values": 1,
         "configuration_mutations": 1,
+        "session_transitions": 1,
     }
     with pytest.raises(RECOVERY.RecoveryError, match="cannot replace the live"):
         RECOVERY.restore_backup(

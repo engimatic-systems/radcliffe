@@ -23,6 +23,7 @@ from radcliffe_domain.configuration import (
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
     CONFIGURATION_EVENT,
+    SESSION_TRANSITION_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
@@ -164,6 +165,11 @@ class VoiceEventSink(Protocol):
         speech_rate_multiplier: float,
     ) -> None: ...
 
+    async def agent_control_request(
+        self,
+        request: protocol_pb2.AgentControlActionRequest,
+    ) -> None: ...
+
 
 class VoicePipeline:
     def __init__(
@@ -202,6 +208,7 @@ class VoicePipeline:
         self.configuration_registry = configuration_registry
         self.configuration_owner_id = configuration_owner_id
         self.configuration_device_id = configuration_device_id
+        self._closed_for_handoff = False
         self._active_turn: _ActiveTurn | None = None
         self._coordinator = asyncio.Lock()
         self._turn_serial = asyncio.Lock()
@@ -327,6 +334,8 @@ class VoicePipeline:
             await self._notify_state(previous, "session ended")
 
     async def handle_transcript(self, text: str) -> None:
+        if self._closed_for_handoff:
+            return
         submission = await self._begin_submission()
         turn_id = str(uuid4())
         async with self._turn_serial:
@@ -471,10 +480,11 @@ class VoicePipeline:
                     buffer = ""
                     turn.model_text = turn.rendered_model_text
                 else:
-                    await self._persist_configuration_update(
-                        event.payload.get("result"),
-                        turn,
-                    )
+                    result = event.payload.get("result")
+                    if await self._handle_session_action_tool_result(result, turn):
+                        await self._finish_handoff_from_turn(turn)
+                        return
+                    await self._persist_configuration_update(result, turn)
             elif event.type == "model_complete" and not source_rendered:
                 turn.model_text = _canonical_model_text(
                     str(event.payload.get("text", turn.model_text))
@@ -986,6 +996,118 @@ class VoicePipeline:
             notify=True,
         )
         return True
+
+    async def _handle_session_action_tool_result(
+        self,
+        result: object,
+        turn: _ActiveTurn,
+    ) -> bool:
+        details = self._tool_details(result)
+        if details is None:
+            return False
+        status = self._detail_text(details, "sessionTransitionStatus")
+        if status == "awaiting_confirmation":
+            encoded = self._detail_text(details, "actionRequestProtoBase64")
+            if encoded is None:
+                raise RuntimeError("session action confirmation request is missing")
+            try:
+                request = protocol_pb2.AgentControlActionRequest.FromString(
+                    base64.b64decode(encoded, validate=True)
+                )
+            except (ValueError, DecodeError) as error:
+                raise RuntimeError("session action confirmation request is invalid") from error
+            if (
+                request.operation.session_id != self.engine.session_id
+                or request.operation.generation != self.engine.generation
+                or request.action_id
+                not in {
+                    protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH,
+                    protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_RESTART,
+                    protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_END,
+                }
+            ):
+                raise RuntimeError("session action confirmation request is stale")
+            if self.events is not None:
+                await self.events.agent_control_request(request)
+            return False
+        if status != "applied":
+            return False
+        await self._persist_session_transition(result, turn.turn_id)
+        return True
+
+    async def complete_session_action(self, result: object) -> bool:
+        details = self._tool_details(result)
+        if details is None:
+            return False
+        status = self._detail_text(details, "sessionTransitionStatus")
+        if status == "cancelled":
+            await self._append_text(
+                SourceKind.SYSTEM,
+                "Conversation transition canceled",
+                {
+                    TURN_EVENT_METADATA: SESSION_TRANSITION_EVENT,
+                    "radcliffe.session_transition.status": "cancelled",
+                    "radcliffe.session_transition.request_id": (
+                        self._detail_text(details, "requestId") or ""
+                    ),
+                },
+                notify=True,
+            )
+            return False
+        if status != "applied":
+            return False
+        self._closed_for_handoff = True
+        await self._cancel_active("handed_off", always_flush=True)
+        await self._persist_session_transition(result, None)
+        if self.engine.state is not ConversationState.IDLE:
+            self.engine.end()
+        return True
+
+    async def _persist_session_transition(
+        self,
+        result: object,
+        turn_id: str | None,
+    ) -> None:
+        details = self._tool_details(result)
+        if details is None:
+            raise RuntimeError("session transition result is missing")
+        action = self._detail_text(details, "sessionAction")
+        source = self._detail_text(details, "sourceSessionId")
+        destination = self._detail_text(details, "destinationSessionId")
+        request_id = self._detail_text(details, "requestId")
+        if action not in {"create", "switch", "restart", "end"}:
+            raise RuntimeError("session transition action is invalid")
+        if source != self.engine.session_id or request_id is None:
+            raise RuntimeError("session transition result is stale")
+        if action != "end" and not destination:
+            raise RuntimeError("session transition destination is missing")
+        metadata = {
+            TURN_EVENT_METADATA: SESSION_TRANSITION_EVENT,
+            "radcliffe.session_transition.status": "applied",
+            "radcliffe.session_transition.action": action,
+            "radcliffe.session_transition.source_session_id": source,
+            "radcliffe.session_transition.destination_session_id": destination or "",
+            "radcliffe.session_transition.request_id": request_id,
+        }
+        if turn_id is not None:
+            metadata[TURN_ID_METADATA] = turn_id
+        await self._append_text(
+            SourceKind.SYSTEM,
+            "Conversation transition applied",
+            metadata,
+            notify=True,
+        )
+
+    async def _finish_handoff_from_turn(self, turn: _ActiveTurn) -> None:
+        self._assert_owner(turn, turn.operation)
+        self._closed_for_handoff = True
+        turn.cancelled.set()
+        await self.publisher.flush()
+        await self._append_disposition(turn, "handed_off")
+        self._paused_source = None
+        self.engine.end()
+        self._active_turn = None
+        self._emit_turn_outcome(turn, "completed")
 
     async def _persist_model(
         self,

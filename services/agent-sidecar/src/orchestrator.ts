@@ -54,7 +54,10 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "default_speech_rate with configure. Map concise or short to brief, normal to standard, " +
   "thorough or verbose to detailed, slowly to 0.75x, regular to 1.0x, quickly to 1.25x, and " +
   "very fast to 1.5x. Use turn scope for a temporary request and session scope when the user " +
-  "asks the change to continue. Never invent another setting key. You can discover authorized " +
+  "asks the change to continue. Never invent another setting key. You may create a new " +
+  "conversation, switch to a named recent conversation, restart into a fresh conversation, or " +
+  "end the current conversation with manage_session. Never guess between returned choices and " +
+  "never copy conversation history. You can discover authorized " +
   "Markdown filenames with list_sources and read " +
   "one with read_source. If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
@@ -148,6 +151,23 @@ export const CONFIGURE_PARAMETERS = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+export const MANAGE_SESSION_DESCRIPTION =
+  "Create a fresh conversation, resolve and switch to an authorized recent conversation, " +
+  "restart into a fresh conversation, or end the current conversation. Switch, restart, and " +
+  "end require user confirmation. Never guess when choices are returned.";
+export const MANAGE_SESSION_PARAMETERS = Type.Union([
+  Type.Object(
+    { operation: Type.Union([Type.Literal("create"), Type.Literal("restart"), Type.Literal("end")]) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("switch"),
+      reference: Type.String({ minLength: 1, maxLength: 120 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextMessage {
   return "role" in message && message.role === "radcliffe";
@@ -219,6 +239,11 @@ export function modelContextFromRequest(request: TurnRequest) {
         name: "configure",
         description: CONFIGURE_DESCRIPTION,
         parameters: CONFIGURE_PARAMETERS,
+      },
+      {
+        name: "manage_session",
+        description: MANAGE_SESSION_DESCRIPTION,
+        parameters: MANAGE_SESSION_PARAMETERS,
       },
     ],
   };
@@ -381,6 +406,49 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         };
       },
     };
+    type ManageSessionArguments = Extract<
+      ToolExecutionRequest,
+      { toolName: "manage_session" }
+    >["arguments"];
+    const manageSession: AgentTool<typeof MANAGE_SESSION_PARAMETERS> = {
+      name: "manage_session",
+      label: "Manage conversation",
+      description: MANAGE_SESSION_DESCRIPTION,
+      parameters: MANAGE_SESSION_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        params: ManageSessionArguments,
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
+          traceId: request.traceId!,
+          turnId,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "manage_session",
+          arguments: params,
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
     const history: RadcliffeContextMessage[] = packets.slice(0, -1).map((packet) => ({
       role: "radcliffe",
       packet,
@@ -390,7 +458,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         systemPrompt: systemPrompt(request),
         model: this.model,
         thinkingLevel: "off",
-        tools: [listSources, readSource, configure],
+        tools: [listSources, readSource, configure, manageSession],
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,

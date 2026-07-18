@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
         val storedProfile by profiles.profile.collectAsState(initial = null)
         val showSystemMessages by profiles.showSystemMessages.collectAsState(initial = false)
         val liveConfigurationUpdates by BehaviorConfigurationModel.updates.collectAsState()
+        val pendingAgentControl by AgentControlModel.pending.collectAsState()
         val scope = rememberCoroutineScope()
         var editing by remember { mutableStateOf(false) }
         var initialized by remember { mutableStateOf(false) }
@@ -703,6 +704,23 @@ class MainActivity : ComponentActivity() {
                     onCommand = ::command,
                 )
             }
+            pendingAgentControl?.let { pending ->
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(pending.label) },
+                    text = { Text(pending.detail) },
+                    confirmButton = {
+                        Button(
+                            onClick = { respondToAgentControl(pending.request.requestId, true) },
+                        ) { Text("Confirm") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { respondToAgentControl(pending.request.requestId, false) },
+                        ) { Text("Cancel") }
+                    },
+                )
+            }
         }
     }
 
@@ -1032,5 +1050,19 @@ class MainActivity : ComponentActivity() {
 
     private fun command(action: String) {
         startService(Intent(this, VoiceSessionService::class.java).setAction(action))
+    }
+
+    private fun respondToAgentControl(requestId: String, approved: Boolean) {
+        startService(
+            Intent(this, VoiceSessionService::class.java)
+                .setAction(
+                    if (approved) {
+                        VoiceSessionService.ACTION_CONFIRM_AGENT_CONTROL
+                    } else {
+                        VoiceSessionService.ACTION_REJECT_AGENT_CONTROL
+                    },
+                )
+                .putExtra(VoiceSessionService.EXTRA_AGENT_CONTROL_REQUEST_ID, requestId),
+        )
     }
 }

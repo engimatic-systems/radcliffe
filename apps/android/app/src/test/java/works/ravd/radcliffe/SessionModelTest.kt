@@ -7,6 +7,20 @@ import org.junit.Test
 
 class SessionModelTest {
     @Test
+    fun pendingAgentControlIsClearedAcrossSessionHandoff() {
+        val request = works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.newBuilder()
+            .setRequestId("session-switch-1")
+            .build()
+        AgentControlModel.request(
+            PendingAgentControl(request, "Switch conversation?", "Switch to project?"),
+        )
+
+        SessionModel.open("destination", emptyList())
+
+        assertEquals(null, AgentControlModel.pending.value)
+    }
+
+    @Test
     fun liveConfigurationUpdatesAreVisibleAndClearedAcrossSessions() {
         BehaviorConfigurationModel.update(
             ConfigurationUpdate(

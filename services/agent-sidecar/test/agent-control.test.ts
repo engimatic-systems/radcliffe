@@ -45,6 +45,7 @@ describe("agent-control contract", () => {
       "configuration.inspect": 6,
       "configuration.reset": 7,
       "configuration.undo": 8,
+      "session.end": 9,
     });
     expect(isAgentControlRequest(deliveryRequest())).toBe(true);
     expect(
@@ -104,6 +105,15 @@ describe("agent-control contract", () => {
         arguments: { key: "response_detail", value: "brief" },
       }),
     ).toBe(false);
+    expect(
+      isAgentControlRequest({
+        ...deliveryRequest(),
+        actionId: "session.end",
+        target: { scope: "session", sessionId: "session-1" },
+        confirmation: "user",
+        arguments: {},
+      }),
+    ).toBe(true);
     expect(
       isAgentControlRequest({
         ...deliveryRequest(),

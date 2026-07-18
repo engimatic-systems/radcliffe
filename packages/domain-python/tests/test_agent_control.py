@@ -75,6 +75,7 @@ def grant(
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT,
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET,
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_END,
             }
         ),
         allowed_scopes=frozenset(
@@ -193,6 +194,38 @@ def test_registered_configuration_lifecycle_actions_are_authorized(
     decision = boundary().submit(action, grant=grant(), current_generation=3)
 
     assert decision.result.disposition == protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED
+
+
+def test_session_end_is_registered_and_requires_user_confirmation() -> None:
+    action = protocol_pb2.AgentControlActionRequest(
+        schema_version=1,
+        request_id="session-end",
+        operation=operation(),
+        origin=origin(),
+        target=protocol_pb2.AgentControlTarget(
+            scope=protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+            session_id="session-1",
+        ),
+        action_id=protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_END,
+        request_sequence=1,
+        idempotency_key="session-end",
+        confirmation=protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER,
+        session_end=protocol_pb2.SessionEndAction(),
+        requested_at=timestamp(),
+    )
+    evaluator = boundary()
+    pending = evaluator.submit(action, grant=grant(), current_generation=3)
+
+    approved = evaluator.confirm(
+        confirmation(action),
+        grant=grant(actor_id="user-1"),
+        current_generation=3,
+    )
+
+    assert pending.result.disposition == (
+        protocol_pb2.AGENT_CONTROL_DISPOSITION_AWAITING_CONFIRMATION
+    )
+    assert approved.result.disposition == protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED
 
 
 def confirmation(

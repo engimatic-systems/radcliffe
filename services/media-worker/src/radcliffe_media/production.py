@@ -19,6 +19,7 @@ from radcliffe_domain.configuration import ConfigurationRegistry
 from radcliffe_domain.session import PlaybackAcknowledgement
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_media.control import ClientControlHandler
 from radcliffe_media.events import LiveKitEventSink
@@ -28,6 +29,7 @@ from radcliffe_media.livekit_adapter import (
     create_transport,
 )
 from radcliffe_media.pipeline import VoicePipeline
+from radcliffe_media.session_actions import SessionActionClient
 from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import (
     DEFAULT_WHISPER_INITIAL_PROMPT,
@@ -151,12 +153,14 @@ class EndpointProcessor(FrameProcessor):
         settings: EndpointSettings | None = None,
         activity: SpeechActivityAnalyzer | None = None,
         capture: SpeechCapture | None = None,
+        session_actions: SessionActionClient | None = None,
     ) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
         self.settings = settings or EndpointSettings()
         self.activity = activity
         self.capture = capture
+        self.session_actions = session_actions
         self.input_ready_handler: Callable[[str], Awaitable[None]] | None = None
         self.subscribed_participants: set[str] = set()
         self.input_ready_participants: set[str] = set()
@@ -561,6 +565,19 @@ class EndpointProcessor(FrameProcessor):
             raise RuntimeError("voice pipeline is not ready")
         await self.voice.playback_acknowledgement(acknowledgement)
 
+    async def agent_control_confirmation(
+        self,
+        confirmation: protocol_pb2.AgentControlConfirmation,
+        participant_identity: str,
+    ) -> None:
+        if self.voice is None or self.session_actions is None:
+            raise RuntimeError("session action confirmation is unavailable")
+        result = await self.session_actions.confirm(
+            confirmation,
+            participant_identity=participant_identity,
+        )
+        await self.voice.complete_session_action(result)
+
     @staticmethod
     def duration_ms(pcm_audio: bytes) -> int:
         return int(len(pcm_audio) / (2 * 24000) * 1000)
@@ -625,11 +642,13 @@ async def run() -> None:
         raise RuntimeError(f"unsupported speech provider: {speech_provider}")
     endpoint_settings = EndpointSettings.from_environment()
     capture = SpeechCapture.from_environment()
+    sidecar_url = os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")
     endpoint = EndpointProcessor(
         speech,
         endpoint_settings,
         SileroSpeechActivityAnalyzer(speech_probability=endpoint_settings.speech_probability),
         capture,
+        SessionActionClient(sidecar_url),
     )
     transport = create_transport(
         LiveKitConnection(
@@ -642,7 +661,7 @@ async def run() -> None:
     voice = VoicePipeline(
         required["RADCLIFFE_SESSION_ID"] or "",
         store,
-        SidecarClient(os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")),
+        SidecarClient(sidecar_url),
         speech,
         endpoint,
         event_sink,
@@ -661,9 +680,12 @@ async def run() -> None:
     controls = ClientControlHandler(endpoint)
 
     async def on_data_received(
-        _transport: RadcliffeLiveKitTransport, data: bytes, _participant_id: str
+        active_transport: RadcliffeLiveKitTransport, data: bytes, participant_id: str
     ) -> None:
-        if not await controls.handle(data):
+        if not await controls.handle(
+            data,
+            active_transport.participant_identity(participant_id),
+        ):
             logger.warning("ignored unsupported Protocol v2 client event")
 
     async def on_participant_connected(

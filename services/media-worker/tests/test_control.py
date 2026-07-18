@@ -14,6 +14,7 @@ class FakeControlTarget:
     def __init__(self) -> None:
         self.actions: list[str] = []
         self.acknowledgements = []
+        self.confirmations = []
 
     async def interrupt(self) -> None:
         self.actions.append("interrupt")
@@ -29,6 +30,9 @@ class FakeControlTarget:
 
     async def playback_acknowledgement(self, acknowledgement) -> None:
         self.acknowledgements.append(acknowledgement)
+
+    async def agent_control_confirmation(self, confirmation, participant_identity) -> None:
+        self.confirmations.append((confirmation, participant_identity))
 
 
 def command(kind: int) -> bytes:
@@ -124,6 +128,33 @@ async def test_protocol_v2_rejects_malformed_trace_identity() -> None:
 
     assert not await handler.handle(event.SerializeToString(deterministic=True))
     assert not target.acknowledgements
+
+
+@pytest.mark.asyncio
+async def test_agent_control_confirmation_requires_the_live_participant_identity() -> None:
+    target = FakeControlTarget()
+    handler = ClientControlHandler(target)
+    confirmation = protocol_pb2.AgentControlConfirmation(
+        schema_version=1,
+        confirmation_id="confirmation-1",
+        request_id="request-1",
+        origin=protocol_pb2.AgentControlOrigin(
+            source=protocol_pb2.SOURCE_KIND_USER,
+            actor_id="radcliffe-device-1",
+            source_message_id="message-1",
+        ),
+        approved=True,
+        idempotency_key="confirmation-key-1",
+    )
+    event = protocol_pb2.ClientEvent(
+        protocol_version=2,
+        agent_control_confirmation=confirmation,
+    ).SerializeToString(deterministic=True)
+
+    assert not await handler.handle(event)
+    assert not await handler.handle(event, "another-device")
+    assert await handler.handle(event, "radcliffe-device-1")
+    assert target.confirmations == [(confirmation, "radcliffe-device-1")]
 
 
 @pytest.mark.asyncio

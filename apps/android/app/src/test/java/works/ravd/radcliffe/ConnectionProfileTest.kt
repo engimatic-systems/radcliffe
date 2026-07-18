@@ -92,6 +92,8 @@ class ConnectionProfileTest {
         recreated.selectSession("ses_generated")
         assertEquals("ses_generated", recreated.profile.first().sessionId)
         assertTrue(recreated.beginSessionCreation() != pending)
+        recreated.clearSessionSelection()
+        assertEquals("", recreated.profile.first().sessionId)
     }
 
     @Test

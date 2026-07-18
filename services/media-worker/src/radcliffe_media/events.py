@@ -108,6 +108,16 @@ class LiveKitEventSink:
         )
         await self._send(event)
 
+    async def agent_control_request(
+        self,
+        request: protocol_pb2.AgentControlActionRequest,
+    ) -> None:
+        event = protocol_pb2.ServerEvent(
+            protocol_version=2,
+            agent_control_request=request,
+        )
+        await self._send(event)
+
     async def _send(
         self,
         event: protocol_pb2.ServerEvent,
