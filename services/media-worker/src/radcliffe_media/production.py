@@ -4,6 +4,7 @@ import asyncio
 import math
 import os
 from array import array
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -37,6 +38,7 @@ from radcliffe_media.speech import (
     assess_transcription,
 )
 from radcliffe_media.speech_activity import SileroSpeechActivityAnalyzer, SpeechActivityAnalyzer
+from radcliffe_media.speech_capture import EndpointCaptureEvidence, SpeechCapture
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,11 +149,16 @@ class EndpointProcessor(FrameProcessor):
         speech: SpeechProvider,
         settings: EndpointSettings | None = None,
         activity: SpeechActivityAnalyzer | None = None,
+        capture: SpeechCapture | None = None,
     ) -> None:
         super().__init__(name="radcliffe-endpoint")
         self.speech = speech
         self.settings = settings or EndpointSettings()
         self.activity = activity
+        self.capture = capture
+        self.input_ready_handler: Callable[[str], Awaitable[None]] | None = None
+        self.subscribed_participants: set[str] = set()
+        self.input_ready_participants: set[str] = set()
         self.voice: VoicePipeline | None = None
         self.buffer = bytearray()
         self.idle_buffer = bytearray()
@@ -167,6 +174,8 @@ class EndpointProcessor(FrameProcessor):
         self.rms_frames = 0
         self.started_during_active_turn = False
         self.barge_in_confirmed = False
+        self.candidate_pre_roll_ms = 0.0
+        self.candidate_participant_id: str | None = None
         self.turn_task: asyncio.Task[None] | None = None
         self.paused = False
 
@@ -177,6 +186,17 @@ class EndpointProcessor(FrameProcessor):
             return
         if self.paused:
             return
+        participant_id = frame.user_id
+        if (
+            participant_id
+            and participant_id in self.subscribed_participants
+            and participant_id not in self.input_ready_participants
+            and self.input_ready_handler is not None
+        ):
+            await self.input_ready_handler(participant_id)
+            self.input_ready_participants.add(participant_id)
+        if self.capture is not None:
+            self.capture.observe_audio_frame(participant_id)
         duration_ms = len(frame.audio) / (2 * frame.num_channels * frame.sample_rate) * 1000
         samples = array("h")
         samples.frombytes(frame.audio)
@@ -190,6 +210,12 @@ class EndpointProcessor(FrameProcessor):
             self.speaking = True
             self._reset_candidate(preserve_speaking=True)
             self.buffer.extend(pre_roll)
+            self.candidate_pre_roll_ms = (
+                len(pre_roll) / (2 * frame.num_channels * frame.sample_rate) * 1000
+            )
+            self.candidate_participant_id = frame.user_id
+            if self.capture is not None:
+                self.capture.candidate_started(frame.user_id)
             self.started_during_active_turn = (
                 self.turn_task is not None and not self.turn_task.done()
             )
@@ -276,10 +302,13 @@ class EndpointProcessor(FrameProcessor):
             silence_endpoint or maximum_endpoint
         ) and self.voice_ms >= self.settings.minimum_voice_ms:
             audio = bytes(self.buffer)
+            pre_roll_ms = self.candidate_pre_roll_ms
+            candidate_participant_id = self.candidate_participant_id
             voice_ms = self.voice_ms
             foreground_voice_ms = self.foreground_voice_ms
             maximum_rms = self.maximum_rms
             average_rms = self.rms_total / max(self.rms_frames, 1)
+            trailing_silence_ms = self.silence_ms
             logger.info(
                 "voice turn phase complete phase=endpoint reason={} audio_ms={} voice_ms={} "
                 "foreground_voice_ms={} trailing_silence_ms={} maximum_rms={} average_rms={}",
@@ -299,6 +328,10 @@ class EndpointProcessor(FrameProcessor):
                     frame.num_channels,
                     voice_ms=voice_ms,
                     voice_ratio=voice_ratio,
+                    endpoint_reason="maximum_utterance" if maximum_endpoint else "silence",
+                    pre_roll_ms=max(0.0, pre_roll_ms),
+                    trailing_silence_ms=trailing_silence_ms,
+                    participant_id=candidate_participant_id,
                 ),
                 name="radcliffe-voice-turn",
             )
@@ -358,6 +391,8 @@ class EndpointProcessor(FrameProcessor):
         self.rms_frames = 0
         self.started_during_active_turn = False
         self.barge_in_confirmed = False
+        self.candidate_pre_roll_ms = 0
+        self.candidate_participant_id = None
 
     def _remember_idle_audio(self, pcm: bytes, sample_rate: int, channels: int) -> None:
         maximum_bytes = round(self.settings.pre_roll_ms / 1000 * sample_rate * channels * 2)
@@ -373,6 +408,10 @@ class EndpointProcessor(FrameProcessor):
         *,
         voice_ms: float,
         voice_ratio: float,
+        endpoint_reason: str,
+        pre_roll_ms: float,
+        trailing_silence_ms: float,
+        participant_id: str | None,
     ) -> None:
         started_at = monotonic()
         try:
@@ -409,6 +448,23 @@ class EndpointProcessor(FrameProcessor):
                 maximum_no_speech_probability=(self.settings.maximum_no_speech_probability),
                 maximum_compression_ratio=self.settings.maximum_compression_ratio,
             )
+            if self.capture is not None and self.capture.should_capture(participant_id):
+                self.capture.record(
+                    participant_id,
+                    pcm,
+                    sample_rate,
+                    channels,
+                    transcription,
+                    assessment,
+                    EndpointCaptureEvidence(
+                        endpoint_reason=endpoint_reason,
+                        audio_ms=len(pcm) / (2 * channels * sample_rate) * 1000,
+                        voice_ms=voice_ms,
+                        voice_ratio=voice_ratio,
+                        pre_roll_ms=pre_roll_ms,
+                        trailing_silence_ms=trailing_silence_ms,
+                    ),
+                )
             logger.info(
                 "voice turn phase complete phase=transcription duration_ms={} audio_ms={} "
                 "accepted={} reason={} voice_ms={} voice_ratio={} speech_windows={} "
@@ -435,8 +491,11 @@ class EndpointProcessor(FrameProcessor):
                 if assessment.maximum_compression_ratio is not None
                 else None,
             )
-            if assessment.accepted and self.voice is not None and not self.paused:
-                await self.voice.handle_transcript(transcription.text)
+            if self.voice is not None and not self.paused:
+                if assessment.accepted:
+                    await self.voice.handle_transcript(transcription.text)
+                elif assessment.reason in {"low_log_probability", "decoder_disagreement"}:
+                    await self.voice.request_clarification(assessment.reason)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -485,6 +544,10 @@ class EndpointProcessor(FrameProcessor):
         self.idle_buffer.clear()
         if self.voice is not None:
             await self.voice.participant_connected()
+
+    def audio_track_subscribed(self, participant_id: str) -> None:
+        self.subscribed_participants.add(participant_id)
+        self.input_ready_participants.discard(participant_id)
 
     async def stop(self) -> None:
         self.paused = True
@@ -544,6 +607,7 @@ async def run() -> None:
                 "RADCLIFFE_WHISPER_INITIAL_PROMPT",
                 DEFAULT_WHISPER_INITIAL_PROMPT,
             ),
+            verification_model=os.environ.get("RADCLIFFE_WHISPER_VERIFICATION_MODEL"),
         )
     elif speech_provider == "openai":
         if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
@@ -558,10 +622,12 @@ async def run() -> None:
     else:
         raise RuntimeError(f"unsupported speech provider: {speech_provider}")
     endpoint_settings = EndpointSettings.from_environment()
+    capture = SpeechCapture.from_environment()
     endpoint = EndpointProcessor(
         speech,
         endpoint_settings,
         SileroSpeechActivityAnalyzer(speech_probability=endpoint_settings.speech_probability),
+        capture,
     )
     transport = create_transport(
         LiveKitConnection(
@@ -570,19 +636,21 @@ async def run() -> None:
             required["RADCLIFFE_SESSION_ID"] or "",
         )
     )
+    event_sink = LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or "")
     voice = VoicePipeline(
         required["RADCLIFFE_SESSION_ID"] or "",
         store,
         SidecarClient(os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")),
         speech,
         endpoint,
-        LiveKitEventSink(transport, required["RADCLIFFE_SESSION_ID"] or ""),
+        event_sink,
         TelemetrySink.from_environment(),
         model_chunk_chars=int(os.environ.get("RADCLIFFE_MODEL_CHUNK_CHARS", "240")),
         client_playback_acknowledgements=True,
         playback_ack_timeout_seconds=float(
             os.environ.get("RADCLIFFE_PLAYBACK_ACK_TIMEOUT_SECONDS", "2")
         ),
+        defer_readiness_until_input=True,
     )
     endpoint.voice = voice
     await voice.start()
@@ -595,12 +663,40 @@ async def run() -> None:
             logger.warning("ignored unsupported Protocol v2 client event")
 
     async def on_participant_connected(
-        _transport: RadcliffeLiveKitTransport, _participant_id: str
+        active_transport: RadcliffeLiveKitTransport, participant_id: str
     ) -> None:
+        if capture is not None:
+            capture.authorize_participant(
+                participant_id,
+                active_transport.participant_identity(participant_id),
+            )
         await endpoint.participant_connected()
+
+    async def on_audio_track_subscribed(
+        active_transport: RadcliffeLiveKitTransport, participant_id: str
+    ) -> None:
+        if capture is not None:
+            capture.authorize_participant(
+                participant_id,
+                active_transport.participant_identity(participant_id),
+            )
+            capture.track_subscribed(participant_id)
+        endpoint.audio_track_subscribed(participant_id)
+
+    async def on_input_ready(participant_id: str) -> None:
+        generation = await voice.input_ready()
+        await event_sink.session_ready(generation, participant_id)
+        logger.info(
+            "voice input ready participant_id={} generation={}",
+            participant_id,
+            generation,
+        )
+
+    endpoint.input_ready_handler = on_input_ready
 
     transport.add_event_handler("on_data_received", on_data_received)
     transport.add_event_handler("on_participant_connected", on_participant_connected)
+    transport.add_event_handler("on_audio_track_subscribed", on_audio_track_subscribed)
     pipeline = Pipeline([transport.input(), endpoint, transport.output()])
     worker = PipelineWorker(
         pipeline,

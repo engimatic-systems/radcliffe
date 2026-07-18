@@ -37,6 +37,7 @@ from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
+_CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
 
 
 def _is_emoji_base(character: str) -> bool:
@@ -82,6 +83,7 @@ class _ActiveTurn:
     first_audio_at: float | None = None
     source_envelope: MessageEnvelope | None = None
     next_source_boundary: int = 0
+    model_metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +168,7 @@ class VoicePipeline:
         model_chunk_chars: int = 240,
         client_playback_acknowledgements: bool = False,
         playback_ack_timeout_seconds: float = 2.0,
+        defer_readiness_until_input: bool = False,
     ) -> None:
         if model_chunk_chars <= 0:
             raise ValueError("model chunk size must be positive")
@@ -181,6 +184,7 @@ class VoicePipeline:
         self.model_chunk_chars = model_chunk_chars
         self.client_playback_acknowledgements = client_playback_acknowledgements
         self.playback_ack_timeout_seconds = playback_ack_timeout_seconds
+        self.defer_readiness_until_input = defer_readiness_until_input
         self._active_turn: _ActiveTurn | None = None
         self._coordinator = asyncio.Lock()
         self._turn_serial = asyncio.Lock()
@@ -194,9 +198,10 @@ class VoicePipeline:
         previous = self.engine.state
         self.engine.connect()
         await self._notify_state(previous, "session connected")
-        previous = self.engine.state
-        self.engine.ready()
-        await self._notify_state(previous, "session ready")
+        if not self.defer_readiness_until_input:
+            previous = self.engine.state
+            self.engine.ready()
+            await self._notify_state(previous, "session ready")
 
     async def participant_connected(self) -> None:
         """Re-arm a stopped persistent worker for a newly joined client."""
@@ -209,9 +214,10 @@ class VoicePipeline:
             previous = self.engine.state
             self.engine.connect()
             await self._notify_state(previous, "participant reconnected")
-            previous = self.engine.state
-            self.engine.ready()
-            await self._notify_state(previous, "session ready after reconnect")
+            if not self.defer_readiness_until_input:
+                previous = self.engine.state
+                self.engine.ready()
+                await self._notify_state(previous, "session ready after reconnect")
             self.telemetry.emit(
                 component="media_worker",
                 event="reconnect",
@@ -220,6 +226,24 @@ class VoicePipeline:
                 generation=self.engine.generation,
                 phase="session",
             )
+
+    async def input_ready(self) -> int:
+        """Enter listening only after the transport can deliver microphone audio."""
+        async with self._coordinator:
+            current: ConversationState = self.engine.state
+            if current in {
+                ConversationState.IDLE,
+                ConversationState.FAILED,
+            }:
+                previous = self.engine.state
+                self.engine.connect()
+                await self._notify_state(previous, "audio participant connected")
+            ready_state: ConversationState = self.engine.state
+            if ready_state is ConversationState.CONNECTING:
+                previous = self.engine.state
+                self.engine.ready()
+                await self._notify_state(previous, "audio input ready")
+            return self.engine.generation
 
     async def barge_in(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
@@ -308,6 +332,46 @@ class VoicePipeline:
                 return
             try:
                 await self._run_turn(turn)
+            except asyncio.CancelledError:
+                await self._finish_cancelled(turn)
+            except Exception:
+                await self._finish_failed(turn)
+                raise
+            finally:
+                async with self._coordinator:
+                    if self._active_turn is turn:
+                        self._active_turn = None
+
+    async def request_clarification(self, reason: str) -> None:
+        """Ask the user to repeat without persisting or guessing uncertain input."""
+        submission = await self._begin_submission()
+        turn_id = str(uuid4())
+        async with self._turn_serial:
+            task = cast(asyncio.Task[None], asyncio.current_task())
+            turn = _ActiveTurn(
+                turn_id,
+                task,
+                asyncio.Event(),
+                model_text=_CLARIFICATION_TEXT,
+                model_metadata={"radcliffe.clarification_reason": reason},
+            )
+            async with self._coordinator:
+                if submission != self._latest_submission:
+                    return
+                self._active_turn = turn
+            try:
+                previous = self.engine.state
+                operation = self.engine.begin(ConversationState.THINKING)
+                turn.operation = operation
+                await self._notify_state(previous, "clarification required", operation)
+                await self._speak_model_chunk(
+                    _CLARIFICATION_TEXT,
+                    operation,
+                    turn,
+                    "clarification ready",
+                )
+                await self._persist_model(turn, notify=True)
+                await self._finish_completed(turn)
             except asyncio.CancelledError:
                 await self._finish_cancelled(turn)
             except Exception:
@@ -861,6 +925,7 @@ class VoicePipeline:
         metadata = {
             TURN_ID_METADATA: turn.turn_id,
             "radcliffe.rendered_chars": str(len(turn.rendered_model_text)),
+            **turn.model_metadata,
         }
         if turn.operation is not None:
             metadata["radcliffe.operation_id"] = turn.operation.operation_id

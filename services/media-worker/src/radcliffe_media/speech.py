@@ -31,6 +31,7 @@ class TranscriptionSegmentEvidence:
 class Transcription:
     text: str
     segments: tuple[TranscriptionSegmentEvidence, ...] = ()
+    alternative_texts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,7 @@ class TranscriptionAssessment:
     average_log_probability: float | None
     maximum_no_speech_probability: float | None
     maximum_compression_ratio: float | None
+    maximum_hypothesis_word_error_rate: float | None
 
 
 @runtime_checkable
@@ -81,11 +83,13 @@ class LocalAppleSpeechProvider:
         language: str = "en",
         voice: str = "Samantha",
         initial_prompt: str | None = DEFAULT_WHISPER_INITIAL_PROMPT,
+        verification_model: str | None = None,
     ) -> None:
         self.whisper_model = whisper_model
         self.language = language
         self.voice = voice
         self.initial_prompt = initial_prompt
+        self.verification_model = verification_model
 
     async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
         return (await self.transcribe_with_evidence(pcm, sample_rate, channels)).text
@@ -113,21 +117,43 @@ class LocalAppleSpeechProvider:
                         ),
                     )
                 )
-        return Transcription(str(result.get("text", "")).strip(), tuple(segments))
+        alternatives: tuple[str, ...] = ()
+        if self.verification_model:
+            alternative = await self._transcribe_result(
+                self._waveform(pcm, sample_rate, channels),
+                self.verification_model,
+                self.initial_prompt,
+            )
+            alternative_text = str(alternative.get("text", "")).strip()
+            if alternative_text:
+                alternatives = (alternative_text,)
+        return Transcription(
+            str(result.get("text", "")).strip(),
+            tuple(segments),
+            alternatives,
+        )
 
     async def transcribe_result(
         self, pcm: bytes, sample_rate: int, channels: int
     ) -> dict[str, object]:
         audio = self._waveform(pcm, sample_rate, channels)
+        return await self._transcribe_result(audio, self.whisper_model, self.initial_prompt)
+
+    async def _transcribe_result(
+        self,
+        audio: np.ndarray,
+        model: str,
+        initial_prompt: str | None,
+    ) -> dict[str, object]:
         options: dict[str, object] = {
-            "path_or_hf_repo": self.whisper_model,
+            "path_or_hf_repo": model,
             "language": self.language,
             "condition_on_previous_text": False,
             "no_speech_threshold": 0.7,
             "temperature": 0.0,
         }
-        if self.initial_prompt:
-            options["initial_prompt"] = self.initial_prompt
+        if initial_prompt:
+            options["initial_prompt"] = initial_prompt
         result = await asyncio.to_thread(mlx_whisper.transcribe, audio, **options)
         return cast(dict[str, object], result)
 
@@ -237,7 +263,10 @@ def assess_transcription(
     minimum_average_log_probability: float = -1.5,
     maximum_no_speech_probability: float = 0.6,
     maximum_compression_ratio: float = 2.4,
+    maximum_hypothesis_word_error_rate: float = 0.15,
 ) -> TranscriptionAssessment:
+    from radcliffe_media.speech_quality import word_error_rate
+
     segments = transcription.segments
     log_probabilities = tuple(
         segment.average_log_probability
@@ -259,6 +288,15 @@ def assess_transcription(
         max(no_speech_probabilities) if no_speech_probabilities else None
     )
     observed_compression_ratio = max(compression_ratios) if compression_ratios else None
+    hypothesis_error_rates = tuple(
+        max(
+            word_error_rate(transcription.text, alternative),
+            word_error_rate(alternative, transcription.text),
+        )
+        for alternative in transcription.alternative_texts
+        if alternative.strip()
+    )
+    observed_hypothesis_error_rate = max(hypothesis_error_rates) if hypothesis_error_rates else None
 
     reason = "accepted"
     if not transcription.text:
@@ -279,6 +317,11 @@ def assess_transcription(
         value >= maximum_no_speech_probability for value in no_speech_probabilities
     ):
         reason = "no_speech_probability"
+    elif (
+        observed_hypothesis_error_rate is not None
+        and observed_hypothesis_error_rate > maximum_hypothesis_word_error_rate
+    ):
+        reason = "decoder_disagreement"
     return TranscriptionAssessment(
         accepted=reason == "accepted",
         reason=reason,
@@ -286,4 +329,5 @@ def assess_transcription(
         average_log_probability=average_log_probability,
         maximum_no_speech_probability=observed_no_speech_probability,
         maximum_compression_ratio=observed_compression_ratio,
+        maximum_hypothesis_word_error_rate=observed_hypothesis_error_rate,
     )

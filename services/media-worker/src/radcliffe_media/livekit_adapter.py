@@ -45,10 +45,25 @@ class RadcliffeLiveKitTransport(LiveKitTransport):
         if self._client._room is None or not self._client._connected:
             return
         if participant_id is not None:
-            await self._client.send_data(data, participant_id)
+            identity = self.participant_identity(participant_id)
+            if identity is not None:
+                await self._client.send_data(data, identity)
             return
-        for identity in tuple(self._client.room.remote_participants):
-            await self._client.send_data(data, identity)
+        for participant in tuple(self._client.room.remote_participants.values()):
+            await self._client.send_data(data, participant.identity)
+
+    def participant_identity(self, participant_id: str) -> str | None:
+        if self._client._room is None:
+            return None
+        participant = next(
+            (
+                item
+                for item in self._client.room.remote_participants.values()
+                if item.sid == participant_id or item.identity == participant_id
+            ),
+            None,
+        )
+        return participant.identity if participant is not None else None
 
 
 def create_transport(connection: LiveKitConnection) -> RadcliffeLiveKitTransport:

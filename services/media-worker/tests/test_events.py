@@ -27,6 +27,7 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
         1,
         "transcription complete",
     )
+    await sink.session_ready(2, "participant-1")
     await sink.message(envelope)
     await sink.playback_segment(
         Operation("s1", 1, "operation-1", "cancel-1", "trc_" + "a" * 32),
@@ -39,10 +40,13 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     )
 
     state = protocol_pb2.ServerEvent.FromString(transport.packets[0])
-    message = protocol_pb2.ServerEvent.FromString(transport.packets[1])
-    playback = protocol_pb2.ServerEvent.FromString(transport.packets[2])
+    ready = protocol_pb2.ServerEvent.FromString(transport.packets[1])
+    message = protocol_pb2.ServerEvent.FromString(transport.packets[2])
+    playback = protocol_pb2.ServerEvent.FromString(transport.packets[3])
     assert state.state_changed.current == protocol_pb2.CONVERSATION_STATE_THINKING
     assert state.state_changed.reason == "transcription complete"
+    assert ready.session_ready.session_id == "s1"
+    assert ready.session_ready.generation == 2
     assert message.message.content.inline_text == "hello"
     assert playback.playback_segment.playback_id == "playback-1"
     assert playback.playback_segment.segment_id == "segment-1"

@@ -594,8 +594,40 @@ async def run(commit: str) -> int:
         track = rtc.LocalAudioTrack.create_audio_track("synthetic-microphone", livekit_source)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
+        readiness_before_track = any(
+            item.event.HasField("session_ready")
+            or (
+                item.event.HasField("state_changed")
+                and item.event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
+            )
+            for item in state.events
+        )
+        track_publish_started_at = time.monotonic()
         await room.local_participant.publish_track(track, options)
         await asyncio.sleep(0.5)
+
+        if not any(item.event.HasField("session_ready") for item in state.events):
+            await source.capture_frame(
+                rtc.AudioFrame(bytes(FRAME_SAMPLES * 2), INPUT_RATE, 1, FRAME_SAMPLES)
+            )
+        await wait_until(
+            lambda: any(item.event.HasField("session_ready") for item in state.events),
+            10,
+        )
+        ready_event = next(item for item in state.events if item.event.HasField("session_ready"))
+        checks.append(
+            Check(
+                "listening_waits_for_worker_audio_input",
+                not readiness_before_track and ready_event.received_at >= track_publish_started_at,
+                "worker reported ready only after microphone publication and input processing",
+                {
+                    "track_publish_to_ready_ms": round(
+                        (ready_event.received_at - track_publish_started_at) * 1000,
+                        2,
+                    )
+                },
+            )
+        )
 
         await send_control(room, protocol_pb2.ControlCommand.KIND_PAUSE, worker_identity, playback)
         await wait_until(
@@ -1472,21 +1504,6 @@ async def run(commit: str) -> int:
             reopened_credentials["participant_token"],
         )
         await wait_until(lambda: worker_identity in room.remote_participants, 30)
-        await wait_until(
-            lambda: (
-                _event_after(
-                    state,
-                    rejoin_index,
-                    lambda event: (
-                        event.HasField("state_changed")
-                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
-                        and event.state_changed.reason == "session ready after reconnect"
-                    ),
-                )
-                is not None
-            ),
-            5,
-        )
         rejoined_livekit_source = rtc.AudioSource(INPUT_RATE, 1)
         rejoined_source = RecordingAudioSource(rejoined_livekit_source, state)
         rejoined_track = rtc.LocalAudioTrack.create_audio_track(
@@ -1496,6 +1513,38 @@ async def run(commit: str) -> int:
         rejoined_options.source = rtc.TrackSource.Value("SOURCE_MICROPHONE")
         await room.local_participant.publish_track(rejoined_track, rejoined_options)
         await asyncio.sleep(0.5)
+        if (
+            _event_after(
+                state,
+                rejoin_index,
+                lambda event: event.HasField("session_ready"),
+            )
+            is None
+        ):
+            await rejoined_source.capture_frame(
+                rtc.AudioFrame(bytes(FRAME_SAMPLES * 2), INPUT_RATE, 1, FRAME_SAMPLES)
+            )
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    rejoin_index,
+                    lambda event: (
+                        event.HasField("state_changed")
+                        and event.state_changed.current == protocol_pb2.CONVERSATION_STATE_LISTENING
+                        and event.state_changed.reason == "audio input ready"
+                    ),
+                )
+                is not None
+                and _event_after(
+                    state,
+                    rejoin_index,
+                    lambda event: event.HasField("session_ready"),
+                )
+                is not None
+            ),
+            5,
+        )
 
         rejoined_turn_index = len(state.events)
         await publish_audio(rejoined_source, utterances["turn-two"])

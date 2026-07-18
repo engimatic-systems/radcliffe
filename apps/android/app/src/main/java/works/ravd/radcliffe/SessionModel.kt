@@ -17,6 +17,21 @@ data class DisplayMessage(
     val sequence: Long? = null,
 )
 
+internal fun stateAfterSessionReady(
+    activeSessionId: String,
+    readySessionId: String,
+    current: VoiceState,
+): VoiceState = if (
+    activeSessionId == readySessionId && current in setOf(
+        VoiceState.CONNECTING,
+        VoiceState.RECONNECTING,
+    )
+) {
+    VoiceState.LISTENING
+} else {
+    current
+}
+
 object SessionModel {
     private val mutableState = MutableStateFlow(VoiceState.IDLE)
     private val mutableMessages = MutableStateFlow<List<DisplayMessage>>(emptyList())

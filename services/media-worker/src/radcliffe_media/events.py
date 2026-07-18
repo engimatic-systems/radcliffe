@@ -37,6 +37,16 @@ class LiveKitEventSink:
         event = protocol_pb2.ServerEvent(protocol_version=2, message=envelope.to_proto())
         await self._send(event)
 
+    async def session_ready(self, generation: int, participant_id: str) -> None:
+        event = protocol_pb2.ServerEvent(
+            protocol_version=2,
+            session_ready=protocol_pb2.SessionReady(
+                session_id=self.session_id,
+                generation=generation,
+            ),
+        )
+        await self._send(event, participant_id)
+
     async def state_changed(
         self,
         previous: ConversationState,
@@ -96,5 +106,12 @@ class LiveKitEventSink:
         )
         await self._send(event)
 
-    async def _send(self, event: protocol_pb2.ServerEvent) -> None:
-        await self.transport.send_protocol(event.SerializeToString(deterministic=True))
+    async def _send(
+        self,
+        event: protocol_pb2.ServerEvent,
+        participant_id: str | None = None,
+    ) -> None:
+        await self.transport.send_protocol(
+            event.SerializeToString(deterministic=True),
+            participant_id,
+        )

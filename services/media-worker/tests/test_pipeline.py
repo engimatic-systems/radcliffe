@@ -364,6 +364,63 @@ async def test_stopped_persistent_worker_accepts_a_turn_after_participant_rejoin
 
 
 @pytest.mark.asyncio
+async def test_transport_backed_pipeline_waits_for_audio_input_before_listening(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+        defer_readiness_until_input=True,
+    )
+
+    await pipeline.start()
+
+    assert pipeline.engine.state is ConversationState.CONNECTING
+    assert [state[3] for state in events.states] == ["session connected"]
+
+    generation = await pipeline.input_ready()
+
+    assert generation == pipeline.engine.generation
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert [state[3] for state in events.states] == [
+        "session connected",
+        "audio input ready",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_clarification_is_audible_without_persisting_uncertain_user_text(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = FakePublisher()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.request_clarification("decoder_disagreement")
+
+    history = await store.replay("s1")
+    assert all(item.source is not SourceKind.USER for item in history)
+    model = next(item for item in history if item.source is SourceKind.MODEL)
+    assert model.content.inline_text == "I didn't catch that clearly. Please say it again."
+    assert model.metadata["radcliffe.clarification_reason"] == "decoder_disagreement"
+    assert b"".join(publisher.audio) == model.content.inline_text.encode()
+    assert pipeline.engine.state is ConversationState.LISTENING
+
+
+@pytest.mark.asyncio
 async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()

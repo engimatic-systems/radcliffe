@@ -56,6 +56,31 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
     }
 
 
+@pytest.mark.asyncio
+async def test_optional_verifier_decodes_the_identical_waveform(monkeypatch) -> None:
+    calls: list[tuple[np.ndarray, dict[str, object]]] = []
+
+    def fake_transcribe(audio: np.ndarray, **options):
+        calls.append((audio.copy(), options))
+        text = "Turn on the light." if len(calls) == 1 else "Turn off the light."
+        return {"text": text, "segments": []}
+
+    monkeypatch.setattr("radcliffe_media.speech.mlx_whisper.transcribe", fake_transcribe)
+    provider = LocalAppleSpeechProvider(
+        whisper_model="primary-model",
+        verification_model="verification-model",
+    )
+    pcm = np.array([100, 200, 300], dtype="<i2").tobytes()
+
+    transcription = await provider.transcribe_with_evidence(pcm, 16000, 1)
+
+    assert transcription.text == "Turn on the light."
+    assert transcription.alternative_texts == ("Turn off the light.",)
+    assert np.array_equal(calls[0][0], calls[1][0])
+    assert calls[0][1]["path_or_hf_repo"] == "primary-model"
+    assert calls[1][1]["path_or_hf_repo"] == "verification-model"
+
+
 @pytest.mark.parametrize(
     ("segment", "expected_reason"),
     [
@@ -88,6 +113,20 @@ def test_legitimate_thank_you_is_not_phrase_blacklisted() -> None:
 
     assert assessment.accepted
     assert assessment.reason == "accepted"
+
+
+def test_material_decoder_disagreement_is_not_silently_accepted() -> None:
+    assessment = assess_transcription(
+        Transcription(
+            "Turn on the kitchen lights.",
+            (TranscriptionSegmentEvidence(-0.4, 0.01, 0.5),),
+            ("Turn off the kitchen lights.",),
+        )
+    )
+
+    assert not assessment.accepted
+    assert assessment.reason == "decoder_disagreement"
+    assert assessment.maximum_hypothesis_word_error_rate is not None
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,48 @@
+{
+  "schema": "radcliffe-stt-capture-plan-v1",
+  "owner_identity": "replace-with-enrolled-device-identity",
+  "cases": [
+    {
+      "id": "first-turn-speaker",
+      "expected": "Can you hear every word in this first request?",
+      "required_keywords": ["hear", "first request"],
+      "coverage": ["first_turn"],
+      "route": "speaker"
+    },
+    {
+      "id": "multi-sentence-speaker",
+      "expected": "This is the first sentence. Please retain this second sentence too.",
+      "required_keywords": ["first sentence", "second sentence"],
+      "coverage": ["multi_sentence"],
+      "route": "speaker"
+    },
+    {
+      "id": "short-command-speaker",
+      "expected": "Stop and switch topic.",
+      "required_keywords": ["stop", "switch topic"],
+      "coverage": ["short_command"],
+      "route": "speaker"
+    },
+    {
+      "id": "natural-pause-earbud",
+      "expected": "Tell me a brief fact, then after this pause tell me another one.",
+      "required_keywords": ["brief fact", "another one"],
+      "coverage": ["natural_pause", "multi_sentence"],
+      "route": "earbud"
+    },
+    {
+      "id": "room-noise-speaker",
+      "expected": "Record this request while ordinary room noise continues.",
+      "required_keywords": ["room noise"],
+      "coverage": ["room_noise"],
+      "route": "speaker"
+    },
+    {
+      "id": "short-command-earbud",
+      "expected": "Pause now.",
+      "required_keywords": ["pause"],
+      "coverage": ["short_command"],
+      "route": "earbud"
+    }
+  ]
+}
