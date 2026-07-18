@@ -31,6 +31,7 @@ class ConnectionProfileTest {
         assertFalse(profile.toString().contains("bootstrap-secret"))
         assertTrue(ConnectionProfile("localhost", "token").validationError() != null)
         assertTrue(ConnectionProfile("http://localhost", "token", "bad session").validationError() != null)
+        assertNull(ConnectionProfile("http://localhost", "token", "").validationError())
     }
 
     @Test
@@ -75,6 +76,22 @@ class ConnectionProfileTest {
         assertTrue(dataStore.snapshot().asMap().isEmpty())
         assertTrue(cipher.cleared)
         assertEquals(ConnectionProfile(), repository.profile.first())
+    }
+
+    @Test
+    fun pendingCreationKeySurvivesRecreationAndClearsOnlyAfterSelection() = runBlocking {
+        val dataStore = MemoryDataStore()
+        val cipher = TestCipher()
+        val first = ConnectionProfileRepository(dataStore, cipher)
+        first.save(ConnectionProfile("http://localhost:8000", "token"))
+
+        val pending = first.beginSessionCreation()
+        val recreated = ConnectionProfileRepository(dataStore, cipher)
+
+        assertEquals(pending, recreated.beginSessionCreation())
+        recreated.selectSession("ses_generated")
+        assertEquals("ses_generated", recreated.profile.first().sessionId)
+        assertTrue(recreated.beginSessionCreation() != pending)
     }
 }
 

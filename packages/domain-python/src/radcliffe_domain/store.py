@@ -31,6 +31,12 @@ class ToolAudit:
     result_json: bytes | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class EnvelopePage:
+    items: tuple[MessageEnvelope, ...]
+    next_after: int | None
+
+
 class EventStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -127,6 +133,33 @@ class EventStore:
             )
             rows = await cursor.fetchall()
         return tuple(MessageEnvelope.from_proto(ProtoEnvelope.FromString(row[0])) for row in rows)
+
+    async def replay_page(
+        self,
+        session_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> EnvelopePage:
+        if after < 0:
+            raise ValueError("envelope cursor must be non-negative")
+        if not 1 <= limit <= 100:
+            raise ValueError("envelope page limit must be between 1 and 100")
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """SELECT envelope FROM envelopes
+                WHERE session_id = ? AND sequence > ? ORDER BY sequence LIMIT ?""",
+                (session_id, after, limit + 1),
+            )
+            rows = await cursor.fetchall()
+        envelopes = tuple(
+            MessageEnvelope.from_proto(ProtoEnvelope.FromString(row[0])) for row in rows
+        )
+        items = envelopes[:limit]
+        return EnvelopePage(
+            items=items,
+            next_after=items[-1].sequence if len(envelopes) > limit else None,
+        )
 
     async def record_playback(
         self,

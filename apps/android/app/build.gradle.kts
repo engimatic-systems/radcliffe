@@ -13,8 +13,8 @@ android {
         applicationId = "works.ravd.radcliffe"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 6
+        versionName = "0.3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -51,4 +51,5 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
 }

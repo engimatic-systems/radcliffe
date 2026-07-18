@@ -1,6 +1,6 @@
 ---
 id: rad-mp26
-status: open
+status: closed
 deps: [rad-tx88, rad-lod5, rad-yk82]
 links: [rad-lod5, rad-yk82, rad-h2lv]
 created: 2026-07-14T02:48:09Z
@@ -28,3 +28,19 @@ Automatic random sessions remain deferred: the current local media worker is pin
 **2026-07-14T11:53:12Z**
 
 Backend prerequisites are now implemented: rad-lod5 provides the durable generated-ID/recent-session API and rad-yk82 dispatches exactly one managed media worker for generated rooms. Android can now replace the compatibility session field with automatic create/reopen behavior once the profile PR chain lands.
+
+**2026-07-14T12:35:29Z**
+
+Implemented on feat/android-session-home: configuration-only setup, generated sessions with persisted idempotency, authenticated recent-session paging, chronological timeline restore before LiveKit connect, selected-session persistence, diagnostic-only raw IDs, explicit loading/empty/offline/unauthorized/retry states, and archived-test filtering. JVM/API tests cover creation-key recreation, parsing, reducer pagination/order/deduplication, failures, and timeline secret/audit filtering. Keep open for the Pixel UI/process/reboot checkpoint.
+
+**2026-07-15T02:52:08Z**
+
+2026-07-14 Pixel v0.3.0 regression: create/reopen control requests all returned 200 and the generated worker remained healthy, but no Pixel participant reached LiveKit; the conversation screen flashed and an automatic refresh erased the client error. Fixed for v0.3.1 by moving selected-session persistence after the foreground-service handoff so preference failure cannot block a valid join, preserving preflight failures on screen, and adding credential-contract plus state-transition regressions.
+
+**2026-07-15T03:01:07Z**
+
+Pixel v0.3.1 exposed the precise cause: 'The coroutine scope left the composition.' The action-backed LaunchedEffect cleared its own key before its first suspended control request completed, deterministically cancelling itself; cancellation was then rendered as an availability error. v0.3.2 retains the key through the handoff and rethrows genuine CancellationException values rather than converting them to network failures.
+
+**2026-07-15T03:15:48Z**
+
+2026-07-14 Pixel acceptance passed on v0.3.2: created a new conversation, talked and interrupted successfully, closed/restarted the app and resumed the same conversation, and switched to another conversation. This clears the recent-session/generation/timeline-resume functionality checkpoint.
