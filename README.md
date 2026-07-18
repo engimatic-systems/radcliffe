@@ -161,6 +161,18 @@ uses a generated source root and SQLite database under
 `artifacts/session-conformance/`, records a redacted HTTP timeline, and never
 restarts or mutates the live phone control plane.
 
+The independent device-auth gate exercises enrollment, replay denial, signed
+room-token scope and expiry, refresh, restart, credential rotation, revocation,
+and content-free audit. It uses only synthetic secrets in an isolated database
+and byte-scans every retained artifact for leaks:
+
+```sh
+make check-device-auth-local
+```
+
+Operational recovery and secret-rotation procedures are documented in
+[`docs/security-operations.md`](docs/security-operations.md).
+
 The focused false-turn corpus is faster and covers digital silence, seeded room
 tone, post-AEC playback echo, nearby speech-like babble, foreground speech over
 continuing babble, a short noise burst, a 30-second sparse-spike endpoint, and

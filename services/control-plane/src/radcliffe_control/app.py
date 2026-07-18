@@ -23,6 +23,7 @@ from radcliffe_domain.catalog import (
     SessionRecord,
 )
 from radcliffe_domain.devices import (
+    DeviceCredentialRotationError,
     DeviceEnrollmentConflictError,
     DeviceRecord,
     DeviceRegistry,
@@ -88,6 +89,12 @@ class DeviceEnrollmentRequest(BaseModel):
     credential: str = Field(pattern=r"^rdc_dev_[A-Za-z0-9_-]{43,128}$")
 
 
+class DeviceCredentialRotationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential: str = Field(pattern=r"^rdc_dev_[A-Za-z0-9_-]{43,128}$")
+
+
 class DeviceResponse(BaseModel):
     device_id: str
     participant_identity: str
@@ -95,6 +102,14 @@ class DeviceResponse(BaseModel):
     created_at: datetime
     last_authenticated_at: datetime | None
     revoked: bool
+
+
+class DeviceAuthAuditResponse(BaseModel):
+    event_id: str
+    device_id: str | None
+    event_type: str
+    reason: str
+    occurred_at: datetime
 
 
 class SessionUpdateRequest(BaseModel):
@@ -536,6 +551,39 @@ def create_app(
             revoked=False,
         )
 
+    @app.post("/v1/devices/me/credential", response_model=DeviceResponse)
+    async def rotate_current_device_credential(
+        request: DeviceCredentialRotationRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DeviceResponse:
+        supplied = authorization.removeprefix("Bearer ") if authorization else ""
+        try:
+            rotated, changed = await active.devices.rotate_credential(
+                owner_id=active.settings.owner_id,
+                device_id=device.device_id,
+                current_credential_sha256=credential_digest(supplied),
+                next_credential_sha256=credential_digest(request.credential),
+            )
+        except DeviceCredentialRotationError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if changed:
+            await active.devices.audit(
+                owner_id=active.settings.owner_id,
+                device_id=rotated.device_id,
+                event_type="rotated",
+                reason="device_self_rotation",
+            )
+        return DeviceResponse(
+            device_id=rotated.device_id,
+            participant_identity=rotated.participant_identity,
+            display_name=rotated.display_name,
+            created_at=rotated.created_at,
+            last_authenticated_at=rotated.last_authenticated_at,
+            revoked=False,
+        )
+
     @app.post("/v1/devices/{device_id}/revoke", response_model=DeviceResponse)
     async def revoke_device(
         device_id: str,
@@ -565,6 +613,27 @@ def create_app(
             created_at=device.created_at,
             last_authenticated_at=device.last_authenticated_at,
             revoked=True,
+        )
+
+    @app.get(
+        "/v1/internal/device-auth-audit",
+        response_model=tuple[DeviceAuthAuditResponse, ...],
+    )
+    async def get_device_auth_audit(
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> tuple[DeviceAuthAuditResponse, ...]:
+        _bearer(authorization, active.settings.internal_token)
+        events = await active.devices.audit_events(owner_id=active.settings.owner_id)
+        return tuple(
+            DeviceAuthAuditResponse(
+                event_id=event.event_id,
+                device_id=event.device_id,
+                event_type=event.event_type,
+                reason=event.reason,
+                occurred_at=event.occurred_at,
+            )
+            for event in events
         )
 
     @app.post("/v1/sessions", response_model=SessionResponse)
