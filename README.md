@@ -67,7 +67,10 @@ For the physical M1 gate:
    `uv run python -m radcliffe_media.production`. The first transcription
    downloads the MLX Whisper checkpoint; subsequent speech stays local.
 5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
-   token, grant microphone access, then tap Start.
+   token once, retain the compatibility session `radcliffe-demo`, save the
+   profile, grant microphone access, then tap Start. Later launches load the
+   saved profile; use Change settings only when the endpoint or credential
+   changes.
 6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
    candidate report. The LiveKit and Android tickets remain open until direct
    UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.

@@ -167,6 +167,14 @@ developer and desktop client, but it is not the mobile reliability baseline.
 - **State:** coroutines and `StateFlow`, ViewModels, Hilt dependency injection,
   DataStore for settings, and Room for a small offline cache of envelopes and
   reconnect state.
+- **Local connection profile:** DataStore persists the control URL and current
+  compatibility session ID. The bootstrap credential is encrypted with
+  AES-256-GCM under a non-exportable Android Keystore key; DataStore contains
+  only a versioned `v1` ciphertext envelope. App backups and screenshots are
+  disabled, and clearing settings removes both preferences and key material.
+  Device enrollment under `rad-nmdx` can later exchange the decrypted legacy
+  bootstrap credential once, persist the enrolled device credential through
+  the same repository boundary, and delete the legacy key and ciphertext.
 - **Realtime:** the official LiveKit Android SDK, configured for two-way
   communication audio. The app publishes microphone audio and subscribes to
   the agent’s audio track; control events use LiveKit data packets.

@@ -2,7 +2,7 @@
 id: rad-ghti
 status: in_progress
 deps: [rad-wnwh, rad-58mt, rad-8i08, rad-0ekb, rad-ihso, rad-g7di]
-links: []
+links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n]
 created: 2026-07-13T01:52:53Z
 type: task
 priority: 1
@@ -35,3 +35,7 @@ Physical Pixel run exposed and local fixes now verify: LiveKit microphone audio 
 **2026-07-14T02:46:33Z**
 
 Physical Pixel verification passed the basic local loop on 2026-07-13: microphone transcription, visible user/model messages, Ollama response, local TTS playback, tap interrupt, pause/resume, and end-to-idle all worked. The run also exposed a deterministic concurrency defect: an interrupted unanswered user request remained in projection and was answered alongside the next prompt; a naturally split utterance launched overlapping model turns and logged InvalidTransitionError (listening -> listening). Follow-up cancellation/serialization work will be tracked on the stacked next-milestone branch.
+
+**2026-07-14T04:05:38Z**
+
+2026-07-13 Pixel evidence: transcript-to-first-playback was approximately 6.44s, 5.34s, 12.93s, and 10.87s across four turns, excluding endpoint silence and Whisper time. Punctuation-poor Markdown and emoji were slowest. The latency/chunking follow-up is rad-chaa.
