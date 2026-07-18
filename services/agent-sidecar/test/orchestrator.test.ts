@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   convertRadcliffeContext,
+  modelContextFromRequest,
   PiAgentOrchestrator,
   RADCLIFFE_SYSTEM_PROMPT,
 } from "../src/orchestrator.js";
@@ -37,6 +38,7 @@ function request(packets: ContextPacket[]): TurnRequest {
     sessionId: "session-1",
     generation: 1,
     operationId: "operation-123456",
+    cancellationId: "cancellation-123456",
     traceId: `trc_${"c".repeat(32)}`,
     packets,
   };
@@ -128,6 +130,70 @@ describe("PiAgentOrchestrator", () => {
     expect(events.find((event) => event.type === "tool_end")).toMatchObject({
       result: { details: { sourceEnvelopeProtoBase64: sourceEnvelope } },
     });
+  });
+
+  it("routes a typed allowlisted configuration change with exact turn identity", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-configuration-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "configure",
+          {
+            operation: "set",
+            key: "default_speech_rate",
+            scope: "session",
+            value: "1.25x",
+          },
+          { id: "configure-1" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Future speech will use the faster pace."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent:
+        '{"effective_scope":"session","key":"default_speech_rate","value":"1.25x"}',
+      details: { mutationId: "configuration:configure-1" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([
+        packet("user-1", "Speak faster from now on", {
+          annotations: [
+            ["projection", "context-v2"],
+            ["radcliffe.turn_id", "turn-1"],
+          ],
+        }),
+      ]),
+      () => undefined,
+    );
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cancellationId: "cancellation-123456",
+        turnId: "turn-1",
+        toolName: "configure",
+        arguments: {
+          operation: "set",
+          key: "default_speech_rate",
+          scope: "session",
+          value: "1.25x",
+        },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it("projects effective response detail into the model system prompt", () => {
+    const context = modelContextFromRequest({
+      ...request([packet("user-1", "Explain it")]),
+      responseDetail: "detailed",
+    });
+
+    expect(context.systemPrompt).toContain("Give a detailed response");
+    expect(context.tools.map((tool) => tool.name)).toContain("configure");
   });
 
   it("discovers an informally named source before reading its canonical bytes", async () => {

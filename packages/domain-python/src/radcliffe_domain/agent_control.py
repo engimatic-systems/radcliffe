@@ -38,6 +38,9 @@ _ACTION_CONFIGURATION = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_SET
 _ACTION_SESSION_CREATE = protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_CREATE
 _ACTION_SESSION_SWITCH = protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH
 _ACTION_SESSION_RESTART = protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_RESTART
+_ACTION_CONFIGURATION_INSPECT = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT
+_ACTION_CONFIGURATION_RESET = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET
+_ACTION_CONFIGURATION_UNDO = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO
 
 _DISPOSITION_AWAITING = protocol_pb2.AGENT_CONTROL_DISPOSITION_AWAITING_CONFIRMATION
 _DISPOSITION_AUTHORIZED = protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED
@@ -95,6 +98,26 @@ class ActionPolicy:
         return requirement
 
 
+_CONFIGURATION_SCOPES = frozenset({_SCOPE_TURN, _SCOPE_SESSION, _SCOPE_DEVICE, _SCOPE_OPERATOR})
+_CONFIGURATION_ORIGINS = frozenset({_SOURCE_USER, _SOURCE_MODEL, _SOURCE_CALL, _SOURCE_SYSTEM})
+_CONFIGURATION_CONFIRMATION: Mapping[int, int] = MappingProxyType(
+    {
+        _SCOPE_TURN: _CONFIRM_NONE,
+        _SCOPE_SESSION: _CONFIRM_NONE,
+        _SCOPE_DEVICE: _CONFIRM_USER,
+        _SCOPE_OPERATOR: _CONFIRM_OPERATOR,
+    }
+)
+_INSPECTION_CONFIRMATION: Mapping[int, int] = MappingProxyType(
+    {
+        _SCOPE_TURN: _CONFIRM_NONE,
+        _SCOPE_SESSION: _CONFIRM_NONE,
+        _SCOPE_DEVICE: _CONFIRM_NONE,
+        _SCOPE_OPERATOR: _CONFIRM_NONE,
+    }
+)
+
+
 ACTION_POLICIES: Mapping[int, ActionPolicy] = MappingProxyType(
     {
         _ACTION_DELIVERY: ActionPolicy(
@@ -107,16 +130,30 @@ ACTION_POLICIES: Mapping[int, ActionPolicy] = MappingProxyType(
         _ACTION_CONFIGURATION: ActionPolicy(
             _ACTION_CONFIGURATION,
             "configuration",
-            frozenset({_SCOPE_TURN, _SCOPE_SESSION, _SCOPE_DEVICE, _SCOPE_OPERATOR}),
-            frozenset({_SOURCE_USER, _SOURCE_MODEL, _SOURCE_CALL, _SOURCE_SYSTEM}),
-            MappingProxyType(
-                {
-                    _SCOPE_TURN: _CONFIRM_NONE,
-                    _SCOPE_SESSION: _CONFIRM_NONE,
-                    _SCOPE_DEVICE: _CONFIRM_USER,
-                    _SCOPE_OPERATOR: _CONFIRM_OPERATOR,
-                }
-            ),
+            _CONFIGURATION_SCOPES,
+            _CONFIGURATION_ORIGINS,
+            _CONFIGURATION_CONFIRMATION,
+        ),
+        _ACTION_CONFIGURATION_INSPECT: ActionPolicy(
+            _ACTION_CONFIGURATION_INSPECT,
+            "configuration_inspect",
+            _CONFIGURATION_SCOPES,
+            _CONFIGURATION_ORIGINS,
+            _INSPECTION_CONFIRMATION,
+        ),
+        _ACTION_CONFIGURATION_RESET: ActionPolicy(
+            _ACTION_CONFIGURATION_RESET,
+            "configuration_reset",
+            _CONFIGURATION_SCOPES,
+            _CONFIGURATION_ORIGINS,
+            _CONFIGURATION_CONFIRMATION,
+        ),
+        _ACTION_CONFIGURATION_UNDO: ActionPolicy(
+            _ACTION_CONFIGURATION_UNDO,
+            "configuration_undo",
+            _CONFIGURATION_SCOPES,
+            _CONFIGURATION_ORIGINS,
+            _CONFIGURATION_CONFIRMATION,
         ),
         _ACTION_SESSION_CREATE: ActionPolicy(
             _ACTION_SESSION_CREATE,
@@ -194,9 +231,16 @@ def _require_empty(*values: str) -> None:
 
 
 def _configuration_key(request: protocol_pb2.AgentControlActionRequest) -> int:
-    if request.WhichOneof("action") != "configuration":
-        return 0
-    return request.configuration.key
+    action = request.WhichOneof("action")
+    if action == "configuration":
+        return request.configuration.key
+    if action == "configuration_inspect":
+        return request.configuration_inspect.key
+    if action == "configuration_reset":
+        return request.configuration_reset.key
+    if action == "configuration_undo":
+        return request.configuration_undo.key
+    return 0
 
 
 def precedence_key(request: protocol_pb2.AgentControlActionRequest) -> tuple[int, int, int, str]:
@@ -515,7 +559,12 @@ class AgentControlBoundary:
             _require_identifier(target.snippet_id)
             _require_empty(target.device_id)
             return
-        if request.action_id == _ACTION_CONFIGURATION:
+        if request.action_id in {
+            _ACTION_CONFIGURATION,
+            _ACTION_CONFIGURATION_INSPECT,
+            _ACTION_CONFIGURATION_RESET,
+            _ACTION_CONFIGURATION_UNDO,
+        }:
             if target.scope == _SCOPE_TURN:
                 _require_identifier(target.turn_id)
                 _require_empty(target.device_id, target.snippet_id)
@@ -565,6 +614,19 @@ class AgentControlBoundary:
                     raise _ContractRejection(_REJECTION_ARGUMENT)
                 return
             raise _ContractRejection(_REJECTION_ARGUMENT)
+        if request.action_id in {
+            _ACTION_CONFIGURATION_INSPECT,
+            _ACTION_CONFIGURATION_RESET,
+            _ACTION_CONFIGURATION_UNDO,
+        }:
+            if _configuration_key(request) not in {
+                protocol_pb2.AGENT_CONFIGURATION_KEY_RESPONSE_DETAIL,
+                protocol_pb2.AGENT_CONFIGURATION_KEY_DEFAULT_SPEECH_RATE,
+            }:
+                raise _ContractRejection(_REJECTION_ARGUMENT)
+            if request.action_id == _ACTION_CONFIGURATION_UNDO:
+                _require_identifier(request.configuration_undo.mutation_id)
+            return
         if request.action_id == _ACTION_SESSION_SWITCH:
             _require_identifier(request.session_switch.destination_session_id)
             if request.session_switch.destination_session_id == request.operation.session_id:

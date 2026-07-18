@@ -16,7 +16,9 @@ export interface TurnRequest {
   sessionId: string;
   generation: number;
   operationId?: string;
+  cancellationId?: string;
   traceId?: string;
+  responseDetail?: ResponseDetail;
   packets: ContextPacket[];
 }
 
@@ -26,6 +28,8 @@ export function validTurnIdentity(turn: TurnRequest): boolean {
   return (
     typeof turn.operationId === "string" &&
     turn.operationId.length >= 16 &&
+    typeof turn.cancellationId === "string" &&
+    CONTROL_IDENTIFIER.test(turn.cancellationId) &&
     typeof turn.traceId === "string" &&
     TRACE_ID.test(turn.traceId)
   );
@@ -77,7 +81,9 @@ interface ToolExecutionRequestBase {
   sessionId: string;
   generation: number;
   operationId: string;
+  cancellationId: string;
   traceId: string;
+  turnId: string;
   callId: string;
   idempotencyKey: string;
 }
@@ -90,6 +96,32 @@ export type ToolExecutionRequest =
   | (ToolExecutionRequestBase & {
       toolName: "read_source";
       arguments: { path: string; rate?: SpeechDeliveryRate };
+    })
+  | (ToolExecutionRequestBase & {
+      toolName: "configure";
+      arguments:
+        | {
+            operation: "inspect";
+            key: "response_detail" | "default_speech_rate";
+            scope?: "turn" | "session";
+          }
+        | {
+            operation: "set";
+            key: "response_detail" | "default_speech_rate";
+            scope?: "turn" | "session";
+            value: ResponseDetail | SpeechRate;
+          }
+        | {
+            operation: "reset";
+            key: "response_detail" | "default_speech_rate";
+            scope?: "turn" | "session";
+          }
+        | {
+            operation: "undo";
+            key: "response_detail" | "default_speech_rate";
+            scope?: "turn" | "session";
+            undoMutationId: string;
+          };
     });
 
 export interface ToolExecutionResult {
@@ -111,6 +143,9 @@ export const AGENT_CONTROL_ACTION_WIRE_IDS = {
   "session.create": 3,
   "session.switch": 4,
   "session.restart": 5,
+  "configuration.inspect": 6,
+  "configuration.reset": 7,
+  "configuration.undo": 8,
 } as const;
 
 export type AgentControlActionId = keyof typeof AGENT_CONTROL_ACTION_WIRE_IDS;
@@ -160,6 +195,21 @@ export type AgentControlRequest =
       arguments:
         | { key: "response_detail"; value: ResponseDetail }
         | { key: "default_speech_rate"; value: SpeechRate };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "configuration.inspect";
+      arguments: { key: "response_detail" | "default_speech_rate" };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "configuration.reset";
+      arguments: { key: "response_detail" | "default_speech_rate" };
+    })
+  | (AgentControlRequestBase & {
+      actionId: "configuration.undo";
+      arguments: {
+        key: "response_detail" | "default_speech_rate";
+        mutationId: string;
+      };
     })
   | (AgentControlRequestBase & {
       actionId: "session.create";
@@ -257,7 +307,16 @@ function validTarget(value: unknown): value is AgentControlTarget {
 
 function requiredConfirmation(actionId: AgentControlActionId, scope: AgentControlScope) {
   if (actionId === "speech_delivery.set_rate") return scope === "snippet" ? "none" : undefined;
-  if (actionId === "configuration.set") {
+  if (actionId === "configuration.inspect") {
+    return scope === "turn" || scope === "session" || scope === "device" || scope === "operator_default"
+      ? "none"
+      : undefined;
+  }
+  if (
+    actionId === "configuration.set" ||
+    actionId === "configuration.reset" ||
+    actionId === "configuration.undo"
+  ) {
     if (scope === "turn" || scope === "session") return "none";
     if (scope === "device") return "user";
     if (scope === "operator_default") return "operator";
@@ -294,6 +353,19 @@ function validArguments(
       return typeof args.value === "string" && SPEECH_RATES.has(args.value as SpeechRate);
     }
     return false;
+  }
+  if (actionId === "configuration.inspect" || actionId === "configuration.reset") {
+    return (
+      exactKeys(args, ["key"]) &&
+      (args.key === "response_detail" || args.key === "default_speech_rate")
+    );
+  }
+  if (actionId === "configuration.undo") {
+    return (
+      exactKeys(args, ["key", "mutationId"]) &&
+      (args.key === "response_detail" || args.key === "default_speech_rate") &&
+      identifier(args.mutationId)
+    );
   }
   if (actionId === "session.switch") {
     return (
@@ -334,7 +406,12 @@ export function isAgentControlRequest(value: unknown): value is AgentControlRequ
   if (requiredConfirmation(actionId, target.scope) !== item.confirmation) return false;
   if (actionId === "speech_delivery.set_rate") {
     if (!target.turnId || !target.snippetId || target.deviceId) return false;
-  } else if (actionId === "configuration.set") {
+  } else if (
+    actionId === "configuration.set" ||
+    actionId === "configuration.inspect" ||
+    actionId === "configuration.reset" ||
+    actionId === "configuration.undo"
+  ) {
     if (target.scope === "turn" && (!target.turnId || target.deviceId || target.snippetId)) {
       return false;
     }

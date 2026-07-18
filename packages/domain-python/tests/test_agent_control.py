@@ -72,6 +72,9 @@ def grant(
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_CREATE,
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH,
                 protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_RESTART,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO,
             }
         ),
         allowed_scopes=frozenset(
@@ -150,6 +153,46 @@ def configuration_request(
         ),
         requested_at=timestamp(),
     )
+
+
+@pytest.mark.parametrize(
+    ("action_id", "payload_name"),
+    [
+        (
+            protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT,
+            "configuration_inspect",
+        ),
+        (
+            protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET,
+            "configuration_reset",
+        ),
+        (
+            protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO,
+            "configuration_undo",
+        ),
+    ],
+)
+def test_registered_configuration_lifecycle_actions_are_authorized(
+    action_id: int,
+    payload_name: str,
+) -> None:
+    action = configuration_request(
+        request_id=f"request-{payload_name}",
+        idempotency_key=f"idempotency-{payload_name}",
+        scope=protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+        sequence=1,
+        confirmation=protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE,
+    )
+    action.action_id = action_id
+    action.ClearField("configuration")
+    payload = getattr(action, payload_name)
+    payload.key = protocol_pb2.AGENT_CONFIGURATION_KEY_RESPONSE_DETAIL
+    if payload_name == "configuration_undo":
+        payload.mutation_id = "mutation-1"
+
+    decision = boundary().submit(action, grant=grant(), current_generation=3)
+
+    assert decision.result.disposition == protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED
 
 
 def confirmation(

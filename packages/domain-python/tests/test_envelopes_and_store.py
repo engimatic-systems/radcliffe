@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity, SourceKind
 from radcliffe_domain.projection import (
+    CONFIGURATION_EVENT,
     DELIVERY_SUMMARY_METADATA,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
@@ -189,6 +190,11 @@ def test_delivery_rate_is_boundary_scoped_and_does_not_leak() -> None:
     with pytest.raises(ValueError, match="exceeds"):
         with_delivery_rate(source, (3,), "fast")
 
+    explicit_normal = with_delivery_rate(source, (0,), "normal")
+    first = render_projection(explicit_normal).segments[0]
+    assert first.delivery.is_default
+    assert first.delivery_overridden
+
 
 def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_content() -> None:
     interrupted = MessageEnvelope.text(
@@ -229,3 +235,23 @@ def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_conten
     assert "Count from one to ten" not in packets[0].content
     assert packets[2].content == "What model are you?"
     assert dict(packets[0].annotations)[TURN_DISPOSITION_METADATA] == "interrupted"
+
+
+def test_configuration_audit_is_durable_but_not_model_visible() -> None:
+    audit = MessageEnvelope.text(
+        session_id="s1",
+        sequence=1,
+        source=SourceKind.SYSTEM,
+        text="Behavior setting updated",
+        metadata={
+            TURN_EVENT_METADATA: CONFIGURATION_EVENT,
+            "radcliffe.configuration.key": "response_detail",
+            "radcliffe.configuration.value": "brief",
+        },
+    )
+
+    packet = context_projection(audit)
+
+    assert not packet.include
+    assert "Behavior setting updated" not in packet.content
+    assert packet.content == "[excluded: configuration audit]"

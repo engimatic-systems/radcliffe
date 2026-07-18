@@ -15,6 +15,7 @@ TURN_ID_METADATA = "radcliffe.turn_id"
 TURN_EVENT_METADATA = "radcliffe.event"
 TURN_DISPOSITION_METADATA = "radcliffe.turn_disposition"
 TURN_DISPOSITION_EVENT = "turn_disposition"
+CONFIGURATION_EVENT = "configuration_changed"
 EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 DELIVERY_RATE_METADATA_PREFIX = "radcliffe.delivery.rate."
 DELIVERY_SUMMARY_METADATA = "radcliffe.delivery.summary"
@@ -103,6 +104,7 @@ class RenderSegment:
     boundary_index: int
     canonical_text: str
     delivery: SpeechDelivery = SpeechDelivery()
+    delivery_overridden: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,10 +184,7 @@ def with_delivery_rate(
     metadata = dict(envelope.metadata)
     for boundary_index in boundary_indices:
         key = delivery_metadata_key(boundary_index)
-        if delivery.is_default:
-            metadata.pop(key, None)
-        else:
-            metadata[key] = delivery.metadata_value
+        metadata[key] = delivery.metadata_value
     summary = delivery_summary(metadata)
     if summary is None:
         metadata.pop(DELIVERY_SUMMARY_METADATA, None)
@@ -213,19 +212,21 @@ def with_delivery_rate_for_all(
 def render_projection(envelope: MessageEnvelope) -> RenderPlan:
     text = envelope.content.inline_text or ""
     speak = envelope.source in {SourceKind.MODEL, SourceKind.TEXT_SOURCE}
-    segments = (
-        tuple(
-            RenderSegment(
-                segment_id=f"{envelope.message_id}:{index}",
-                boundary_index=index,
-                canonical_text=sentence,
-                delivery=SpeechDelivery.parse(envelope.metadata.get(delivery_metadata_key(index))),
+    segments: tuple[RenderSegment, ...] = ()
+    if speak:
+        rendered: list[RenderSegment] = []
+        for index, sentence in enumerate(_sentences(text)):
+            metadata_key = delivery_metadata_key(index)
+            rendered.append(
+                RenderSegment(
+                    segment_id=f"{envelope.message_id}:{index}",
+                    boundary_index=index,
+                    canonical_text=sentence,
+                    delivery=SpeechDelivery.parse(envelope.metadata.get(metadata_key)),
+                    delivery_overridden=metadata_key in envelope.metadata,
+                )
             )
-            for index, sentence in enumerate(_sentences(text))
-        )
-        if speak
-        else ()
-    )
+        segments = tuple(rendered)
     label = envelope.provenance.display_name or envelope.provenance.locator
     return RenderPlan(
         projection_version=RENDER_PROJECTION_VERSION,
@@ -245,13 +246,21 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
         SourceKind.TEXT_SOURCE: "source",
         SourceKind.SYSTEM: "system",
     }[envelope.source]
-    is_disposition = envelope.metadata.get(TURN_EVENT_METADATA) == TURN_DISPOSITION_EVENT
-    include = envelope.sensitivity is not Sensitivity.SECRET and not is_disposition
+    event = envelope.metadata.get(TURN_EVENT_METADATA)
+    is_disposition = event == TURN_DISPOSITION_EVENT
+    is_configuration = event == CONFIGURATION_EVENT
+    include = (
+        envelope.sensitivity is not Sensitivity.SECRET
+        and not is_disposition
+        and not is_configuration
+    )
     text = envelope.content.inline_text or ""
     if envelope.sensitivity is Sensitivity.SECRET:
         text = "[redacted: secret envelope]"
     elif is_disposition:
         text = "[excluded: turn disposition audit]"
+    elif is_configuration:
+        text = "[excluded: configuration audit]"
     annotations = tuple(
         sorted(
             {

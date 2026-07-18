@@ -9,6 +9,54 @@ import org.json.JSONObject
 
 class SessionApiTest {
     @Test
+    fun configurationParserRetainsRegistryBoundsAndUndoState() {
+        val values = SessionApi.parseConfiguration(
+            JSONObject(
+                """{
+                    "items": [{
+                        "key": "default_speech_rate",
+                        "value": "1.25x",
+                        "effective_scope": "session",
+                        "revision": 2,
+                        "default": "1.0x",
+                        "allowed_values": ["0.75x", "1.0x", "1.25x", "1.5x"],
+                        "allowed_scopes": ["device", "operator_default", "session", "turn"],
+                        "persistent_scopes": ["device", "operator_default", "session"],
+                        "confirmation_by_scope": {"device": "user"}
+                    }]
+                }""".trimIndent(),
+            ),
+        )
+        val mutation = SessionApi.parseConfigurationMutation(
+            JSONObject(
+                """{
+                    "mutation_id": "configuration-1",
+                    "previous_value": "1.0x",
+                    "applied_value": "1.25x",
+                    "revision": 2,
+                    "replayed": false,
+                    "effective": {
+                        "key": "default_speech_rate",
+                        "value": "1.25x",
+                        "effective_scope": "session",
+                        "revision": 2,
+                        "default": "1.0x",
+                        "allowed_values": ["0.75x", "1.0x", "1.25x", "1.5x"],
+                        "allowed_scopes": ["device", "operator_default", "session", "turn"],
+                        "persistent_scopes": ["device", "operator_default", "session"],
+                        "confirmation_by_scope": {"device": "user"}
+                    }
+                }""".trimIndent(),
+            ),
+        )
+
+        assertEquals("1.25x", values.single().value)
+        assertEquals(listOf("0.75x", "1.0x", "1.25x", "1.5x"), values.single().allowedValues)
+        assertEquals("configuration-1", mutation.mutationId)
+        assertEquals("1.0x", mutation.previousValue)
+    }
+
+    @Test
     fun enrollmentParserReturnsOnlyServerOwnedIdentity() {
         val enrollment = SessionApi.parseEnrollment(
             JSONObject(

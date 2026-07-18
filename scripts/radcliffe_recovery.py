@@ -34,6 +34,8 @@ DATA_TABLES = (
     "playback_acknowledgements",
     "devices",
     "device_auth_audit",
+    "configuration_values",
+    "configuration_mutations",
 )
 
 

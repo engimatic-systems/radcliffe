@@ -49,6 +49,24 @@ data class TimelinePage(
     val nextAfter: Long?,
 )
 
+data class RegisteredConfiguration(
+    val key: String,
+    val value: String,
+    val effectiveScope: String,
+    val revision: Int,
+    val defaultValue: String,
+    val allowedValues: List<String>,
+)
+
+data class ConfigurationMutationResult(
+    val mutationId: String,
+    val previousValue: String?,
+    val appliedValue: String?,
+    val revision: Int,
+    val replayed: Boolean,
+    val effective: RegisteredConfiguration,
+)
+
 class ControlApiException(
     val statusCode: Int,
     detail: String,
@@ -205,6 +223,50 @@ object SessionApi {
         return messages.distinctBy { it.id }
     }
 
+    fun configuration(
+        baseUrl: String,
+        deviceCredential: String,
+        sessionId: String,
+    ): List<RegisteredConfiguration> {
+        val query = "?session_id=${URLEncoder.encode(sessionId, Charsets.UTF_8.name())}"
+        return parseConfiguration(
+            request(baseUrl, deviceCredential, "GET", "/v1/configuration$query"),
+        )
+    }
+
+    fun mutateConfiguration(
+        baseUrl: String,
+        deviceCredential: String,
+        sessionId: String,
+        operation: String,
+        key: String,
+        value: String? = null,
+        expectedRevision: Int? = null,
+        undoMutationId: String? = null,
+        idempotencyKey: String,
+    ): ConfigurationMutationResult {
+        require(operation in setOf("set", "reset", "undo"))
+        require(key in setOf("response_detail", "default_speech_rate"))
+        val body = JSONObject()
+            .put("operation", operation)
+            .put("key", key)
+            .put("scope", "session")
+            .put("session_id", sessionId)
+            .put("idempotency_key", idempotencyKey)
+        value?.let { body.put("value", it) }
+        expectedRevision?.let { body.put("expected_revision", it) }
+        undoMutationId?.let { body.put("undo_mutation_id", it) }
+        return parseConfigurationMutation(
+            request(
+                baseUrl,
+                deviceCredential,
+                "POST",
+                "/v1/configuration/mutations",
+                body,
+            ),
+        )
+    }
+
     internal fun parseSessionPage(json: JSONObject): SessionPage {
         val values = json.getJSONArray("items")
         val items = buildList {
@@ -216,6 +278,47 @@ object SessionApi {
         return SessionPage(
             items = items,
             nextCursor = if (json.isNull("next_cursor")) null else json.getString("next_cursor"),
+        )
+    }
+
+    internal fun parseConfiguration(json: JSONObject): List<RegisteredConfiguration> {
+        val values = json.getJSONArray("items")
+        return buildList {
+            for (index in 0 until values.length()) {
+                add(parseRegisteredConfiguration(values.getJSONObject(index)))
+            }
+        }
+    }
+
+    internal fun parseConfigurationMutation(json: JSONObject): ConfigurationMutationResult =
+        ConfigurationMutationResult(
+            mutationId = json.getString("mutation_id"),
+            previousValue = if (json.isNull("previous_value")) {
+                null
+            } else {
+                json.getString("previous_value")
+            },
+            appliedValue = if (json.isNull("applied_value")) {
+                null
+            } else {
+                json.getString("applied_value")
+            },
+            revision = json.getInt("revision"),
+            replayed = json.getBoolean("replayed"),
+            effective = parseRegisteredConfiguration(json.getJSONObject("effective")),
+        )
+
+    private fun parseRegisteredConfiguration(json: JSONObject): RegisteredConfiguration {
+        val allowed = json.getJSONArray("allowed_values")
+        return RegisteredConfiguration(
+            key = json.getString("key"),
+            value = json.getString("value"),
+            effectiveScope = json.getString("effective_scope"),
+            revision = json.getInt("revision"),
+            defaultValue = json.getString("default"),
+            allowedValues = buildList {
+                for (index in 0 until allowed.length()) add(allowed.getString(index))
+            },
         )
     }
 

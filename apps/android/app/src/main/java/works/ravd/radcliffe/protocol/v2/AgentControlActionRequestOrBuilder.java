@@ -157,6 +157,39 @@ public interface AgentControlActionRequestOrBuilder extends
   works.ravd.radcliffe.protocol.v2.SessionRestartAction getSessionRestart();
 
   /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   * @return Whether the configurationInspect field is set.
+   */
+  boolean hasConfigurationInspect();
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   * @return The configurationInspect.
+   */
+  works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction getConfigurationInspect();
+
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   * @return Whether the configurationReset field is set.
+   */
+  boolean hasConfigurationReset();
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   * @return The configurationReset.
+   */
+  works.ravd.radcliffe.protocol.v2.ConfigurationResetAction getConfigurationReset();
+
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   * @return Whether the configurationUndo field is set.
+   */
+  boolean hasConfigurationUndo();
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   * @return The configurationUndo.
+   */
+  works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction getConfigurationUndo();
+
+  /**
    * <code>.google.protobuf.Timestamp requested_at = 15;</code>
    * @return Whether the requestedAt field is set.
    */

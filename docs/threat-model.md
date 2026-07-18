@@ -26,6 +26,7 @@ The initial read-only source tools are:
 | --- | --- | --- | --- | --- |
 | `list_sources` | Relative `.md` names only beneath explicit readable roots; lexical order; maximum 200 results, four path levels, and 2,000 scanned entries; hidden paths, symlinks, non-files, case-ambiguous names, contents, and absolute host paths excluded | Read directory metadata | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, bounded relative result, result SHA-256, outcome, and timings |
 | `read_source` | One UTF-8 `.md` path under an explicit readable root; maximum 1 MiB; regular files only; resolved target must remain below the resolved root | Read only | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, resolved path, byte count, SHA-256, outcome, timings, and error code |
+| `configure` | Only `response_detail` and `default_speech_rate`; typed inspect/set/reset/undo; agent limited to exact turn or session scope | Bounded behavior state only | Exact retries replay; changed retries and stale revisions conflict | Action ID, key, scope, target, canonical value, prior value, revision, actor, mutation/idempotency IDs, outcome; no conversation content or secret values |
 
 Arguments are copied through canonical JSON before validation. Calls execute
 sequentially in M1. A duplicate `call_id` or idempotency key returns the first

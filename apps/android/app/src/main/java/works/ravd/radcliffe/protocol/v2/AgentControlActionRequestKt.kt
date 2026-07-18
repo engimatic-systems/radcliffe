@@ -347,6 +347,78 @@ public object AgentControlActionRequestKt {
     }
 
     /**
+     * `.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;`
+     */
+    public var configurationInspect: works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction
+      @kotlin.jvm.JvmName("getConfigurationInspect")
+        get() = _builder.configurationInspect
+      @kotlin.jvm.JvmName("setConfigurationInspect")
+        set(value) {
+        _builder.configurationInspect = value
+      }
+    /**
+     * `.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;`
+     */
+    public fun clearConfigurationInspect() {
+      _builder.clearConfigurationInspect()
+    }
+    /**
+     * `.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;`
+     * @return Whether the configurationInspect field is set.
+     */
+    public fun hasConfigurationInspect(): kotlin.Boolean {
+      return _builder.hasConfigurationInspect()
+    }
+
+    /**
+     * `.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;`
+     */
+    public var configurationReset: works.ravd.radcliffe.protocol.v2.ConfigurationResetAction
+      @kotlin.jvm.JvmName("getConfigurationReset")
+        get() = _builder.configurationReset
+      @kotlin.jvm.JvmName("setConfigurationReset")
+        set(value) {
+        _builder.configurationReset = value
+      }
+    /**
+     * `.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;`
+     */
+    public fun clearConfigurationReset() {
+      _builder.clearConfigurationReset()
+    }
+    /**
+     * `.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;`
+     * @return Whether the configurationReset field is set.
+     */
+    public fun hasConfigurationReset(): kotlin.Boolean {
+      return _builder.hasConfigurationReset()
+    }
+
+    /**
+     * `.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;`
+     */
+    public var configurationUndo: works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction
+      @kotlin.jvm.JvmName("getConfigurationUndo")
+        get() = _builder.configurationUndo
+      @kotlin.jvm.JvmName("setConfigurationUndo")
+        set(value) {
+        _builder.configurationUndo = value
+      }
+    /**
+     * `.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;`
+     */
+    public fun clearConfigurationUndo() {
+      _builder.clearConfigurationUndo()
+    }
+    /**
+     * `.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;`
+     * @return Whether the configurationUndo field is set.
+     */
+    public fun hasConfigurationUndo(): kotlin.Boolean {
+      return _builder.hasConfigurationUndo()
+    }
+
+    /**
      * `.google.protobuf.Timestamp requested_at = 15;`
      */
     public var requestedAt: com.google.protobuf.Timestamp
@@ -407,6 +479,15 @@ public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.s
 
 public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.sessionRestartOrNull: works.ravd.radcliffe.protocol.v2.SessionRestartAction?
   get() = if (hasSessionRestart()) getSessionRestart() else null
+
+public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.configurationInspectOrNull: works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction?
+  get() = if (hasConfigurationInspect()) getConfigurationInspect() else null
+
+public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.configurationResetOrNull: works.ravd.radcliffe.protocol.v2.ConfigurationResetAction?
+  get() = if (hasConfigurationReset()) getConfigurationReset() else null
+
+public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.configurationUndoOrNull: works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction?
+  get() = if (hasConfigurationUndo()) getConfigurationUndo() else null
 
 public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.requestedAtOrNull: com.google.protobuf.Timestamp?
   get() = if (hasRequestedAt()) getRequestedAt() else null

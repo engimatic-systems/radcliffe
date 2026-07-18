@@ -8,8 +8,17 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from radcliffe_domain.configuration import (
+    ConfigurationContext,
+    ConfigurationMutation,
+    ConfigurationRegistry,
+)
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
-from radcliffe_domain.projection import TURN_DISPOSITION_METADATA, context_replay
+from radcliffe_domain.projection import (
+    TURN_DISPOSITION_METADATA,
+    TURN_ID_METADATA,
+    context_replay,
+)
 from radcliffe_domain.session import (
     ConversationState,
     PlaybackAcknowledgement,
@@ -163,6 +172,64 @@ class AnswerOrchestrator:
         yield SidecarEvent("model_delta", {"text": "First sentence. "})
         yield SidecarEvent("model_delta", {"text": "Second sentence."})
         yield SidecarEvent("model_complete", {"text": "First sentence. Second sentence."})
+        yield SidecarEvent("complete", {})
+
+
+class TurnRateOverrideOrchestrator:
+    def __init__(self, registry: ConfigurationRegistry) -> None:
+        self.registry = registry
+        self.requests: list[dict[str, object]] = []
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            packets = request["packets"]
+            assert isinstance(packets, list)
+            annotations = dict(packets[-1]["annotations"])
+            turn_id = annotations[TURN_ID_METADATA]
+            await self.registry.mutate(
+                ConfigurationMutation(
+                    mutation_id="turn-rate",
+                    idempotency_key="turn-rate",
+                    key="default_speech_rate",
+                    scope="turn",
+                    kind="set",
+                    context=ConfigurationContext(
+                        owner_id="local-owner",
+                        session_id="s1",
+                        turn_id=turn_id,
+                    ),
+                    actor_id="agent-sidecar",
+                    value="normal",
+                )
+            )
+        yield SidecarEvent("model_delta", {"text": "Configured response."})
+        yield SidecarEvent("model_complete", {"text": "Configured response."})
+        yield SidecarEvent("complete", {})
+
+
+class ConfigurationEventOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "isError": False,
+                "result": {
+                    "details": {
+                        "key": "response_detail",
+                        "value": "brief",
+                        "effectiveScope": "session",
+                        "revision": "1",
+                        "operation": "set",
+                        "mutationId": "configuration-1",
+                    }
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "Configuration applied."})
+        yield SidecarEvent("model_complete", {"text": "Configuration applied."})
         yield SidecarEvent("complete", {})
 
 
@@ -521,6 +588,90 @@ async def test_model_emoji_are_removed_before_tts_publication_and_persistence(tm
     assert model.content.inline_text == expected
     published = next(item for item in events.messages if item.source is SourceKind.MODEL)
     assert published.content.inline_text == expected
+
+
+@pytest.mark.asyncio
+async def test_effective_configuration_controls_prompt_and_speech_without_scope_leak(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    registry = ConfigurationRegistry(store.path)
+    context = ConfigurationContext(owner_id="local-owner", session_id="s1")
+    await registry.mutate(
+        ConfigurationMutation(
+            mutation_id="session-detail",
+            idempotency_key="session-detail",
+            key="response_detail",
+            scope="session",
+            kind="set",
+            context=context,
+            actor_id="device-1",
+            value="brief",
+        )
+    )
+    await registry.mutate(
+        ConfigurationMutation(
+            mutation_id="session-rate",
+            idempotency_key="session-rate",
+            key="default_speech_rate",
+            scope="session",
+            kind="set",
+            context=context,
+            actor_id="device-1",
+            value="fast",
+        )
+    )
+    orchestrator = TurnRateOverrideOrchestrator(registry)
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        tts,
+        FakePublisher(),
+        configuration_registry=registry,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Use normal speed for just this answer")
+    await pipeline.handle_transcript("Use my defaults again")
+
+    assert [request["responseDetail"] for request in orchestrator.requests] == [
+        "brief",
+        "brief",
+    ]
+    assert tts.rates == [1.0, 1.25]
+
+
+@pytest.mark.asyncio
+async def test_configuration_tool_result_is_live_auditable_and_excluded_from_model_context(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        ConfigurationEventOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Be concise from now on")
+
+    history = await store.replay("s1")
+    audit = next(
+        item for item in history if item.metadata.get("radcliffe.event") == "configuration_changed"
+    )
+    assert audit.metadata["radcliffe.configuration.value"] == "brief"
+    assert audit in events.messages
+    audit_packet = context_replay(history)[history.index(audit)]
+    assert not audit_packet.include
+    assert "Behavior setting updated" not in audit_packet.content
 
 
 @pytest.mark.asyncio

@@ -241,6 +241,7 @@ class LocalWorkerLauncher:
         database_path: Path,
         livekit_url: str,
         token_factory: Callable[[SessionRecord], str],
+        owner_id: str = "local-owner",
         base_environment: Mapping[str, str] | None = None,
     ) -> None:
         self.command = command
@@ -249,6 +250,7 @@ class LocalWorkerLauncher:
         self.database_path = database_path
         self.livekit_url = livekit_url
         self.token_factory = token_factory
+        self.owner_id = owner_id
         source = base_environment if base_environment is not None else os.environ
         self.base_environment = {
             key: value for key, value in source.items() if key in self._ENVIRONMENT_KEYS
@@ -268,6 +270,7 @@ class LocalWorkerLauncher:
             "RADCLIFFE_LIVEKIT_URL": self.livekit_url,
             "RADCLIFFE_LIVEKIT_TOKEN": self.token_factory(record),
             "RADCLIFFE_DATABASE_PATH": str(self.database_path),
+            "RADCLIFFE_OWNER_ID": self.owner_id,
         }
         try:
             process = await asyncio.create_subprocess_exec(

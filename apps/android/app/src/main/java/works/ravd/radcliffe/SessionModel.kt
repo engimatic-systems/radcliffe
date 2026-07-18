@@ -18,6 +18,31 @@ data class DisplayMessage(
     val sequence: Long? = null,
 )
 
+data class ConfigurationUpdate(
+    val key: String,
+    val value: String,
+    val effectiveScope: String,
+    val revision: Int,
+    val mutationId: String?,
+)
+
+object BehaviorConfigurationModel {
+    private val mutableUpdates = MutableStateFlow<Map<String, ConfigurationUpdate>>(emptyMap())
+    val updates = mutableUpdates.asStateFlow()
+
+    fun update(value: ConfigurationUpdate) {
+        mutableUpdates.value = mutableUpdates.value + (value.key to value)
+    }
+
+    fun expireTurnOverrides() {
+        mutableUpdates.value = mutableUpdates.value.filterValues { it.effectiveScope != "turn" }
+    }
+
+    fun clear() {
+        mutableUpdates.value = emptyMap()
+    }
+}
+
 internal fun speechDeliveryDescription(label: String): String = "Speech delivery: $label"
 
 internal fun stateAfterSessionReady(
@@ -45,10 +70,12 @@ object SessionModel {
 
     fun state(value: VoiceState) { mutableState.value = value }
     fun prepare(sessionId: String = "") {
+        BehaviorConfigurationModel.clear()
         mutableSessionId.value = sessionId
         mutableMessages.value = emptyList()
     }
     fun open(sessionId: String, timeline: List<DisplayMessage>) {
+        BehaviorConfigurationModel.clear()
         mutableSessionId.value = sessionId
         mutableMessages.value = timeline.distinctBy { it.id }
     }
