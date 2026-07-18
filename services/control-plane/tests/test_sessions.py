@@ -1,11 +1,48 @@
 import asyncio
+from collections.abc import Mapping
 
 from fastapi.testclient import TestClient
 from livekit import api
 from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
+from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_domain.projection import (
+    TURN_DISPOSITION_EVENT,
+    TURN_DISPOSITION_METADATA,
+    TURN_EVENT_METADATA,
+    TURN_ID_METADATA,
+)
+from radcliffe_domain.store import EventStore
 
 AUTHORIZATION = {"Authorization": "Bearer bootstrap-token-123"}
+
+
+class FakeContextUsageClient:
+    def __init__(self) -> None:
+        self.requests: list[Mapping[str, object]] = []
+
+    async def measure(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        self.requests.append(request)
+        packets = request["packets"]
+        assert isinstance(packets, list)
+        tokens = sum(
+            len(str(packet["content"]))
+            for packet in packets
+            if isinstance(packet, dict) and packet["include"]
+        )
+        return {
+            "modelId": "qwen3:8b",
+            "contextLimit": 1000,
+            "projectedInputTokens": tokens,
+            "reservedOutputTokens": 100,
+            "remainingTokens": max(0, 900 - tokens),
+            "percentage": min(100, tokens / 9),
+            "projectionVersion": "context-v2",
+            "measurementBasis": "test-exact-model-request",
+            "exact": True,
+            "overflow": tokens > 900,
+            "requestDigest": "a" * 64,
+        }
 
 
 class FakeProcess:
@@ -159,6 +196,99 @@ def test_catalog_survives_control_plane_restart(tmp_path) -> None:
         )
         assert credential.status_code == 200
         assert credential.json()["generation"] == 1
+
+
+def test_context_usage_projects_current_history_without_leaking_content(tmp_path) -> None:
+    config = settings(tmp_path)
+    usage = FakeContextUsageClient()
+    with TestClient(create_app(config, context_usage_client=usage)) as client:
+        created = create(client, session_id="context-session")
+        assert created.status_code == 200
+        store = EventStore(config.database_path)
+        envelopes = (
+            MessageEnvelope.text(
+                session_id="context-session",
+                sequence=1,
+                source=SourceKind.USER,
+                text="abandoned private request",
+                metadata={TURN_ID_METADATA: "old-turn"},
+            ),
+            MessageEnvelope.text(
+                session_id="context-session",
+                sequence=2,
+                source=SourceKind.SYSTEM,
+                text="interrupted",
+                metadata={
+                    TURN_ID_METADATA: "old-turn",
+                    TURN_EVENT_METADATA: TURN_DISPOSITION_EVENT,
+                    TURN_DISPOSITION_METADATA: "interrupted",
+                },
+            ),
+            MessageEnvelope.text(
+                session_id="context-session",
+                sequence=3,
+                source=SourceKind.CALL,
+                text='{"tool":"read_source","outcome":"authorized"}',
+            ),
+            MessageEnvelope.text(
+                session_id="context-session",
+                sequence=4,
+                source=SourceKind.TEXT_SOURCE,
+                text="Canonical source text.",
+            ),
+        )
+        for envelope in envelopes:
+            asyncio.run(store.append(envelope))
+
+        assert client.get("/v1/sessions/context-session/context-usage").status_code == 401
+        first = client.get(
+            "/v1/sessions/context-session/context-usage",
+            headers=AUTHORIZATION,
+        )
+
+        assert first.status_code == 200
+        body = first.json()
+        assert body == {
+            "session_id": "context-session",
+            "model_id": "qwen3:8b",
+            "context_limit": 1000,
+            "projected_input_tokens": 67,
+            "reserved_output_tokens": 100,
+            "remaining_tokens": 833,
+            "percentage": 67 / 9,
+            "projection_version": "context-v2",
+            "measurement_basis": "test-exact-model-request",
+            "exact": True,
+            "overflow": False,
+        }
+        assert "content" not in body
+        assert "request_digest" not in body
+        packets = usage.requests[-1]["packets"]
+        assert isinstance(packets, list)
+        assert [packet["include"] for packet in packets] == [False, False, True, True]
+        assert packets[2]["role"] == "tool"
+        assert packets[3]["role"] == "source"
+
+        asyncio.run(
+            store.append(
+                MessageEnvelope.text(
+                    session_id="context-session",
+                    sequence=5,
+                    source=SourceKind.USER,
+                    text="new request",
+                )
+            )
+        )
+        second = client.get(
+            "/v1/sessions/context-session/context-usage",
+            headers=AUTHORIZATION,
+        )
+        assert second.json()["projected_input_tokens"] == 78
+        assert usage.requests[-1]["requestId"] == "context-usage:context-session:5"
+        assert (
+            client.get("/v1/sessions/missing/context-usage", headers=AUTHORIZATION).status_code
+            == 404
+        )
 
 
 def test_generated_session_dispatches_one_worker_and_end_cleans_it_up(tmp_path) -> None:

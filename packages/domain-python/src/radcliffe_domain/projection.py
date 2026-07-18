@@ -41,6 +41,18 @@ class ContextPacket:
     annotations: tuple[tuple[str, str], ...]
     include: bool
 
+    def to_wire(self, timestamp_ms: int) -> dict[str, object]:
+        return {
+            "projectionVersion": self.projection_version,
+            "messageId": self.message_id,
+            "role": self.role,
+            "content": self.content,
+            "source": self.source.value,
+            "annotations": [list(item) for item in self.annotations],
+            "include": self.include,
+            "timestamp": timestamp_ms,
+        }
+
 
 def _sentences(text: str) -> tuple[str, ...]:
     if not text:

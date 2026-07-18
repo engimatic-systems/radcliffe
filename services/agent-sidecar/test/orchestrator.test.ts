@@ -6,7 +6,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { convertRadcliffeContext, PiAgentOrchestrator } from "../src/orchestrator.js";
-import type { ContextPacket, SidecarEvent, TurnRequest } from "../src/protocol.js";
+import type { ContextMeter } from "../src/context-meter.js";
+import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
 
 function packet(
   messageId: string,
@@ -108,5 +109,35 @@ describe("PiAgentOrchestrator", () => {
     expect(converted).toHaveLength(1);
     expect(converted[0]?.role).toBe("user");
     expect(converted[0]?.content).toContain("[Radcliffe text_source from demo.md]");
+  });
+
+  it("rejects overflow before invoking the model provider", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-overflow-test" });
+    faux.setResponses([fauxAssistantMessage("must not run")]);
+    const usage: ContextUsage = {
+      modelId: "local-test",
+      contextLimit: 100,
+      projectedInputTokens: 90,
+      reservedOutputTokens: 20,
+      remainingTokens: 0,
+      percentage: 100,
+      projectionVersion: "context-v2",
+      measurementBasis: "test-exact",
+      exact: true,
+      overflow: true,
+      requestDigest: "a".repeat(64),
+    };
+    const meter: ContextMeter = { measure: vi.fn(async () => usage) };
+    const orchestrator = new PiAgentOrchestrator(
+      faux.getModel(),
+      faux.streamSimple,
+      vi.fn(),
+      meter,
+    );
+
+    await expect(
+      orchestrator.run(request([packet("current", "Too much context")]), vi.fn()),
+    ).rejects.toThrow("context overflow");
+    expect(faux.state.callCount).toBe(0);
   });
 });

@@ -15,6 +15,10 @@ the configured bootstrap bearer token. The authenticated principal comes from
   cursor preserves a deterministic `(last_activity_at, session_id)` boundary.
 - `GET /v1/sessions/{session_id}` returns metadata only. Envelope/message content
   is deliberately absent.
+- `GET /v1/sessions/{session_id}/context-usage` replays the current deterministic
+  projection and returns model ID, exact/estimated input usage, reserved output,
+  remaining capacity, percentage, projection version, and overflow state. It
+  never returns message content or the internal request digest.
 - `PATCH /v1/sessions/{session_id}` updates the optional title and lifecycle
   status (`active`, `ended`, or `archived`).
 - `POST /v1/sessions/{session_id}/credentials` reopens a durable session with a
@@ -37,6 +41,10 @@ bootstrap token, LiveKit API secret, and disabled cloud-provider keys. Per-sessi
 logs live under `RADCLIFFE_WORKER_LOG_DIRECTORY` (default `var/workers`).
 Compatibility sessions report `external` rather than pretending that the
 control-plane supervisor can observe their separately launched worker.
+
+Context accounting is delegated over loopback to
+`RADCLIFFE_SIDECAR_URL` (default `http://127.0.0.1:8787`) so the count is taken
+at the same Pi/provider serialization boundary as generation.
 
 Run the real local dispatch check after LiveKit, the sidecar, and the control
 plane are healthy:

@@ -5,6 +5,7 @@ import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/a
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Model } from "@earendil-works/pi-ai";
 
+import { OllamaContextMeter } from "./context-meter.js";
 import { PiAgentOrchestrator } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
 import { warmOllama } from "./ollama-runtime.js";
@@ -26,6 +27,8 @@ const models = builtinModels();
 const ollamaModel = createOllamaModel({
   modelId,
   baseUrl: process.env.RADCLIFFE_OLLAMA_URL ?? "http://127.0.0.1:11434/v1",
+  contextWindow: Number(process.env.RADCLIFFE_MODEL_CONTEXT_LIMIT ?? "40960"),
+  maxTokens: Number(process.env.RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS ?? "8192"),
 });
 const model = provider === "ollama" ? ollamaModel : models.getModel(provider, modelId);
 if (!model) throw new Error(`unknown Pi model ${provider}/${modelId}`);
@@ -66,7 +69,8 @@ async function executeTool(
   return (await response.json()) as ToolExecutionResult;
 }
 
-const orchestrator = new PiAgentOrchestrator(model, streamFn, executeTool);
+const contextMeter = provider === "ollama" ? new OllamaContextMeter({ model: ollamaModel }) : undefined;
+const orchestrator = new PiAgentOrchestrator(model, streamFn, executeTool, contextMeter);
 let activeTurns = 0;
 let cancelledTurns = 0;
 
@@ -86,7 +90,9 @@ createServer(async (request, response) => {
     );
     return;
   }
-  if (request.method !== "POST" || request.url !== "/v1/turns") {
+  const isTurn = request.method === "POST" && request.url === "/v1/turns";
+  const isContextUsage = request.method === "POST" && request.url === "/v1/context-usage";
+  if (!isTurn && !isContextUsage) {
     response.writeHead(404).end();
     return;
   }
@@ -99,6 +105,54 @@ createServer(async (request, response) => {
     response.writeHead(400, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "invalid JSON" }));
     return;
+  }
+  if (isContextUsage) {
+    if (!contextMeter) {
+      response.writeHead(501, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "exact context accounting is unavailable" }));
+      return;
+    }
+    try {
+      const usage = await orchestrator.measure(turn);
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify(usage));
+    } catch (error) {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : "context accounting failed",
+        }),
+      );
+    }
+    return;
+  }
+  if (contextMeter) {
+    try {
+      const usage = await orchestrator.measure(turn);
+      if (usage.overflow) {
+        response.writeHead(422, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error:
+              `context overflow: ${usage.projectedInputTokens} input + ` +
+              `${usage.reservedOutputTokens} reserved > ${usage.contextLimit} token limit`,
+            usage,
+          }),
+        );
+        return;
+      }
+    } catch (error) {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : "context accounting failed",
+        }),
+      );
+      return;
+    }
   }
   response.writeHead(200, {
     "content-type": "application/x-ndjson",

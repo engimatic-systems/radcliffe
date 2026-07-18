@@ -13,16 +13,22 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from livekit import api
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from radcliffe_domain.catalog import (
     InvalidPageCursorError,
     SessionCatalog,
     SessionConflictError,
     SessionRecord,
 )
+from radcliffe_domain.projection import CONTEXT_PROJECTION_VERSION, context_replay
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
 
+from radcliffe_control.context_usage import (
+    ContextUsageClient,
+    ContextUsageClientError,
+    SidecarContextUsageClient,
+)
 from radcliffe_control.settings import Settings
 from radcliffe_control.workers import (
     LocalWorkerLauncher,
@@ -86,6 +92,40 @@ class SessionListResponse(BaseModel):
     next_cursor: str | None
 
 
+class SidecarContextUsageResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    model_id: str
+    context_limit: int = Field(gt=0)
+    projected_input_tokens: int = Field(ge=0)
+    reserved_output_tokens: int = Field(ge=0)
+    remaining_tokens: int = Field(ge=0)
+    percentage: float = Field(ge=0, le=100)
+    projection_version: str
+    measurement_basis: str
+    exact: bool
+    overflow: bool
+    request_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ContextUsageResponse(BaseModel):
+    session_id: str
+    model_id: str
+    context_limit: int
+    projected_input_tokens: int
+    reserved_output_tokens: int
+    remaining_tokens: int
+    percentage: float
+    projection_version: str
+    measurement_basis: str
+    exact: bool
+    overflow: bool
+
+
 class ReadSourceArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -128,6 +168,7 @@ class Runtime:
     lock: asyncio.Lock
     workers: WorkerSupervisor | None
     worker_maintenance: asyncio.Task[None] | None
+    context_usage: ContextUsageClient
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -190,6 +231,7 @@ def _worker_identity(session_id: str) -> str:
 def create_app(
     provided_settings: Settings | None = None,
     worker_launcher: WorkerLauncher | None = None,
+    context_usage_client: ContextUsageClient | None = None,
 ) -> FastAPI:
     runtime: Runtime | None = None
 
@@ -236,6 +278,7 @@ def create_app(
             asyncio.Lock(),
             workers,
             None,
+            context_usage_client or SidecarContextUsageClient(settings.sidecar_url),
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -388,6 +431,46 @@ def create_app(
         if record is None:
             raise HTTPException(status_code=404, detail="session not found")
         return _summary(record)
+
+    @app.get(
+        "/v1/sessions/{session_id}/context-usage",
+        response_model=ContextUsageResponse,
+    )
+    async def get_context_usage(
+        session_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextUsageResponse:
+        _bearer(authorization, active.settings.bootstrap_token)
+        record = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        history = await active.store.replay(session_id)
+        packets = context_replay(history)
+        request: dict[str, object] = {
+            "requestId": f"context-usage:{session_id}:{len(history)}",
+            "sessionId": session_id,
+            "generation": record.generation,
+            "packets": [
+                packet.to_wire(int(envelope.created_at.timestamp() * 1000))
+                for envelope, packet in zip(history, packets, strict=True)
+            ],
+        }
+        try:
+            measured = SidecarContextUsageResponse.model_validate(
+                await active.context_usage.measure(request)
+            )
+        except (ContextUsageClientError, ValidationError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if measured.projection_version != CONTEXT_PROJECTION_VERSION:
+            raise HTTPException(status_code=503, detail="context projection version mismatch")
+        return ContextUsageResponse(
+            session_id=session_id,
+            **measured.model_dump(exclude={"request_digest"}),
+        )
 
     @app.patch("/v1/sessions/{session_id}", response_model=SessionSummaryResponse)
     async def update_session(

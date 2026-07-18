@@ -16,7 +16,6 @@ from radcliffe_domain.projection import (
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
     TURN_ID_METADATA,
-    ContextPacket,
     context_replay,
     render_projection,
 )
@@ -77,19 +76,6 @@ class VoiceEventSink(Protocol):
         reason: str,
         operation: Operation | None = None,
     ) -> None: ...
-
-
-def _packet(packet: ContextPacket, timestamp: int) -> dict[str, object]:
-    return {
-        "projectionVersion": packet.projection_version,
-        "messageId": packet.message_id,
-        "role": packet.role,
-        "content": packet.content,
-        "source": packet.source.value,
-        "annotations": [list(item) for item in packet.annotations],
-        "include": packet.include,
-        "timestamp": timestamp,
-    }
 
 
 class VoicePipeline:
@@ -198,7 +184,7 @@ class VoicePipeline:
             "sessionId": self.engine.session_id,
             "generation": self.engine.generation,
             "packets": [
-                _packet(packet, int(item.created_at.timestamp() * 1000))
+                packet.to_wire(int(item.created_at.timestamp() * 1000))
                 for item, packet in zip(history, packets, strict=True)
             ],
         }

@@ -5,6 +5,7 @@ description = "Radcliffe HTTP control plane and LiveKit token service"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi==0.139.0",
+  "httpx==0.28.1",
   "livekit-api==1.2.0",
   "pydantic-settings==2.14.2",
   "radcliffe-domain",

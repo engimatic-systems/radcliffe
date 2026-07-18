@@ -295,6 +295,32 @@ This design allows a later feature to read every eligible message
 deterministically while injecting source-aware context for user speech, model
 output, calls, and text sources.
 
+### Deterministic context-budget accounting
+
+Context usage is measured after `ContextProjection` and Pi's custom-message
+conversion, at the exact serialized provider-request boundary. The configured
+model contract supplies a context limit and a reserved output budget. The
+session metric contains projected input tokens, reserved output tokens,
+remaining tokens, percentage of input capacity consumed, projection version,
+model ID, measurement basis, whether the count is exact, and overflow state.
+The public metric never includes message content or a request digest.
+
+For the local Ollama profile, the sidecar captures the same Pi payload used for
+generation and obtains the provider's authoritative prompt-token count with a
+one-token dry run over loopback. It caches the result by a SHA-256 digest of the
+model-visible request. The real generation is rejected before submission when
+input plus the reserved output exceeds the configured limit. A provider error
+or silent truncation at the model's maximum window is reported honestly as an
+inexact overflow lower bound, not as an exact count. Provider adapters that
+cannot supply exact preflight accounting must label estimates and may not
+silently claim token precision.
+
+Replaying the same envelopes, model configuration, and projection version must
+produce the same provider payload digest and accounting result. Interrupted,
+superseded, failed, secret, tool-call, and canonical text-source envelopes
+follow their actual model-visible projection policy. Compaction or a model
+change necessarily creates a new payload digest and fresh count.
+
 ### Turn disposition and supersession policy
 
 Every voice turn tags its user and model envelopes with a stable
