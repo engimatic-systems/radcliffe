@@ -95,6 +95,21 @@ class ConnectionProfileTest {
     }
 
     @Test
+    fun systemMessageVisibilityDefaultsHiddenAndPersistsIndependently() = runBlocking {
+        val dataStore = MemoryDataStore()
+        val cipher = TestCipher()
+        val repository = ConnectionProfileRepository(dataStore, cipher)
+
+        assertFalse(repository.showSystemMessages.first())
+        repository.setShowSystemMessages(true)
+        repository.save(ConnectionProfile("http://localhost:8000", "token"))
+
+        val recreated = ConnectionProfileRepository(dataStore, cipher)
+        assertTrue(recreated.showSystemMessages.first())
+        assertTrue(recreated.profile.first().isConfigured)
+    }
+
+    @Test
     fun enrollmentPreparationSurvivesLostResponseAndCompletionDeletesBootstrap() = runBlocking {
         val dataStore = MemoryDataStore()
         val cipher = TestCipher()

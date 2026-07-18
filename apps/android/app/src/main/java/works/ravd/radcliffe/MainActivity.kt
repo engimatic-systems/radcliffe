@@ -21,10 +21,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,6 +64,12 @@ private data class LoadedSessionPage(
     val nextCursor: String?,
 )
 
+private data class PendingConversationExport(
+    val profile: ConnectionProfile,
+    val session: SessionSummary,
+    val includeSystemMessages: Boolean,
+)
+
 private suspend inline fun <T> suspendRunCatching(
     crossinline block: suspend () -> T,
 ): Result<T> = try {
@@ -88,6 +96,7 @@ class MainActivity : ComponentActivity() {
         val messages by SessionModel.messages.collectAsState()
         val activeSessionId by SessionModel.sessionId.collectAsState()
         val storedProfile by profiles.profile.collectAsState(initial = null)
+        val showSystemMessages by profiles.showSystemMessages.collectAsState(initial = false)
         val scope = rememberCoroutineScope()
         var editing by remember { mutableStateOf(false) }
         var initialized by remember { mutableStateOf(false) }
@@ -101,6 +110,12 @@ class MainActivity : ComponentActivity() {
         var grantedAction by remember { mutableStateOf<SessionAction?>(null) }
         var previousVoiceState by remember { mutableStateOf(state) }
         var diagnosticsVisible by remember { mutableStateOf(false) }
+        var archivedView by remember { mutableStateOf(false) }
+        var mutationSessionId by remember { mutableStateOf<String?>(null) }
+        var operationNotice by remember { mutableStateOf<String?>(null) }
+        var exportInFlight by remember { mutableStateOf(false) }
+        var pendingExport by remember { mutableStateOf<PendingConversationExport?>(null) }
+        var exportNotice by remember { mutableStateOf<String?>(null) }
 
         LaunchedEffect(storedProfile) {
             val profile = storedProfile ?: return@LaunchedEffect
@@ -116,12 +131,17 @@ class MainActivity : ComponentActivity() {
             storedProfile?.controlUrl,
             storedProfile?.bootstrapToken,
             storedProfile?.deviceCredential,
+            archivedView,
             refreshKey,
         ) {
             val profile = storedProfile ?: return@LaunchedEffect
             if (!profile.isConfigured || editing || state != VoiceState.IDLE) return@LaunchedEffect
             homeState = sessionHomeLoading(homeState)
-            suspendRunCatching { withContext(Dispatchers.IO) { loadSessionPage(profile) } }
+            suspendRunCatching {
+                withContext(Dispatchers.IO) {
+                    loadSessionPage(profile, archived = archivedView)
+                }
+            }
                 .onSuccess { loaded ->
                     homeState = sessionHomeLoaded(loaded.items, loaded.nextCursor)
                 }
@@ -144,6 +164,130 @@ class MainActivity : ComponentActivity() {
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
             if (it) grantedAction = permissionAction
             permissionAction = null
+        }
+
+        val exportDocument = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("text/markdown"),
+        ) { uri ->
+            val request = pendingExport
+            pendingExport = null
+            if (uri == null) {
+                exportInFlight = false
+                exportNotice = "Export canceled"
+            } else if (request == null) {
+                exportInFlight = false
+                exportNotice = "Export request expired; try again"
+            } else {
+                exportNotice = "Writing export…"
+                scope.launch {
+                    suspendRunCatching {
+                        withContext(Dispatchers.IO) {
+                            val timeline = SessionApi.timeline(
+                                request.profile.controlUrl,
+                                request.profile.deviceCredential,
+                                request.session.sessionId,
+                            )
+                            val markdown = renderConversationMarkdown(
+                                ConversationExport(
+                                    request.session,
+                                    timeline,
+                                    request.includeSystemMessages,
+                                ),
+                            )
+                            val output = contentResolver.openOutputStream(uri, "wt")
+                                ?: error("Android could not open the selected document")
+                            output.bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+                        }
+                    }.onSuccess {
+                        exportNotice = "Conversation exported"
+                    }.onFailure { error ->
+                        exportNotice = "Export failed: ${error.message ?: "unknown error"}"
+                    }
+                    exportInFlight = false
+                }
+            }
+        }
+
+        fun beginExport(sessionId: String) {
+            if (exportInFlight) return
+            val profile = storedProfile
+            if (profile == null || !profile.isConfigured) {
+                exportNotice = "Connection settings are unavailable"
+                return
+            }
+            exportInFlight = true
+            exportNotice = "Preparing export…"
+            scope.launch {
+                suspendRunCatching {
+                    withContext(Dispatchers.IO) {
+                        val enrolled = ensureEnrolled(profile)
+                        enrolled to SessionApi.get(
+                            enrolled.controlUrl,
+                            enrolled.deviceCredential,
+                            sessionId,
+                        )
+                    }
+                }.onSuccess { (enrolled, session) ->
+                    pendingExport = PendingConversationExport(
+                        enrolled,
+                        session,
+                        showSystemMessages,
+                    )
+                    exportDocument.launch(exportFileName(session))
+                }.onFailure { error ->
+                    exportInFlight = false
+                    exportNotice = "Export failed: ${error.message ?: "unknown error"}"
+                }
+            }
+        }
+
+        fun updateSessionStatus(sessionId: String, status: String, current: Boolean = false) {
+            if (mutationSessionId != null) return
+            val profile = storedProfile
+            if (profile == null || !profile.isConfigured) {
+                operationNotice = "Connection settings are unavailable"
+                return
+            }
+            mutationSessionId = sessionId
+            operationNotice = if (status == "archived") "Archiving…" else "Restoring…"
+            scope.launch {
+                suspendRunCatching {
+                    withContext(Dispatchers.IO) {
+                        val enrolled = ensureEnrolled(profile)
+                        SessionApi.updateStatus(
+                            enrolled.controlUrl,
+                            enrolled.deviceCredential,
+                            sessionId,
+                            status,
+                        )
+                    }
+                }.onSuccess {
+                    homeState = sessionHomeSessionRemoved(homeState, sessionId)
+                    operationNotice = if (status == "archived") {
+                        "Conversation archived"
+                    } else {
+                        "Conversation restored"
+                    }
+                    if (current && status == "archived") {
+                        command(VoiceSessionService.ACTION_STOP)
+                        SessionModel.state(VoiceState.IDLE)
+                    }
+                    refreshKey += 1
+                }.onFailure { error ->
+                    operationNotice = if (status == "archived") {
+                        "Archive failed: ${error.message ?: "unknown error"}"
+                    } else {
+                        "Restore failed: ${error.message ?: "unknown error"}"
+                    }
+                    if (!current) homeState = sessionHomeFailure(homeState, error)
+                    if (error is ControlApiException && error.statusCode == 401 && profile.isEnrolled) {
+                        withContext(Dispatchers.IO) { profiles.invalidateEnrollment() }
+                        settingsError =
+                            "Device credential was rejected. Enter the bootstrap token to re-enroll."
+                    }
+                }
+                mutationSessionId = null
+            }
         }
 
         LaunchedEffect(grantedAction) {
@@ -352,11 +496,32 @@ class MainActivity : ComponentActivity() {
                             }) { Text("Settings") }
                         }
                     }
+                    operationNotice?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
                     SessionHome(
                         state = homeState,
                         selectedSessionId = profile.sessionId,
+                        archived = archivedView,
+                        mutationSessionId = mutationSessionId,
                         onNewSession = { requestSession(SessionAction.Create) },
                         onOpenSession = { requestSession(SessionAction.Open(it)) },
+                        onArchiveSession = {
+                            updateSessionStatus(it, "archived")
+                        },
+                        onRestoreSession = {
+                            updateSessionStatus(it, "active")
+                        },
+                        onShowRecent = {
+                            archivedView = false
+                            homeState = SessionHomeUiState(loading = true)
+                            operationNotice = null
+                        },
+                        onShowArchived = {
+                            archivedView = true
+                            homeState = SessionHomeUiState(loading = true)
+                            operationNotice = null
+                        },
                         onRetry = { refreshKey += 1 },
                         onLoadMore = {
                             val cursor = homeState.nextCursor ?: return@SessionHome
@@ -364,7 +529,13 @@ class MainActivity : ComponentActivity() {
                             homeState = sessionHomeLoading(homeState, more = true)
                             scope.launch {
                                 suspendRunCatching {
-                                    withContext(Dispatchers.IO) { loadSessionPage(profile, cursor) }
+                                    withContext(Dispatchers.IO) {
+                                        loadSessionPage(
+                                            profile,
+                                            cursor,
+                                            archived = archivedView,
+                                        )
+                                    }
                                 }.onSuccess { loaded ->
                                     homeState = sessionHomePageAppended(
                                         homeState,
@@ -383,8 +554,29 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     messages = messages,
                     sessionId = activeSessionId,
+                    showSystemMessages = showSystemMessages,
                     diagnosticsVisible = diagnosticsVisible,
+                    mutationInFlight = mutationSessionId == activeSessionId,
+                    exportInFlight = exportInFlight,
+                    operationNotice = operationNotice,
+                    exportNotice = exportNotice,
                     onDiagnostics = { diagnosticsVisible = !diagnosticsVisible },
+                    onShowSystemMessages = { show ->
+                        scope.launch {
+                            suspendRunCatching {
+                                withContext(Dispatchers.IO) {
+                                    profiles.setShowSystemMessages(show)
+                                }
+                            }.onFailure { error ->
+                                operationNotice =
+                                    "Could not save message visibility: ${error.message ?: "unknown error"}"
+                            }
+                        }
+                    },
+                    onExport = { beginExport(activeSessionId) },
+                    onArchive = {
+                        updateSessionStatus(activeSessionId, "archived", current = true)
+                    },
                     onCommand = ::command,
                 )
             }
@@ -440,10 +632,20 @@ class MainActivity : ComponentActivity() {
         state: VoiceState,
         messages: List<DisplayMessage>,
         sessionId: String,
+        showSystemMessages: Boolean,
         diagnosticsVisible: Boolean,
+        mutationInFlight: Boolean,
+        exportInFlight: Boolean,
+        operationNotice: String?,
+        exportNotice: String?,
         onDiagnostics: () -> Unit,
+        onShowSystemMessages: (Boolean) -> Unit,
+        onExport: () -> Unit,
+        onArchive: () -> Unit,
         onCommand: (String) -> Unit,
     ) {
+        var confirmArchive by remember(sessionId) { mutableStateOf(false) }
+        val visibleMessages = visibleConversationMessages(messages, showSystemMessages)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = { onCommand(VoiceSessionService.ACTION_INTERRUPT) },
@@ -471,17 +673,70 @@ class MainActivity : ComponentActivity() {
             ) { Text(if (state == VoiceState.PAUSED) "Resume" else "Pause") }
             Button(onClick = { onCommand(VoiceSessionService.ACTION_STOP) }) { Text("End") }
         }
-        TextButton(onClick = onDiagnostics) {
-            Text(if (diagnosticsVisible) "Hide diagnostics" else "Diagnostics")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text("Show system messages", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Protocol notices remain stored when hidden",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Switch(
+                checked = showSystemMessages,
+                onCheckedChange = onShowSystemMessages,
+            )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onExport, enabled = !exportInFlight) {
+                Text(if (exportInFlight) "Exporting…" else "Export")
+            }
+            TextButton(onClick = { confirmArchive = true }, enabled = !mutationInFlight) {
+                Text(if (mutationInFlight) "Archiving…" else "Archive")
+            }
+            TextButton(onClick = onDiagnostics) {
+                Text(if (diagnosticsVisible) "Hide diagnostics" else "Diagnostics")
+            }
+        }
+        operationNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        exportNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (diagnosticsVisible) {
             Text("Session ID: $sessionId", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "${messages.size} durable/live messages · ${visibleMessages.size} shown",
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(messages, key = { it.id }) { message -> MessageCard(message) }
+            items(visibleMessages, key = { it.id }) { message -> MessageCard(message) }
+        }
+        if (confirmArchive) {
+            AlertDialog(
+                onDismissRequest = { confirmArchive = false },
+                title = { Text("Archive this conversation?") },
+                text = {
+                    Text(
+                        "The voice session will end. Its durable messages remain available " +
+                            "from Archived conversations.",
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmArchive = false
+                            onArchive()
+                        },
+                    ) { Text("Archive") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmArchive = false }) { Text("Cancel") }
+                },
+            )
         }
     }
 
@@ -519,12 +774,14 @@ class MainActivity : ComponentActivity() {
     private suspend fun loadSessionPage(
         profile: ConnectionProfile,
         cursor: String? = null,
+        archived: Boolean = false,
     ): LoadedSessionPage = coroutineScope {
         val enrolledProfile = ensureEnrolled(profile)
         val page = SessionApi.list(
             enrolledProfile.controlUrl,
             enrolledProfile.deviceCredential,
             cursor = cursor,
+            status = if (archived) "archived" else null,
         )
         LoadedSessionPage(
             items = page.items.map { summary ->

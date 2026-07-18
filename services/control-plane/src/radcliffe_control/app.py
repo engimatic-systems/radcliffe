@@ -666,6 +666,7 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
         cursor: str | None = None,
         include_archived: bool = False,
+        status: Literal["active", "ended", "archived"] | None = None,
     ) -> SessionListResponse:
         try:
             page = await active.catalog.list(
@@ -673,6 +674,7 @@ def create_app(
                 limit=limit,
                 cursor=cursor,
                 include_archived=include_archived,
+                status=status,
             )
         except InvalidPageCursorError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

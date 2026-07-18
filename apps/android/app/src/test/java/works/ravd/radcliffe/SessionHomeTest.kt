@@ -80,6 +80,23 @@ class SessionHomeTest {
     }
 
     @Test
+    fun successfulArchiveOrRestoreRemovesOnlyTheMutatedRow() {
+        val first = recent("first")
+        val second = recent("second")
+        val current = SessionHomeUiState(
+            items = listOf(first, second),
+            nextCursor = "cursor",
+            problem = SessionHomeProblem.OFFLINE,
+        )
+
+        val removed = sessionHomeSessionRemoved(current, "first")
+
+        assertEquals(listOf("second"), removed.items.map { it.summary.sessionId })
+        assertEquals("cursor", removed.nextCursor)
+        assertEquals(null, removed.problem)
+    }
+
+    @Test
     fun failedPreflightKeepsItsErrorWhileEndedConversationRefreshesHome() {
         assertFalse(shouldRefreshSessionHome(VoiceState.CONNECTING, VoiceState.IDLE))
         assertFalse(shouldRefreshSessionHome(VoiceState.FAILED, VoiceState.IDLE))
