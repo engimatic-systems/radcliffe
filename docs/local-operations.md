@@ -96,6 +96,7 @@ worker is reported but optional for generated Android sessions.
 6. After correction, use `make services-restart-local`, then require both
    `make check-operations-local` and `make check-worker-dispatch-local` to pass.
 
-Backup/restore, revision rollback, bounded log rotation, and correlated turn
-telemetry are tracked as subsequent children of `rad-b8nm`; this runbook does
-not claim those later acceptance gates are complete.
+Database backup/restore and revision rollback are covered by
+[`database-recovery.md`](database-recovery.md). Bounded log rotation and
+correlated turn telemetry remain subsequent children of `rad-b8nm`; this
+runbook does not claim those later acceptance gates are complete.
