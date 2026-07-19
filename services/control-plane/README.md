@@ -75,12 +75,43 @@ Schema migrations are incremental and recorded in `schema_migrations`.
 - `POST /v1/jobs/{job_id}/commands` gives an enrolled device the same bounded,
   idempotent mutation surface.
 - `POST /v1/internal/jobs/claim`, `/heartbeat`, and `/events` form the internal
-  execution lease. Only the claim response returns private job context; all
-  three routes require the internal service token.
+  execution lease. Claim returns the primary instruction and known follow-ups;
+  heartbeat returns stable-ID follow-ups for exactly-once delivery by the
+  executor. All three routes require the internal service token.
 
 Job revisions, events, follow-ups, cancellation intent, and leases share the
 main SQLite/WAL database. An expired lease is recoverable after restart, while
 a current or cancellation-requested job cannot be completed by a stale owner.
+
+### Opt-in executor process
+
+Durable acceptance does not grant host execution by itself. The executor is
+disabled by default and starts only with all of:
+
+```sh
+RADCLIFFE_JOB_EXECUTOR_ENABLED=1
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/user-sandbox-wrapper --json-lines'
+RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/private-job-workspaces
+```
+
+The command string is split into an argv without a shell. The wrapper is the
+user-owned containment boundary (for example a disposable VM or container);
+the control-plane adapter does not pretend that a scrubbed host subprocess is
+an OS sandbox. It passes no Radcliffe, provider, LiveKit, GitHub, or host-home
+credential. Each attempt receives a mode-0700 working directory used as its
+`HOME`, private temporary/XDG roots, and a mode-0600 `executor.jsonl`
+transcript. The primary instruction and stable-ID follow-ups travel as JSON
+lines over stdin, never argv or environment.
+
+Input frames are `start` and `follow_up`. Stdout/stderr is one bounded JSON-line
+channel and may emit only `event` frames with an allowlisted kind/detail code
+and bounded entity/artifact IDs. Arbitrary stdout, malformed frames, or output
+past `RADCLIFFE_JOB_EXECUTOR_MAX_OUTPUT_BYTES` fail the attempt without entering
+the conversation. `RADCLIFFE_JOB_EXECUTOR_HEARTBEAT_SECONDS` must be shorter
+than `RADCLIFFE_JOB_EXECUTOR_LEASE_SECONDS`. Runtime expiry terminates the whole
+process group; committed user cancellation wins over a late success. A
+control-plane restart terminates owned processes and lets their durable leases
+expire for an explicit recovered attempt.
 
 ## Managed workers
 

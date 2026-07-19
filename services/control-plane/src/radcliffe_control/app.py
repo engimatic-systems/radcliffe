@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import shlex
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
@@ -99,6 +100,11 @@ from radcliffe_control.context_usage import (
     ContextUsageClient,
     ContextUsageClientError,
     SidecarContextUsageClient,
+)
+from radcliffe_control.job_executor import (
+    JobExecutorSupervisor,
+    JobLauncher,
+    JsonLineJobLauncher,
 )
 from radcliffe_control.readiness import ReadinessProbe
 from radcliffe_control.settings import Settings
@@ -613,6 +619,7 @@ class Runtime:
     session_action_sequences: dict[str, int]
     session_action_requests: dict[str, protocol_pb2.AgentControlActionRequest]
     jobs: JobStore
+    job_executor: JobExecutorSupervisor | None
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -1456,6 +1463,7 @@ def _worker_identity(session_id: str) -> str:
 def create_app(
     provided_settings: Settings | None = None,
     worker_launcher: WorkerLauncher | None = None,
+    job_launcher: JobLauncher | None = None,
     context_usage_client: ContextUsageClient | None = None,
     readiness_probe: ReadinessProbe | None = None,
 ) -> FastAPI:
@@ -1468,6 +1476,7 @@ def create_app(
         store = EventStore(settings.database_path)
         await store.migrate()
         catalog = SessionCatalog(settings.database_path)
+        jobs = JobStore(settings.database_path)
         workers: WorkerSupervisor | None = None
         if settings.managed_workers_enabled:
             launcher = worker_launcher or LocalWorkerLauncher(
@@ -1496,6 +1505,23 @@ def create_app(
                 launcher=launcher,
                 stop_timeout_seconds=settings.worker_stop_timeout_seconds,
             )
+        job_executor: JobExecutorSupervisor | None = None
+        if settings.job_executor_enabled:
+            active_job_launcher = job_launcher or JsonLineJobLauncher(
+                command=tuple(shlex.split(settings.job_executor_command)),
+                workspace_root=settings.job_workspace_root,
+                max_output_bytes=settings.job_executor_max_output_bytes,
+            )
+            job_executor = JobExecutorSupervisor(
+                store=jobs,
+                launcher=active_job_launcher,
+                max_concurrency=settings.job_executor_max_concurrency,
+                poll_seconds=settings.job_executor_poll_seconds,
+                heartbeat_seconds=settings.job_executor_heartbeat_seconds,
+                lease_seconds=settings.job_executor_lease_seconds,
+                stop_timeout_seconds=settings.job_executor_stop_timeout_seconds,
+                max_output_bytes=settings.job_executor_max_output_bytes,
+            )
         runtime = Runtime(
             settings,
             store,
@@ -1516,7 +1542,8 @@ def create_app(
             SessionTransitionStore(settings.database_path),
             {},
             {},
-            JobStore(settings.database_path),
+            jobs,
+            job_executor,
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -1524,9 +1551,13 @@ def create_app(
                 maintain_workers(runtime),
                 name="radcliffe-worker-maintenance",
             )
+        if job_executor is not None:
+            job_executor.start()
         try:
             yield
         finally:
+            if runtime.job_executor is not None:
+                await runtime.job_executor.close()
             if runtime.worker_maintenance is not None:
                 runtime.worker_maintenance.cancel()
                 with suppress(asyncio.CancelledError):
@@ -1601,6 +1632,8 @@ def create_app(
         report = await active.readiness.check(
             worker_supervisor_available=active.workers is not None,
             worker_maintenance_running=maintenance is not None and not maintenance.done(),
+            job_executor_available=active.job_executor is not None,
+            job_executor_running=(active.job_executor is not None and active.job_executor.running),
         )
         active.telemetry.emit(
             component="control",

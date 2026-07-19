@@ -108,6 +108,13 @@ Private job instructions and worker transcripts remain in the job context;
 conversation-facing events contain bounded lifecycle metadata and promoted
 entity or artifact references only.
 
+Background execution remains off until an operator supplies an explicit
+VM/container/sandbox wrapper. The control plane runs that command with a
+scrubbed environment and private per-attempt workspace, streams job context on
+stdin, and accepts only bounded JSON-line lifecycle frames. Deployment details
+and limits are documented in
+[`services/control-plane/README.md`](services/control-plane/README.md#opt-in-executor-process).
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

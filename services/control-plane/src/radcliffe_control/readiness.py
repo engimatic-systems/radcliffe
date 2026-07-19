@@ -71,6 +71,8 @@ class ReadinessProbe:
         *,
         worker_supervisor_available: bool,
         worker_maintenance_running: bool,
+        job_executor_available: bool = False,
+        job_executor_running: bool = False,
     ) -> ReadinessReport:
         database, sidecar, livekit = await asyncio.gather(
             self._database(),
@@ -82,7 +84,11 @@ class ReadinessProbe:
             supervisor_available=worker_supervisor_available,
             maintenance_running=worker_maintenance_running,
         )
-        checks = (database, sidecar, livekit, source_root, workers)
+        job_executor = self._job_executor(
+            available=job_executor_available,
+            running=job_executor_running,
+        )
+        checks = (database, sidecar, livekit, source_root, workers, job_executor)
         return ReadinessReport(
             status="ready" if all(check.status != "failed" for check in checks) else "not_ready",
             checks=checks,
@@ -153,6 +159,15 @@ class ReadinessProbe:
         if not maintenance_running:
             return ReadinessCheck("worker_supervisor", "failed", "maintenance_stopped")
         return ReadinessCheck("worker_supervisor", "ok", "supervisor_running")
+
+    def _job_executor(self, *, available: bool, running: bool) -> ReadinessCheck:
+        if not self.settings.job_executor_enabled:
+            return ReadinessCheck("job_executor", "disabled", "job_executor_disabled")
+        if not available:
+            return ReadinessCheck("job_executor", "failed", "job_executor_unavailable")
+        if not running:
+            return ReadinessCheck("job_executor", "failed", "job_executor_stopped")
+        return ReadinessCheck("job_executor", "ok", "job_executor_running")
 
     @staticmethod
     async def _http_probe(url: str, require_json_status: bool) -> bool:

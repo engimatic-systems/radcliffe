@@ -28,3 +28,7 @@ Starting a job returns promptly and the foreground voice loop continues to accep
 **2026-07-19T02:22:23Z**
 
 Implementation is staged as bounded vertical slices. rad-gf5x owns the typed durable lifecycle, idempotent acceptance and commands, execution leasing, privacy boundary, and restart tests. Later slices will attach the sandbox executor and separate agent context, safe-pause notification injection, promoted result/source resolution, Android controls, and end-to-end concurrent voice conformance.
+
+**2026-07-19T02:44:02Z**
+
+Started rad-kp6y for the opt-in separate executor context: scrubbed process boundary, private workspaces/transcripts, stdin job/follow-up frames, durable heartbeats, cancellation, and runtime/output limits.
