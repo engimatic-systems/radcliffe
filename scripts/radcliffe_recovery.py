@@ -37,6 +37,10 @@ DATA_TABLES = (
     "configuration_values",
     "configuration_mutations",
     "session_transitions",
+    "background_jobs",
+    "background_job_follow_ups",
+    "background_job_commands",
+    "background_job_events",
 )
 
 

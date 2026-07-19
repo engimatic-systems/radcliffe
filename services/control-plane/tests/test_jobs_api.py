@@ -1,0 +1,309 @@
+import time
+
+from fastapi.testclient import TestClient
+from radcliffe_control.app import create_app
+from radcliffe_control.settings import Settings
+
+DEVICE_CREDENTIAL = "rdc_dev_" + "j" * 43
+DEVICE_AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
+INTERNAL_AUTHORIZATION = {"Authorization": "Bearer internal-token-1234"}
+
+
+def settings(tmp_path) -> Settings:
+    source_root = tmp_path / "sources"
+    source_root.mkdir(exist_ok=True)
+    return Settings(
+        livekit_api_key="test-key",
+        livekit_api_secret="test-secret-that-is-definitely-long-enough",
+        bootstrap_token="bootstrap-token-123",
+        internal_token="internal-token-1234",
+        owner_id="test-owner",
+        database_path=tmp_path / "events.sqlite3",
+        source_root=source_root,
+        telemetry_path=tmp_path / "telemetry.jsonl",
+        managed_workers_enabled=False,
+    )
+
+
+def enroll_and_create_session(client: TestClient) -> None:
+    enrolled = client.post(
+        "/v1/devices/enroll",
+        headers={"Authorization": "Bearer bootstrap-token-123"},
+        json={
+            "installation_id": "background-jobs-installation",
+            "display_name": "Background jobs Pixel",
+            "credential": DEVICE_CREDENTIAL,
+        },
+    )
+    assert enrolled.status_code == 200
+    created = client.post(
+        "/v1/sessions",
+        headers=DEVICE_AUTHORIZATION,
+        json={"session_id": "session-1", "participant_identity": "pixel"},
+    )
+    assert created.status_code == 200
+
+
+def tool(
+    client: TestClient,
+    *,
+    tool_name: str,
+    call_id: str,
+    arguments: dict[str, object],
+):
+    return client.post(
+        "/v1/tool-calls",
+        headers=INTERNAL_AUTHORIZATION,
+        json={
+            "sessionId": "session-1",
+            "generation": 1,
+            "operationId": f"background-operation-{call_id}",
+            "cancellationId": f"background-cancellation-{call_id}",
+            "traceId": "trc_" + "b" * 32,
+            "turnId": f"turn-{call_id}",
+            "callId": call_id,
+            "idempotencyKey": f"background:{call_id}",
+            "toolName": tool_name,
+            "arguments": arguments,
+        },
+    )
+
+
+def test_run_job_accepts_promptly_replays_and_excludes_private_context(tmp_path) -> None:
+    config = settings(tmp_path)
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        started = time.monotonic()
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-1",
+            arguments={
+                "instruction": "private six-month lab-paper search",
+                "notificationPolicy": "next_safe_pause",
+                "priority": 1,
+                "budgetUsd": 0.5,
+                "maxRuntimeSeconds": 3600,
+            },
+        )
+        elapsed = time.monotonic() - started
+        replay = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-1",
+            arguments={
+                "instruction": "private six-month lab-paper search",
+                "notificationPolicy": "next_safe_pause",
+                "priority": 1,
+                "budgetUsd": 0.5,
+                "maxRuntimeSeconds": 3600,
+            },
+        )
+
+        assert accepted.status_code == 200
+        assert elapsed < 1
+        body = accepted.json()
+        job_id = body["details"]["jobId"]
+        assert body["details"]["status"] == "queued"
+        assert body["details"]["replayed"] == "false"
+        assert replay.json()["details"]["replayed"] == "true"
+        assert "private" not in accepted.text
+        assert "lab-paper" not in accepted.text
+
+        collision = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-1",
+            arguments={"instruction": "different private request"},
+        )
+        assert collision.status_code == 409
+
+        listed = client.get(
+            "/v1/sessions/session-1/jobs",
+            headers=DEVICE_AUTHORIZATION,
+        )
+        assert listed.status_code == 200
+        assert listed.json()["items"][0]["job_id"] == job_id
+        assert listed.json()["items"][0]["budget_usd"] == 0.5
+        assert "private" not in listed.text
+        assert client.get("/v1/sessions/session-1/jobs").status_code == 401
+
+
+def test_job_commands_executor_lease_and_restart_are_deterministic(tmp_path) -> None:
+    config = settings(tmp_path)
+    private_instruction = "private primary research instruction"
+    private_follow_up = "private follow-up about methods"
+    private_live_follow_up = "private follow-up added while running"
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-1",
+            arguments={"instruction": private_instruction},
+        )
+        job_id = accepted.json()["details"]["jobId"]
+
+        status = tool(
+            client,
+            tool_name="manage_job",
+            call_id="status-1",
+            arguments={"operation": "status", "jobId": job_id},
+        )
+        follow_up = tool(
+            client,
+            tool_name="manage_job",
+            call_id="follow-up-1",
+            arguments={
+                "operation": "follow_up",
+                "jobId": job_id,
+                "instruction": private_follow_up,
+            },
+        )
+        priority = client.post(
+            f"/v1/jobs/{job_id}/commands",
+            headers=DEVICE_AUTHORIZATION,
+            json={
+                "operation": "set_priority",
+                "priority": 0,
+                "idempotency_key": "android-priority-1",
+            },
+        )
+        priority_replay = client.post(
+            f"/v1/jobs/{job_id}/commands",
+            headers=DEVICE_AUTHORIZATION,
+            json={
+                "operation": "set_priority",
+                "priority": 0,
+                "idempotency_key": "android-priority-1",
+            },
+        )
+
+        assert status.status_code == 200
+        assert follow_up.status_code == 200
+        assert private_follow_up not in follow_up.text
+        assert priority.status_code == 200
+        assert priority.json()["job"]["priority"] == 0
+        assert priority_replay.json()["replayed"] is True
+
+        unauthorized_claim = client.post(
+            "/v1/internal/jobs/claim", json={"lease_owner": "worker-1"}
+        )
+        assert unauthorized_claim.status_code == 401
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "worker-1", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        assert claim.json()["instruction"] == private_instruction
+        assert [item["instruction"] for item in claim.json()["follow_ups"]] == [private_follow_up]
+        follow_up_id = claim.json()["follow_ups"][0]["follow_up_id"]
+        assert claim.json()["job"]["status"] == "running"
+        assert (
+            client.post(
+                "/v1/internal/jobs/claim",
+                headers=INTERNAL_AUTHORIZATION,
+                json={"lease_owner": "worker-2"},
+            ).json()
+            is None
+        )
+
+        live_follow_up = client.post(
+            f"/v1/jobs/{job_id}/commands",
+            headers=DEVICE_AUTHORIZATION,
+            json={
+                "operation": "follow_up",
+                "instruction": private_live_follow_up,
+                "idempotency_key": "android-follow-up-running-1",
+            },
+        )
+        assert live_follow_up.status_code == 200
+        assert private_live_follow_up not in live_follow_up.text
+
+        heartbeat = client.post(
+            f"/v1/internal/jobs/{job_id}/heartbeat",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "worker-1", "lease_seconds": 60},
+        )
+        assert heartbeat.status_code == 200
+        assert heartbeat.json()["job"]["status"] == "running"
+        assert heartbeat.json()["follow_ups"][0]["follow_up_id"] == follow_up_id
+        assert [item["instruction"] for item in heartbeat.json()["follow_ups"]] == [
+            private_follow_up,
+            private_live_follow_up,
+        ]
+        progress = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "worker-1",
+                "kind": "progress",
+                "detail_code": "searching",
+            },
+        )
+        assert progress.status_code == 200
+        assert private_instruction not in progress.text
+
+        cancelled = tool(
+            client,
+            tool_name="manage_job",
+            call_id="cancel-1",
+            arguments={"operation": "cancel", "jobId": job_id},
+        )
+        assert cancelled.status_code == 200
+        assert '"cancelRequested":true' in cancelled.json()["modelContent"]
+        late_success = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "worker-1",
+                "kind": "succeeded",
+                "detail_code": "completed",
+            },
+        )
+        assert late_success.status_code == 409
+        acknowledged = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "worker-1",
+                "kind": "cancelled",
+                "detail_code": "cancelled_by_user",
+            },
+        )
+        assert acknowledged.status_code == 200
+        assert acknowledged.json()["status"] == "cancelled"
+        events = client.get(
+            f"/v1/jobs/{job_id}/events",
+            headers=DEVICE_AUTHORIZATION,
+        )
+        assert events.status_code == 200
+        assert [item["kind"] for item in events.json()["items"]] == [
+            "accepted",
+            "follow_up_added",
+            "priority_changed",
+            "started",
+            "follow_up_added",
+            "progress",
+            "cancellation_requested",
+            "cancelled",
+        ]
+        assert private_instruction not in events.text
+        assert private_follow_up not in events.text
+        assert private_live_follow_up not in events.text
+        after_progress = client.get(
+            f"/v1/jobs/{job_id}/events",
+            headers=DEVICE_AUTHORIZATION,
+            params={"after_revision": 6},
+        )
+        assert [item["revision"] for item in after_progress.json()["items"]] == [7, 8]
+
+    with TestClient(create_app(config)) as restarted:
+        detail = restarted.get(f"/v1/jobs/{job_id}", headers=DEVICE_AUTHORIZATION)
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "cancelled"
+        assert detail.json()["revision"] == 8
+        assert private_instruction not in detail.text
+        assert private_follow_up not in detail.text
+        assert private_live_follow_up not in detail.text

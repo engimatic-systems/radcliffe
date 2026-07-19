@@ -261,6 +261,30 @@ public object ServerEventKt {
     public fun hasAgentControlResult(): kotlin.Boolean {
       return _builder.hasAgentControlResult()
     }
+
+    /**
+     * `.radcliffe.v2.JobEvent job_event = 11;`
+     */
+    public var jobEvent: works.ravd.radcliffe.protocol.v2.JobEvent
+      @kotlin.jvm.JvmName("getJobEvent")
+        get() = _builder.jobEvent
+      @kotlin.jvm.JvmName("setJobEvent")
+        set(value) {
+        _builder.jobEvent = value
+      }
+    /**
+     * `.radcliffe.v2.JobEvent job_event = 11;`
+     */
+    public fun clearJobEvent() {
+      _builder.clearJobEvent()
+    }
+    /**
+     * `.radcliffe.v2.JobEvent job_event = 11;`
+     * @return Whether the jobEvent field is set.
+     */
+    public fun hasJobEvent(): kotlin.Boolean {
+      return _builder.hasJobEvent()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -299,3 +323,6 @@ public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.agentControlReq
 
 public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.agentControlResultOrNull: works.ravd.radcliffe.protocol.v2.AgentControlActionResult?
   get() = if (hasAgentControlResult()) getAgentControlResult() else null
+
+public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.jobEventOrNull: works.ravd.radcliffe.protocol.v2.JobEvent?
+  get() = if (hasJobEvent()) getJobEvent() else null

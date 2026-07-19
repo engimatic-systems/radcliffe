@@ -144,6 +144,24 @@ export type ToolExecutionRequest =
       arguments:
         | { operation: "create" | "restart" | "end" }
         | { operation: "switch"; reference: string };
+    })
+  | (ToolExecutionRequestBase & {
+      toolName: "run_job";
+      arguments: {
+        instruction: string;
+        notificationPolicy?: JobNotificationPolicy;
+        priority?: number;
+        budgetUsd?: number;
+        maxRuntimeSeconds?: number;
+      };
+    })
+  | (ToolExecutionRequestBase & {
+      toolName: "manage_job";
+      arguments:
+        | { operation: "status"; jobId: string }
+        | { operation: "follow_up"; jobId: string; instruction: string }
+        | { operation: "set_priority"; jobId: string; priority: number }
+        | { operation: "cancel"; jobId: string };
     });
 
 export interface ToolExecutionResult {
@@ -177,6 +195,11 @@ export type AgentControlConfirmation = "none" | "user" | "operator";
 export type SpeechRate = "0.75x" | "1.0x" | "1.25x" | "1.5x";
 export type SpeechDeliveryRate = SpeechRate | "slow" | "normal" | "fast" | "very_fast" | number;
 export type ResponseDetail = "brief" | "standard" | "detailed";
+export type JobNotificationPolicy =
+  | "immediate"
+  | "next_safe_pause"
+  | "silent"
+  | "user_waiting";
 
 export interface AgentControlOrigin {
   source: SourceKind;

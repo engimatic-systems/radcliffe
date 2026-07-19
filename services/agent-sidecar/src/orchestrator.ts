@@ -57,7 +57,10 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "asks the change to continue. Never invent another setting key. You may create a new " +
   "conversation, switch to a named recent conversation, restart into a fresh conversation, or " +
   "end the current conversation with manage_session. Never guess between returned choices and " +
-  "never copy conversation history. You can discover authorized " +
+  "never copy conversation history. You may launch long research, analysis, download, or coding " +
+  "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
+  "continues. Use manage_job to inspect, follow up, reprioritize, or cancel an existing job. Never " +
+  "claim background work completed until a job event or status says so. You can discover authorized " +
   "Markdown filenames with list_sources and read " +
   "one with read_source. If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
@@ -168,6 +171,60 @@ export const MANAGE_SESSION_PARAMETERS = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+export const RUN_JOB_DESCRIPTION =
+  "Accept a bounded background research, analysis, download, or coding job without blocking the " +
+  "foreground conversation. Returns a durable job ID immediately; completion arrives separately.";
+const JOB_NOTIFICATION_POLICY = Type.Union([
+  Type.Literal("immediate"),
+  Type.Literal("next_safe_pause"),
+  Type.Literal("silent"),
+  Type.Literal("user_waiting"),
+]);
+export const RUN_JOB_PARAMETERS = Type.Object(
+  {
+    instruction: Type.String({ minLength: 1, maxLength: 12000 }),
+    notificationPolicy: Type.Optional(JOB_NOTIFICATION_POLICY),
+    priority: Type.Optional(Type.Integer({ minimum: 0, maximum: 4 })),
+    budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 100 })),
+    maxRuntimeSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })),
+  },
+  { additionalProperties: false },
+);
+export const MANAGE_JOB_DESCRIPTION =
+  "Inspect, add a private follow-up to, reprioritize, or cancel a durable background job by its " +
+  "exact job ID. Job output remains separate from the foreground conversation.";
+export const MANAGE_JOB_PARAMETERS = Type.Union([
+  Type.Object(
+    {
+      operation: Type.Literal("status"),
+      jobId: Type.String({ minLength: 1, maxLength: 96 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("follow_up"),
+      jobId: Type.String({ minLength: 1, maxLength: 96 }),
+      instruction: Type.String({ minLength: 1, maxLength: 4000 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("set_priority"),
+      jobId: Type.String({ minLength: 1, maxLength: 96 }),
+      priority: Type.Integer({ minimum: 0, maximum: 4 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("cancel"),
+      jobId: Type.String({ minLength: 1, maxLength: 96 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextMessage {
   return "role" in message && message.role === "radcliffe";
@@ -244,6 +301,16 @@ export function modelContextFromRequest(request: TurnRequest) {
         name: "manage_session",
         description: MANAGE_SESSION_DESCRIPTION,
         parameters: MANAGE_SESSION_PARAMETERS,
+      },
+      {
+        name: "run_job",
+        description: RUN_JOB_DESCRIPTION,
+        parameters: RUN_JOB_PARAMETERS,
+      },
+      {
+        name: "manage_job",
+        description: MANAGE_JOB_DESCRIPTION,
+        parameters: MANAGE_JOB_PARAMETERS,
       },
     ],
   };
@@ -451,6 +518,89 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         };
       },
     };
+    type RunJobArguments = Extract<ToolExecutionRequest, { toolName: "run_job" }>["arguments"];
+    const runJob: AgentTool<typeof RUN_JOB_PARAMETERS> = {
+      name: "run_job",
+      label: "Run background job",
+      description: RUN_JOB_DESCRIPTION,
+      parameters: RUN_JOB_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        params: RunJobArguments,
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
+          traceId: request.traceId!,
+          turnId,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "run_job",
+          arguments: params,
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
+    type ManageJobArguments = Extract<
+      ToolExecutionRequest,
+      { toolName: "manage_job" }
+    >["arguments"];
+    const manageJob: AgentTool<typeof MANAGE_JOB_PARAMETERS> = {
+      name: "manage_job",
+      label: "Manage background job",
+      description: MANAGE_JOB_DESCRIPTION,
+      parameters: MANAGE_JOB_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        params: ManageJobArguments,
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
+          traceId: request.traceId!,
+          turnId,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "manage_job",
+          arguments: params,
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
     const history: RadcliffeContextMessage[] = packets.slice(0, -1).map((packet) => ({
       role: "radcliffe",
       packet,
@@ -460,7 +610,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         systemPrompt: systemPrompt(request),
         model: this.model,
         thinkingLevel: "off",
-        tools: [listSources, readSource, configure, manageSession],
+        tools: [listSources, readSource, configure, manageSession, runJob, manageJob],
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,

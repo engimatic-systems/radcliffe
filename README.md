@@ -101,6 +101,13 @@ switches resolve only against the user's catalog and return bounded choices
 instead of guessing. Handoffs preserve existing history without copying it,
 cancel stale playback and model work, and durably replay exact retries.
 
+Long research or analysis starts through the typed `run_job` tool, which
+returns a durable job ID without blocking the foreground conversation.
+`manage_job` can inspect, follow up, reprioritize, or cancel by exact ID.
+Private job instructions and worker transcripts remain in the job context;
+conversation-facing events contain bounded lifecycle metadata and promoted
+entity or artifact references only.
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

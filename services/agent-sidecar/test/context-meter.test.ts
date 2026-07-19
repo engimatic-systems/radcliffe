@@ -118,6 +118,18 @@ describe("Ollama context accounting", () => {
             name: "manage_session",
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "run_job",
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "manage_job",
+          },
+        },
       ],
     });
     expect(JSON.stringify(payload)).not.toContain("Never send this");

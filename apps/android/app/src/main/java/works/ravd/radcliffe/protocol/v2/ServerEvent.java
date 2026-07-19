@@ -29,6 +29,7 @@ public  final class ServerEvent extends
     PLAYBACK_SEGMENT(8),
     AGENT_CONTROL_REQUEST(9),
     AGENT_CONTROL_RESULT(10),
+    JOB_EVENT(11),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -53,6 +54,7 @@ public  final class ServerEvent extends
         case 8: return PLAYBACK_SEGMENT;
         case 9: return AGENT_CONTROL_REQUEST;
         case 10: return AGENT_CONTROL_RESULT;
+        case 11: return JOB_EVENT;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -563,6 +565,58 @@ public  final class ServerEvent extends
    */
   private void clearAgentControlResult() {
     if (payloadCase_ == 10) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int JOB_EVENT_FIELD_NUMBER = 11;
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   */
+  @java.lang.Override
+  public boolean hasJobEvent() {
+    return payloadCase_ == 11;
+  }
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.JobEvent getJobEvent() {
+    if (payloadCase_ == 11) {
+       return (works.ravd.radcliffe.protocol.v2.JobEvent) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.JobEvent.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setJobEvent(works.ravd.radcliffe.protocol.v2.JobEvent value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 11;
+  }
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeJobEvent(works.ravd.radcliffe.protocol.v2.JobEvent value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 11 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.JobEvent.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.JobEvent.newBuilder((works.ravd.radcliffe.protocol.v2.JobEvent) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 11;
+  }
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   */
+  private void clearJobEvent() {
+    if (payloadCase_ == 11) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -1137,6 +1191,54 @@ public  final class ServerEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    @java.lang.Override
+    public boolean hasJobEvent() {
+      return instance.hasJobEvent();
+    }
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.JobEvent getJobEvent() {
+      return instance.getJobEvent();
+    }
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    public Builder setJobEvent(works.ravd.radcliffe.protocol.v2.JobEvent value) {
+      copyOnWrite();
+      instance.setJobEvent(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    public Builder setJobEvent(
+        works.ravd.radcliffe.protocol.v2.JobEvent.Builder builderForValue) {
+      copyOnWrite();
+      instance.setJobEvent(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    public Builder mergeJobEvent(works.ravd.radcliffe.protocol.v2.JobEvent value) {
+      copyOnWrite();
+      instance.mergeJobEvent(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+     */
+    public Builder clearJobEvent() {
+      copyOnWrite();
+      instance.clearJobEvent();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ServerEvent)
   }
   @java.lang.Override
@@ -1165,11 +1267,12 @@ public  final class ServerEvent extends
             works.ravd.radcliffe.protocol.v2.PlaybackSegment.class,
             works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.class,
             works.ravd.radcliffe.protocol.v2.AgentControlActionResult.class,
+            works.ravd.radcliffe.protocol.v2.JobEvent.class,
           };
           java.lang.String info =
-              "\u0000\n\u0001\u0000\u0001\n\n\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
-              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000\n<\u0000" +
-              "";
+              "\u0000\u000b\u0001\u0000\u0001\u000b\u000b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000" +
+              "\u0003<\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000" +
+              "\n<\u0000\u000b<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

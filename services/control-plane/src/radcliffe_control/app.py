@@ -59,6 +59,19 @@ from radcliffe_domain.devices import (
     credential_digest,
 )
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity
+from radcliffe_domain.jobs import (
+    JobConflictError,
+    JobError,
+    JobEventKind,
+    JobEventRecord,
+    JobLeaseError,
+    JobMutationResult,
+    JobNotFoundError,
+    JobNotificationPolicy,
+    JobRecord,
+    JobStateError,
+    JobStore,
+)
 from radcliffe_domain.projection import (
     CONTEXT_PROJECTION_VERSION,
     TURN_DISPOSITION_EVENT,
@@ -308,6 +321,43 @@ class SessionActionArguments(BaseModel):
         return self
 
 
+class RunJobArguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    instruction: str = Field(min_length=1, max_length=12_000)
+    notification_policy: Literal["immediate", "next_safe_pause", "silent", "user_waiting"] = (
+        "next_safe_pause"
+    )
+    priority: int = Field(default=2, ge=0, le=4)
+    budget_usd: float | None = Field(default=None, gt=0, le=100)
+    max_runtime_seconds: int = Field(default=3600, ge=1, le=86_400)
+
+
+class ManageJobArguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    operation: Literal["status", "follow_up", "set_priority", "cancel"]
+    job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
+    instruction: str | None = Field(default=None, min_length=1, max_length=4_000)
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+    @model_validator(mode="after")
+    def valid_operation_shape(self) -> ManageJobArguments:
+        if (self.operation == "follow_up") != (self.instruction is not None):
+            raise ValueError("only follow_up requires an instruction")
+        if (self.operation == "set_priority") != (self.priority is not None):
+            raise ValueError("only set_priority requires a priority")
+        return self
+
+
 class ToolCallRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -323,9 +373,16 @@ class ToolCallRequest(BaseModel):
     turn_id: str | None = Field(default=None, min_length=1, max_length=128)
     call_id: str
     idempotency_key: str
-    tool_name: Literal["list_sources", "read_source", "configure", "manage_session"]
+    tool_name: Literal[
+        "list_sources", "read_source", "configure", "manage_session", "run_job", "manage_job"
+    ]
     arguments: (
-        ReadSourceArguments | ListSourcesArguments | ConfigureArguments | SessionActionArguments
+        ReadSourceArguments
+        | ListSourcesArguments
+        | ConfigureArguments
+        | SessionActionArguments
+        | RunJobArguments
+        | ManageJobArguments
     )
 
     @model_validator(mode="after")
@@ -335,10 +392,12 @@ class ToolCallRequest(BaseModel):
             "read_source": ReadSourceArguments,
             "configure": ConfigureArguments,
             "manage_session": SessionActionArguments,
+            "run_job": RunJobArguments,
+            "manage_job": ManageJobArguments,
         }[self.tool_name]
         if not isinstance(self.arguments, expected):
             raise ValueError(f"arguments do not match {self.tool_name}")
-        if self.tool_name in {"configure", "manage_session"} and (
+        if self.tool_name in {"configure", "manage_session", "run_job", "manage_job"} and (
             self.cancellation_id is None or self.turn_id is None
         ):
             raise ValueError(f"{self.tool_name} requires cancellation_id and turn_id")
@@ -348,6 +407,120 @@ class ToolCallRequest(BaseModel):
 class ToolCallResponse(BaseModel):
     model_content: str = Field(serialization_alias="modelContent")
     details: dict[str, str]
+
+
+class JobSummaryResponse(BaseModel):
+    job_id: str
+    session_id: str
+    generation: int
+    status: Literal["queued", "running", "waiting", "succeeded", "failed", "cancelled"]
+    notification_policy: Literal["immediate", "next_safe_pause", "silent", "user_waiting"]
+    priority: int
+    budget_usd: float | None
+    max_runtime_seconds: int
+    revision: int
+    cancel_requested: bool
+    attempt: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobListResponse(BaseModel):
+    items: tuple[JobSummaryResponse, ...]
+
+
+class JobEventResponse(BaseModel):
+    event_id: str
+    job_id: str
+    revision: int
+    kind: Literal[
+        "accepted",
+        "started",
+        "lease_recovered",
+        "progress",
+        "waiting",
+        "follow_up_added",
+        "priority_changed",
+        "cancellation_requested",
+        "cancelled",
+        "succeeded",
+        "failed",
+    ]
+    status: Literal["queued", "running", "waiting", "succeeded", "failed", "cancelled"]
+    notification_policy: Literal["immediate", "next_safe_pause", "silent", "user_waiting"]
+    priority: int
+    detail_code: str
+    entity_ids: tuple[str, ...]
+    artifact_ids: tuple[str, ...]
+    occurred_at: datetime
+
+
+class JobEventListResponse(BaseModel):
+    items: tuple[JobEventResponse, ...]
+
+
+class JobCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["follow_up", "set_priority", "cancel"]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    instruction: str | None = Field(default=None, min_length=1, max_length=4_000)
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+    @model_validator(mode="after")
+    def valid_operation_shape(self) -> JobCommandRequest:
+        if (self.operation == "follow_up") != (self.instruction is not None):
+            raise ValueError("only follow_up requires an instruction")
+        if (self.operation == "set_priority") != (self.priority is not None):
+            raise ValueError("only set_priority requires a priority")
+        return self
+
+
+class JobMutationResponse(BaseModel):
+    job: JobSummaryResponse
+    replayed: bool
+
+
+class JobClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lease_owner: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    lease_seconds: int = Field(default=30, ge=1, le=300)
+
+
+class JobFollowUpResponse(BaseModel):
+    follow_up_id: str
+    instruction: str
+    created_at: datetime
+
+
+class JobClaimResponse(BaseModel):
+    job: JobSummaryResponse
+    instruction: str
+    follow_ups: tuple[JobFollowUpResponse, ...]
+    recovered: bool
+
+
+class JobHeartbeatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lease_owner: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    lease_seconds: int = Field(default=30, ge=1, le=300)
+
+
+class JobHeartbeatResponse(BaseModel):
+    job: JobSummaryResponse
+    follow_ups: tuple[JobFollowUpResponse, ...]
+
+
+class JobExecutorEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lease_owner: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    kind: Literal["progress", "waiting", "succeeded", "failed", "cancelled"]
+    detail_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    entity_ids: tuple[str, ...] = Field(default=(), max_length=50)
+    artifact_ids: tuple[str, ...] = Field(default=(), max_length=50)
 
 
 class ConfigurationValueResponse(BaseModel):
@@ -439,6 +612,7 @@ class Runtime:
     session_transitions: SessionTransitionStore
     session_action_sequences: dict[str, int]
     session_action_requests: dict[str, protocol_pb2.AgentControlActionRequest]
+    jobs: JobStore
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -457,6 +631,70 @@ def _summary(record: SessionRecord) -> SessionSummaryResponse:
         protocol_version=record.protocol_version,
         generation=record.generation,
         worker_status=("external" if record.worker_mode == "external" else record.worker_status),  # type: ignore[arg-type]
+    )
+
+
+def _job_summary(record: JobRecord) -> JobSummaryResponse:
+    return JobSummaryResponse(
+        job_id=record.job_id,
+        session_id=record.session_id,
+        generation=record.generation,
+        status=record.status.value,
+        notification_policy=record.notification_policy.value,
+        priority=record.priority,
+        budget_usd=(
+            round(record.budget_microusd / 1_000_000, 6)
+            if record.budget_microusd is not None
+            else None
+        ),
+        max_runtime_seconds=record.max_runtime_seconds,
+        revision=record.revision,
+        cancel_requested=record.cancel_requested_at is not None,
+        attempt=record.attempt,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _job_event(event: JobEventRecord) -> JobEventResponse:
+    return JobEventResponse(
+        event_id=event.event_id,
+        job_id=event.job_id,
+        revision=event.revision,
+        kind=event.kind.value,
+        status=event.status.value,
+        notification_policy=event.notification_policy.value,
+        priority=event.priority,
+        detail_code=event.detail_code,
+        entity_ids=event.entity_ids,
+        artifact_ids=event.artifact_ids,
+        occurred_at=event.occurred_at,
+    )
+
+
+def _job_tool_response(result: JobMutationResult) -> ToolCallResponse:
+    summary = _job_summary(result.record)
+    model_content = json.dumps(
+        {
+            "jobId": summary.job_id,
+            "status": summary.status,
+            "notificationPolicy": summary.notification_policy,
+            "priority": summary.priority,
+            "revision": summary.revision,
+            "cancelRequested": summary.cancel_requested,
+            "replayed": result.replayed,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ToolCallResponse(
+        model_content=model_content,
+        details={
+            "jobId": summary.job_id,
+            "status": summary.status,
+            "revision": str(summary.revision),
+            "replayed": str(result.replayed).lower(),
+        },
     )
 
 
@@ -479,6 +717,66 @@ def _configuration_value_response(
             for scope, confirmation in definition.confirmation_by_scope.items()
         },
     )
+
+
+async def _execute_run_job_tool(
+    active: Runtime,
+    request: ToolCallRequest,
+    arguments: RunJobArguments,
+) -> ToolCallResponse:
+    budget_microusd = (
+        round(arguments.budget_usd * 1_000_000) if arguments.budget_usd is not None else None
+    )
+    result = await active.jobs.accept(
+        principal_id=active.settings.owner_id,
+        session_id=request.session_id,
+        generation=request.generation,
+        idempotency_key=request.idempotency_key,
+        instruction=arguments.instruction,
+        notification_policy=JobNotificationPolicy(arguments.notification_policy),
+        priority=arguments.priority,
+        budget_microusd=budget_microusd,
+        max_runtime_seconds=arguments.max_runtime_seconds,
+    )
+    return _job_tool_response(result)
+
+
+async def _execute_manage_job_tool(
+    active: Runtime,
+    request: ToolCallRequest,
+    arguments: ManageJobArguments,
+) -> ToolCallResponse:
+    record = await active.jobs.get(
+        principal_id=active.settings.owner_id,
+        job_id=arguments.job_id,
+    )
+    if record is None or record.session_id != request.session_id:
+        raise JobNotFoundError("background job not found")
+    if arguments.operation == "status":
+        return _job_tool_response(JobMutationResult(record=record, replayed=False))
+    if arguments.operation == "follow_up":
+        assert arguments.instruction is not None
+        result = await active.jobs.add_follow_up(
+            principal_id=active.settings.owner_id,
+            job_id=record.job_id,
+            instruction=arguments.instruction,
+            idempotency_key=request.idempotency_key,
+        )
+    elif arguments.operation == "set_priority":
+        assert arguments.priority is not None
+        result = await active.jobs.set_priority(
+            principal_id=active.settings.owner_id,
+            job_id=record.job_id,
+            priority=arguments.priority,
+            idempotency_key=request.idempotency_key,
+        )
+    else:
+        result = await active.jobs.request_cancel(
+            principal_id=active.settings.owner_id,
+            job_id=record.job_id,
+            idempotency_key=request.idempotency_key,
+        )
+    return _job_tool_response(result)
 
 
 _CONFIGURATION_KEY_TO_PROTO = {
@@ -1218,6 +1516,7 @@ def create_app(
             SessionTransitionStore(settings.database_path),
             {},
             {},
+            JobStore(settings.database_path),
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -1859,6 +2158,179 @@ def create_app(
             effective=_configuration_value_response(result.key, result.effective),
         )
 
+    @app.get(
+        "/v1/sessions/{session_id}/jobs",
+        response_model=JobListResponse,
+    )
+    async def list_background_jobs(
+        session_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> JobListResponse:
+        session = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+        )
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        records = await active.jobs.list_for_session(
+            principal_id=active.settings.owner_id,
+            session_id=session_id,
+            limit=limit,
+        )
+        return JobListResponse(items=tuple(_job_summary(record) for record in records))
+
+    @app.get("/v1/jobs/{job_id}", response_model=JobSummaryResponse)
+    async def get_background_job(
+        job_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
+    ) -> JobSummaryResponse:
+        record = await active.jobs.get(
+            principal_id=active.settings.owner_id,
+            job_id=job_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="background job not found")
+        return _job_summary(record)
+
+    @app.get("/v1/jobs/{job_id}/events", response_model=JobEventListResponse)
+    async def replay_background_job_events(
+        job_id: str,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
+        after_revision: Annotated[int, Query(ge=0)] = 0,
+    ) -> JobEventListResponse:
+        record = await active.jobs.get(
+            principal_id=active.settings.owner_id,
+            job_id=job_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="background job not found")
+        events = await active.jobs.events(job_id, after_revision=after_revision)
+        return JobEventListResponse(items=tuple(_job_event(event) for event in events))
+
+    @app.post("/v1/jobs/{job_id}/commands", response_model=JobMutationResponse)
+    async def command_background_job(
+        job_id: str,
+        request: JobCommandRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        _device: DeviceRecord = Depends(require_device),  # noqa: B008
+    ) -> JobMutationResponse:
+        try:
+            if request.operation == "follow_up":
+                assert request.instruction is not None
+                result = await active.jobs.add_follow_up(
+                    principal_id=active.settings.owner_id,
+                    job_id=job_id,
+                    instruction=request.instruction,
+                    idempotency_key=request.idempotency_key,
+                )
+            elif request.operation == "set_priority":
+                assert request.priority is not None
+                result = await active.jobs.set_priority(
+                    principal_id=active.settings.owner_id,
+                    job_id=job_id,
+                    priority=request.priority,
+                    idempotency_key=request.idempotency_key,
+                )
+            else:
+                result = await active.jobs.request_cancel(
+                    principal_id=active.settings.owner_id,
+                    job_id=job_id,
+                    idempotency_key=request.idempotency_key,
+                )
+        except JobNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (JobConflictError, JobStateError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except JobError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JobMutationResponse(job=_job_summary(result.record), replayed=result.replayed)
+
+    @app.post("/v1/internal/jobs/claim", response_model=JobClaimResponse | None)
+    async def claim_background_job(
+        request: JobClaimRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JobClaimResponse | None:
+        _bearer(authorization, active.settings.internal_token)
+        claim = await active.jobs.claim_next(
+            lease_owner=request.lease_owner,
+            lease_seconds=request.lease_seconds,
+        )
+        if claim is None:
+            return None
+        return JobClaimResponse(
+            job=_job_summary(claim.record),
+            instruction=claim.instruction,
+            follow_ups=tuple(
+                JobFollowUpResponse(
+                    follow_up_id=item.follow_up_id,
+                    instruction=item.instruction,
+                    created_at=item.created_at,
+                )
+                for item in claim.follow_ups
+            ),
+            recovered=claim.recovered,
+        )
+
+    @app.post("/v1/internal/jobs/{job_id}/heartbeat", response_model=JobHeartbeatResponse)
+    async def heartbeat_background_job(
+        job_id: str,
+        request: JobHeartbeatRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JobHeartbeatResponse:
+        _bearer(authorization, active.settings.internal_token)
+        try:
+            heartbeat = await active.jobs.heartbeat(
+                job_id=job_id,
+                lease_owner=request.lease_owner,
+                lease_seconds=request.lease_seconds,
+            )
+        except JobNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except JobLeaseError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return JobHeartbeatResponse(
+            job=_job_summary(heartbeat.record),
+            follow_ups=tuple(
+                JobFollowUpResponse(
+                    follow_up_id=item.follow_up_id,
+                    instruction=item.instruction,
+                    created_at=item.created_at,
+                )
+                for item in heartbeat.follow_ups
+            ),
+        )
+
+    @app.post("/v1/internal/jobs/{job_id}/events", response_model=JobSummaryResponse)
+    async def publish_background_job_event(
+        job_id: str,
+        request: JobExecutorEventRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JobSummaryResponse:
+        _bearer(authorization, active.settings.internal_token)
+        try:
+            record = await active.jobs.publish(
+                job_id=job_id,
+                lease_owner=request.lease_owner,
+                kind=JobEventKind(request.kind),
+                detail_code=request.detail_code,
+                entity_ids=request.entity_ids,
+                artifact_ids=request.artifact_ids,
+            )
+        except JobNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (JobLeaseError, JobStateError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except JobError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _job_summary(record)
+
     @app.post(
         "/v1/internal/agent-control/confirmations",
         response_model=ToolCallResponse,
@@ -1971,6 +2443,38 @@ def create_app(
                         operation=operation,
                     )
                     return response
+                if request.tool_name == "run_job":
+                    response = await _execute_run_job_tool(
+                        active,
+                        request,
+                        cast(RunJobArguments, request.arguments),
+                    )
+                    active.telemetry.emit(
+                        component="control",
+                        event="tool",
+                        outcome="completed",
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        phase="execution",
+                        operation=operation,
+                    )
+                    return response
+                if request.tool_name == "manage_job":
+                    response = await _execute_manage_job_tool(
+                        active,
+                        request,
+                        cast(ManageJobArguments, request.arguments),
+                    )
+                    active.telemetry.emit(
+                        component="control",
+                        event="tool",
+                        outcome="completed",
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        phase="execution",
+                        operation=operation,
+                    )
+                    return response
                 if request.tool_name == "list_sources":
                     catalog = await active.gateway.list_sources(
                         call_id=request.call_id,
@@ -2009,6 +2513,12 @@ def create_app(
                     grant=grant,
                     raw_arguments=request.arguments.model_dump(exclude_none=True),
                 )
+            except JobNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (JobConflictError, JobStateError, JobLeaseError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except JobError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
             except ToolDeniedError as exc:
                 active.telemetry.emit(
                     component="control",

@@ -27,6 +27,7 @@ public  final class ClientEvent extends
     MESSAGE(6),
     AGENT_CONTROL_CONFIRMATION(7),
     AGENT_CONTROL_CANCELLATION(8),
+    JOB_COMMAND(9),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -49,6 +50,7 @@ public  final class ClientEvent extends
         case 6: return MESSAGE;
         case 7: return AGENT_CONTROL_CONFIRMATION;
         case 8: return AGENT_CONTROL_CANCELLATION;
+        case 9: return JOB_COMMAND;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -455,6 +457,58 @@ public  final class ClientEvent extends
    */
   private void clearAgentControlCancellation() {
     if (payloadCase_ == 8) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int JOB_COMMAND_FIELD_NUMBER = 9;
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   */
+  @java.lang.Override
+  public boolean hasJobCommand() {
+    return payloadCase_ == 9;
+  }
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.JobCommand getJobCommand() {
+    if (payloadCase_ == 9) {
+       return (works.ravd.radcliffe.protocol.v2.JobCommand) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.JobCommand.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setJobCommand(works.ravd.radcliffe.protocol.v2.JobCommand value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 9;
+  }
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeJobCommand(works.ravd.radcliffe.protocol.v2.JobCommand value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 9 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.JobCommand.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.JobCommand.newBuilder((works.ravd.radcliffe.protocol.v2.JobCommand) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 9;
+  }
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   */
+  private void clearJobCommand() {
+    if (payloadCase_ == 9) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -933,6 +987,54 @@ public  final class ClientEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    @java.lang.Override
+    public boolean hasJobCommand() {
+      return instance.hasJobCommand();
+    }
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.JobCommand getJobCommand() {
+      return instance.getJobCommand();
+    }
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    public Builder setJobCommand(works.ravd.radcliffe.protocol.v2.JobCommand value) {
+      copyOnWrite();
+      instance.setJobCommand(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    public Builder setJobCommand(
+        works.ravd.radcliffe.protocol.v2.JobCommand.Builder builderForValue) {
+      copyOnWrite();
+      instance.setJobCommand(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    public Builder mergeJobCommand(works.ravd.radcliffe.protocol.v2.JobCommand value) {
+      copyOnWrite();
+      instance.mergeJobCommand(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+     */
+    public Builder clearJobCommand() {
+      copyOnWrite();
+      instance.clearJobCommand();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ClientEvent)
   }
   @java.lang.Override
@@ -959,10 +1061,11 @@ public  final class ClientEvent extends
             works.ravd.radcliffe.protocol.v2.MessageEnvelope.class,
             works.ravd.radcliffe.protocol.v2.AgentControlConfirmation.class,
             works.ravd.radcliffe.protocol.v2.AgentControlCancellation.class,
+            works.ravd.radcliffe.protocol.v2.JobCommand.class,
           };
           java.lang.String info =
-              "\u0000\b\u0001\u0000\u0001\b\b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
-              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000";
+              "\u0000\t\u0001\u0000\u0001\t\t\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
+              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

@@ -51,6 +51,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("list_sources first");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("run_job");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {
@@ -269,6 +271,79 @@ describe("PiAgentOrchestrator", () => {
     expect(context.systemPrompt).toContain("Give a detailed response");
     expect(context.tools.map((tool) => tool.name)).toContain("configure");
     expect(context.tools.map((tool) => tool.name)).toContain("manage_session");
+    expect(context.tools.map((tool) => tool.name)).toContain("run_job");
+    expect(context.tools.map((tool) => tool.name)).toContain("manage_job");
+  });
+
+  it("accepts a background job without folding its private context into the response", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-background-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          {
+            instruction: "Search six months of private lab papers",
+            notificationPolicy: "next_safe_pause",
+            priority: 1,
+            budgetUsd: 0.5,
+            maxRuntimeSeconds: 3600,
+          },
+          { id: "run-job-1" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The background job was accepted; we can keep talking."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent:
+        '{"jobId":"job-1","notificationPolicy":"next_safe_pause","status":"queued"}',
+      details: { jobId: "job-1", replayed: "false" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Research this while we talk")]), () => {});
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        arguments: {
+          instruction: "Search six months of private lab papers",
+          notificationPolicy: "next_safe_pause",
+          priority: 1,
+          budgetUsd: 0.5,
+          maxRuntimeSeconds: 3600,
+        },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it("routes an idempotent background job cancellation by exact job ID", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-manage-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("manage_job", { operation: "cancel", jobId: "job-1" }, { id: "cancel-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Cancellation was requested."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"running","cancelRequested":true}',
+      details: { jobId: "job-1", replayed: "false" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Cancel job one")]), () => {});
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "manage_job",
+        arguments: { operation: "cancel", jobId: "job-1" },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("discovers an informally named source before reading its canonical bytes", async () => {

@@ -63,6 +63,25 @@ Envelope, playback, and tool-call inserts advance session recency through
 database triggers, so ordering survives worker and control-plane restarts.
 Schema migrations are incremental and recorded in `schema_migrations`.
 
+## Background job API
+
+- `run_job` on `POST /v1/tool-calls` durably accepts a private job instruction
+  and immediately returns a job ID. `manage_job` inspects, follows up,
+  reprioritizes, or cancels it.
+- `GET /v1/sessions/{session_id}/jobs`, `GET /v1/jobs/{job_id}`, and
+  `GET /v1/jobs/{job_id}/events` expose owner-authenticated metadata and
+  privacy-minimized replayable events. They never return instructions or
+  follow-up text.
+- `POST /v1/jobs/{job_id}/commands` gives an enrolled device the same bounded,
+  idempotent mutation surface.
+- `POST /v1/internal/jobs/claim`, `/heartbeat`, and `/events` form the internal
+  execution lease. Only the claim response returns private job context; all
+  three routes require the internal service token.
+
+Job revisions, events, follow-ups, cancellation intent, and leases share the
+main SQLite/WAL database. An expired lease is recoverable after restart, while
+a current or cancellation-requested job cannot be completed by a stale owner.
+
 ## Managed workers
 
 Server-generated sessions use a control-plane-owned local worker supervisor;

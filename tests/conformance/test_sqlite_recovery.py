@@ -124,6 +124,59 @@ def populated_database(path: Path, *, suffix: str = "one") -> Path:
                 now,
             ),
         )
+        database.execute(
+            """INSERT INTO background_jobs VALUES (
+                ?, 'owner', ?, 1, ?, ?, ?, 'next_safe_pause', 2, 'queued',
+                500000, 3600, 2, NULL, NULL, NULL, 0, ?, ?
+            )""",
+            (
+                f"job-{suffix}",
+                f"session-{suffix}",
+                f"job-key-{suffix}",
+                b"job-request-digest",
+                f"private job instruction {suffix}",
+                now,
+                now,
+            ),
+        )
+        database.execute(
+            "INSERT INTO background_job_follow_ups VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                f"follow-up-{suffix}",
+                f"job-{suffix}",
+                f"follow-up-key-{suffix}",
+                b"follow-up-request-digest",
+                f"private job follow-up {suffix}",
+                now,
+            ),
+        )
+        database.execute(
+            "INSERT INTO background_job_commands VALUES (?, ?, ?, ?, 'follow_up', 2, ?)",
+            (
+                f"job-command-{suffix}",
+                f"job-{suffix}",
+                f"follow-up-key-{suffix}",
+                b"follow-up-command-digest",
+                now,
+            ),
+        )
+        for revision, kind, detail in (
+            (1, "accepted", "accepted"),
+            (2, "follow_up_added", "follow_up_added"),
+        ):
+            database.execute(
+                """INSERT INTO background_job_events VALUES (
+                    ?, ?, ?, ?, 'queued', 'next_safe_pause', 2, ?, '[]', '[]', ?
+                )""",
+                (
+                    f"job-event-{suffix}-{revision}",
+                    f"job-{suffix}",
+                    revision,
+                    kind,
+                    detail,
+                    now,
+                ),
+            )
         database.commit()
     path.chmod(0o600)
     return path
@@ -197,7 +250,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 8,
+        "schema_migrations": 9,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
@@ -207,6 +260,10 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
         "configuration_values": 1,
         "configuration_mutations": 1,
         "session_transitions": 1,
+        "background_jobs": 1,
+        "background_job_follow_ups": 1,
+        "background_job_commands": 1,
+        "background_job_events": 2,
     }
     with pytest.raises(RECOVERY.RecoveryError, match="cannot replace the live"):
         RECOVERY.restore_backup(

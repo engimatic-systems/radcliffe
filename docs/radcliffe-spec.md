@@ -521,6 +521,37 @@ scope meanings, confirmation requirements, replay behavior, and precedence
 cannot change in place; incompatible semantics require a new field or Protocol
 v3.
 
+### Durable background-job lifecycle
+
+Long research, analysis, download, and coding work crosses a separate bounded
+job boundary. The foreground model calls `run_job` with a private instruction,
+notification policy, priority, runtime limit, and optional USD budget. The
+control plane durably accepts the request and returns a `job_id` immediately;
+it does not hold the foreground tool turn open while an executor works.
+
+Each job has an independent monotonic revision, status (`queued`, `running`,
+`waiting`, `succeeded`, `failed`, or `cancelled`), execution attempt, and
+short-lived lease. A transaction grants only one executor a queued job. An
+expired running lease may be recovered by a different executor and creates an
+explicit `lease_recovered` event. Heartbeats extend only the current owner's
+lease. A stale or foreign executor cannot publish progress or completion.
+
+`manage_job` and the enrolled-device API expose only four bounded operations:
+inspect status, add a private follow-up, set priority from `0` through `4`, or
+request cancellation. Mutations are idempotent; reusing a command key with
+different input conflicts. Queued and waiting cancellation is immediate.
+Running cancellation records intent first, and a later success cannot overtake
+that committed request; the executor must acknowledge cancellation.
+
+Private primary instructions and follow-up text live only in the separate job
+record returned to the authenticated internal executor. Conversation-facing
+`JobEvent` messages contain lifecycle metadata, stable detail codes, and
+promoted entity/artifact IDs. They have no instruction, follow-up, raw command
+output, worker transcript, or generic text field. Event revisions replay after
+restart, allowing the later foreground notification scheduler to apply
+`immediate`, `next_safe_pause`, `silent`, or `user_waiting` policy without
+reconstructing private job context.
+
 ### Deterministic context-budget accounting
 
 Context usage is measured after `ContextProjection` and Pi's custom-message

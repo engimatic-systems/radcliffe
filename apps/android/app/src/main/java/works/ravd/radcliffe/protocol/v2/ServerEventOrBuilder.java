@@ -115,5 +115,16 @@ public interface ServerEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.AgentControlActionResult getAgentControlResult();
 
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   * @return Whether the jobEvent field is set.
+   */
+  boolean hasJobEvent();
+  /**
+   * <code>.radcliffe.v2.JobEvent job_event = 11;</code>
+   * @return The jobEvent.
+   */
+  works.ravd.radcliffe.protocol.v2.JobEvent getJobEvent();
+
   public works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase getPayloadCase();
 }

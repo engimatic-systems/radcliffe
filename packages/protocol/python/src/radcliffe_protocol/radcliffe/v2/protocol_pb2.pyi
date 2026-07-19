@@ -138,6 +138,46 @@ class ResponseDetail(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     RESPONSE_DETAIL_BRIEF: _ClassVar[ResponseDetail]
     RESPONSE_DETAIL_STANDARD: _ClassVar[ResponseDetail]
     RESPONSE_DETAIL_DETAILED: _ClassVar[ResponseDetail]
+
+class JobStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    JOB_STATUS_UNSPECIFIED: _ClassVar[JobStatus]
+    JOB_STATUS_QUEUED: _ClassVar[JobStatus]
+    JOB_STATUS_RUNNING: _ClassVar[JobStatus]
+    JOB_STATUS_WAITING: _ClassVar[JobStatus]
+    JOB_STATUS_SUCCEEDED: _ClassVar[JobStatus]
+    JOB_STATUS_FAILED: _ClassVar[JobStatus]
+    JOB_STATUS_CANCELLED: _ClassVar[JobStatus]
+
+class JobNotificationPolicy(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    JOB_NOTIFICATION_POLICY_UNSPECIFIED: _ClassVar[JobNotificationPolicy]
+    JOB_NOTIFICATION_POLICY_IMMEDIATE: _ClassVar[JobNotificationPolicy]
+    JOB_NOTIFICATION_POLICY_NEXT_SAFE_PAUSE: _ClassVar[JobNotificationPolicy]
+    JOB_NOTIFICATION_POLICY_SILENT: _ClassVar[JobNotificationPolicy]
+    JOB_NOTIFICATION_POLICY_USER_WAITING: _ClassVar[JobNotificationPolicy]
+
+class JobEventKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    JOB_EVENT_KIND_UNSPECIFIED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_ACCEPTED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_STARTED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_LEASE_RECOVERED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_PROGRESS: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_WAITING: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_FOLLOW_UP_ADDED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_PRIORITY_CHANGED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_CANCELLATION_REQUESTED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_CANCELLED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_SUCCEEDED: _ClassVar[JobEventKind]
+    JOB_EVENT_KIND_FAILED: _ClassVar[JobEventKind]
+
+class JobCommandKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    JOB_COMMAND_KIND_UNSPECIFIED: _ClassVar[JobCommandKind]
+    JOB_COMMAND_KIND_FOLLOW_UP: _ClassVar[JobCommandKind]
+    JOB_COMMAND_KIND_SET_PRIORITY: _ClassVar[JobCommandKind]
+    JOB_COMMAND_KIND_CANCEL: _ClassVar[JobCommandKind]
 SOURCE_KIND_UNSPECIFIED: SourceKind
 SOURCE_KIND_USER: SourceKind
 SOURCE_KIND_MODEL: SourceKind
@@ -228,6 +268,34 @@ RESPONSE_DETAIL_UNSPECIFIED: ResponseDetail
 RESPONSE_DETAIL_BRIEF: ResponseDetail
 RESPONSE_DETAIL_STANDARD: ResponseDetail
 RESPONSE_DETAIL_DETAILED: ResponseDetail
+JOB_STATUS_UNSPECIFIED: JobStatus
+JOB_STATUS_QUEUED: JobStatus
+JOB_STATUS_RUNNING: JobStatus
+JOB_STATUS_WAITING: JobStatus
+JOB_STATUS_SUCCEEDED: JobStatus
+JOB_STATUS_FAILED: JobStatus
+JOB_STATUS_CANCELLED: JobStatus
+JOB_NOTIFICATION_POLICY_UNSPECIFIED: JobNotificationPolicy
+JOB_NOTIFICATION_POLICY_IMMEDIATE: JobNotificationPolicy
+JOB_NOTIFICATION_POLICY_NEXT_SAFE_PAUSE: JobNotificationPolicy
+JOB_NOTIFICATION_POLICY_SILENT: JobNotificationPolicy
+JOB_NOTIFICATION_POLICY_USER_WAITING: JobNotificationPolicy
+JOB_EVENT_KIND_UNSPECIFIED: JobEventKind
+JOB_EVENT_KIND_ACCEPTED: JobEventKind
+JOB_EVENT_KIND_STARTED: JobEventKind
+JOB_EVENT_KIND_LEASE_RECOVERED: JobEventKind
+JOB_EVENT_KIND_PROGRESS: JobEventKind
+JOB_EVENT_KIND_WAITING: JobEventKind
+JOB_EVENT_KIND_FOLLOW_UP_ADDED: JobEventKind
+JOB_EVENT_KIND_PRIORITY_CHANGED: JobEventKind
+JOB_EVENT_KIND_CANCELLATION_REQUESTED: JobEventKind
+JOB_EVENT_KIND_CANCELLED: JobEventKind
+JOB_EVENT_KIND_SUCCEEDED: JobEventKind
+JOB_EVENT_KIND_FAILED: JobEventKind
+JOB_COMMAND_KIND_UNSPECIFIED: JobCommandKind
+JOB_COMMAND_KIND_FOLLOW_UP: JobCommandKind
+JOB_COMMAND_KIND_SET_PRIORITY: JobCommandKind
+JOB_COMMAND_KIND_CANCEL: JobCommandKind
 
 class ContentRef(_message.Message):
     __slots__ = ("mime_type", "byte_length", "inline_text", "blob_uri")
@@ -632,6 +700,62 @@ class AgentControlActionResult(_message.Message):
     retryable: bool
     def __init__(self, schema_version: _Optional[int] = ..., request_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., action_id: _Optional[_Union[AgentControlActionId, str]] = ..., disposition: _Optional[_Union[AgentControlDisposition, str]] = ..., rejection_code: _Optional[_Union[AgentControlRejectionCode, str]] = ..., idempotency_key: _Optional[str] = ..., request_sha256: _Optional[bytes] = ..., state_sha256: _Optional[bytes] = ..., applied_sequence: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., retryable: _Optional[bool] = ...) -> None: ...
 
+class JobRef(_message.Message):
+    __slots__ = ("job_id", "session_id", "revision", "status")
+    JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    job_id: str
+    session_id: str
+    revision: int
+    status: JobStatus
+    def __init__(self, job_id: _Optional[str] = ..., session_id: _Optional[str] = ..., revision: _Optional[int] = ..., status: _Optional[_Union[JobStatus, str]] = ...) -> None: ...
+
+class JobCommand(_message.Message):
+    __slots__ = ("schema_version", "command_id", "job", "kind", "idempotency_key", "follow_up", "priority", "occurred_at")
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
+    JOB_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    FOLLOW_UP_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    schema_version: int
+    command_id: str
+    job: JobRef
+    kind: JobCommandKind
+    idempotency_key: str
+    follow_up: str
+    priority: int
+    occurred_at: _timestamp_pb2.Timestamp
+    def __init__(self, schema_version: _Optional[int] = ..., command_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobCommandKind, str]] = ..., idempotency_key: _Optional[str] = ..., follow_up: _Optional[str] = ..., priority: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
+class JobEvent(_message.Message):
+    __slots__ = ("schema_version", "event_id", "job", "kind", "notification_policy", "priority", "detail_code", "entity_ids", "artifact_ids", "occurred_at")
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    JOB_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NOTIFICATION_POLICY_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    DETAIL_CODE_FIELD_NUMBER: _ClassVar[int]
+    ENTITY_IDS_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_IDS_FIELD_NUMBER: _ClassVar[int]
+    OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    schema_version: int
+    event_id: str
+    job: JobRef
+    kind: JobEventKind
+    notification_policy: JobNotificationPolicy
+    priority: int
+    detail_code: str
+    entity_ids: _containers.RepeatedScalarFieldContainer[str]
+    artifact_ids: _containers.RepeatedScalarFieldContainer[str]
+    occurred_at: _timestamp_pb2.Timestamp
+    def __init__(self, schema_version: _Optional[int] = ..., event_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobEventKind, str]] = ..., notification_policy: _Optional[_Union[JobNotificationPolicy, str]] = ..., priority: _Optional[int] = ..., detail_code: _Optional[str] = ..., entity_ids: _Optional[_Iterable[str]] = ..., artifact_ids: _Optional[_Iterable[str]] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
 class Reconnect(_message.Message):
     __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
@@ -685,7 +809,7 @@ class ProtocolError(_message.Message):
     def __init__(self, request_id: _Optional[str] = ..., code: _Optional[str] = ..., message: _Optional[str] = ..., retryable: _Optional[bool] = ...) -> None: ...
 
 class ClientEvent(_message.Message):
-    __slots__ = ("protocol_version", "session_start", "reconnect", "playback_acknowledgement", "control_command", "message", "agent_control_confirmation", "agent_control_cancellation")
+    __slots__ = ("protocol_version", "session_start", "reconnect", "playback_acknowledgement", "control_command", "message", "agent_control_confirmation", "agent_control_cancellation", "job_command")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     SESSION_START_FIELD_NUMBER: _ClassVar[int]
     RECONNECT_FIELD_NUMBER: _ClassVar[int]
@@ -694,6 +818,7 @@ class ClientEvent(_message.Message):
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     AGENT_CONTROL_CONFIRMATION_FIELD_NUMBER: _ClassVar[int]
     AGENT_CONTROL_CANCELLATION_FIELD_NUMBER: _ClassVar[int]
+    JOB_COMMAND_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     session_start: SessionStart
     reconnect: Reconnect
@@ -702,10 +827,11 @@ class ClientEvent(_message.Message):
     message: MessageEnvelope
     agent_control_confirmation: AgentControlConfirmation
     agent_control_cancellation: AgentControlCancellation
-    def __init__(self, protocol_version: _Optional[int] = ..., session_start: _Optional[_Union[SessionStart, _Mapping]] = ..., reconnect: _Optional[_Union[Reconnect, _Mapping]] = ..., playback_acknowledgement: _Optional[_Union[PlaybackAcknowledgement, _Mapping]] = ..., control_command: _Optional[_Union[ControlCommand, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., agent_control_confirmation: _Optional[_Union[AgentControlConfirmation, _Mapping]] = ..., agent_control_cancellation: _Optional[_Union[AgentControlCancellation, _Mapping]] = ...) -> None: ...
+    job_command: JobCommand
+    def __init__(self, protocol_version: _Optional[int] = ..., session_start: _Optional[_Union[SessionStart, _Mapping]] = ..., reconnect: _Optional[_Union[Reconnect, _Mapping]] = ..., playback_acknowledgement: _Optional[_Union[PlaybackAcknowledgement, _Mapping]] = ..., control_command: _Optional[_Union[ControlCommand, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., agent_control_confirmation: _Optional[_Union[AgentControlConfirmation, _Mapping]] = ..., agent_control_cancellation: _Optional[_Union[AgentControlCancellation, _Mapping]] = ..., job_command: _Optional[_Union[JobCommand, _Mapping]] = ...) -> None: ...
 
 class ServerEvent(_message.Message):
-    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error", "playback_segment", "agent_control_request", "agent_control_result")
+    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error", "playback_segment", "agent_control_request", "agent_control_result", "job_event")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     SESSION_READY_FIELD_NUMBER: _ClassVar[int]
     STATE_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -716,6 +842,7 @@ class ServerEvent(_message.Message):
     PLAYBACK_SEGMENT_FIELD_NUMBER: _ClassVar[int]
     AGENT_CONTROL_REQUEST_FIELD_NUMBER: _ClassVar[int]
     AGENT_CONTROL_RESULT_FIELD_NUMBER: _ClassVar[int]
+    JOB_EVENT_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     session_ready: SessionReady
     state_changed: StateChanged
@@ -726,4 +853,5 @@ class ServerEvent(_message.Message):
     playback_segment: PlaybackSegment
     agent_control_request: AgentControlActionRequest
     agent_control_result: AgentControlActionResult
-    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ..., playback_segment: _Optional[_Union[PlaybackSegment, _Mapping]] = ..., agent_control_request: _Optional[_Union[AgentControlActionRequest, _Mapping]] = ..., agent_control_result: _Optional[_Union[AgentControlActionResult, _Mapping]] = ...) -> None: ...
+    job_event: JobEvent
+    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ..., playback_segment: _Optional[_Union[PlaybackSegment, _Mapping]] = ..., agent_control_request: _Optional[_Union[AgentControlActionRequest, _Mapping]] = ..., agent_control_result: _Optional[_Union[AgentControlActionResult, _Mapping]] = ..., job_event: _Optional[_Union[JobEvent, _Mapping]] = ...) -> None: ...

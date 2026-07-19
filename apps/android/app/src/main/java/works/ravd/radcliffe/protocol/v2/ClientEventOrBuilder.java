@@ -93,5 +93,16 @@ public interface ClientEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.AgentControlCancellation getAgentControlCancellation();
 
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   * @return Whether the jobCommand field is set.
+   */
+  boolean hasJobCommand();
+  /**
+   * <code>.radcliffe.v2.JobCommand job_command = 9;</code>
+   * @return The jobCommand.
+   */
+  works.ravd.radcliffe.protocol.v2.JobCommand getJobCommand();
+
   public works.ravd.radcliffe.protocol.v2.ClientEvent.PayloadCase getPayloadCase();
 }
