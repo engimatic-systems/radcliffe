@@ -21,3 +21,9 @@ Keep orchestration and local-model inference in a credential-free host wrapper w
 ## Acceptance Criteria
 
 A protected local profile can opt into a pinned Colima/Docker image and start a job from voice; the wrapper supports iterative local-Ollama planning, arbitrary shell commands inside the container, bounded public-internet acquisition, workspace-local package installation, durable report/artifact output, follow-ups, cancellation, and timeout; it mounts no host path except the private attempt workspace and receives no Radcliffe/provider/GitHub/keychain credentials; private/LAN endpoints and host metadata are blocked while required local inference is brokered outside the container; deterministic tests cover coding, public-web analysis, malformed model output, command/output/resource limits, secret and host-path probes, and container cleanup; an end-to-end deployed smoke proves the foreground remains responsive and Android sees lifecycle completion.
+
+## Notes
+
+**2026-07-19T21:28:19Z**
+
+Deployed the revision-tagged Colima image and protected local executor profile. Real local-Ollama/Colima jobs completed through the live control-plane lease path, promoted bounded results, kept a concurrent foreground tool responsive, and cleaned up containers/networks; private/LAN, host-path, credential, malformed-output, resource, and artifact boundaries are covered. Physical Android lifecycle confirmation remains the checkpoint.

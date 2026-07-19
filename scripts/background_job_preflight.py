@@ -225,15 +225,31 @@ def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Gate background-job phone testing")
     value.add_argument("--control-url", default="http://127.0.0.1:8000")
     value.add_argument("--sidecar-url", default="http://127.0.0.1:8787")
+    value.add_argument("--wait", type=float, default=0)
     return value
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     options = parser().parse_args(arguments)
     expected = git_revision()
-    _control_status, control_health = fetch_json(f"{options.control_url.rstrip('/')}/healthz")
-    _ready_status, control_readiness = fetch_json(f"{options.control_url.rstrip('/')}/readyz")
-    _sidecar_status, sidecar_health = fetch_json(f"{options.sidecar_url.rstrip('/')}/healthz")
+    deadline = time.monotonic() + max(0, options.wait)
+    while True:
+        _control_status, control_health = fetch_json(f"{options.control_url.rstrip('/')}/healthz")
+        _ready_status, control_readiness = fetch_json(f"{options.control_url.rstrip('/')}/readyz")
+        _sidecar_status, sidecar_health = fetch_json(f"{options.sidecar_url.rstrip('/')}/healthz")
+        deployment = validate_live(
+            expected_revision=expected,
+            control_health=control_health,
+            control_readiness=control_readiness,
+            sidecar_health=sidecar_health,
+            image_available=True,
+            synthetic_smoke=True,
+        )
+        if all(check.status == "ok" for check in deployment[:3]):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
     checks = validate_live(
         expected_revision=expected,
         control_health=control_health,

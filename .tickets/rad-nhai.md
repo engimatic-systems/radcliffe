@@ -56,3 +56,7 @@ Phone checkpoint failed before any job call: the live sidecar and control plane 
 **2026-07-19T20:52:08Z**
 
 Started rad-erac to supply the missing concrete Colima/Docker + local-Ollama Unix job wrapper and deploy it to the protected local profile; rad-cyg0 separately enforces the preflight that would have caught the stale processes and disabled executor.
+
+**2026-07-19T21:28:19Z**
+
+The Unix executor is live behind the new deployed-feature preflight. An isolated live job was accepted immediately, a same-session foreground tool remained responsive, the local-Ollama/Colima agent completed and promoted its result, and the test session/device plus containers/network were cleaned up. Awaiting the physical Android lifecycle checkpoint on rad-erac.

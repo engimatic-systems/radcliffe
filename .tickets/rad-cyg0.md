@@ -1,6 +1,6 @@
 ---
 id: rad-cyg0
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-07-19T20:46:12Z
@@ -27,3 +27,7 @@ A deterministic preflight fails before APK handoff when the running sidecar omit
 **2026-07-19T20:47:50Z**
 
 Live reproduction on 2026-07-19: /readyz returned HTTP 200 ready with database, sidecar liveness, LiveKit, source-root, and worker-supervisor checks only, even though the sidecar/control processes predated the job feature and the configured environment had no executor. The current conversation advertised only list_sources/read_source; no job tool call, background job, or job command was recorded.
+
+**2026-07-19T21:28:19Z**
+
+Implemented the enforced content-free phone preflight: live control/sidecar revisions and capabilities must match the checkout, run_job/manage_job must be advertised, the executor and configured image must be available, and a credential-free synthetic process-contract job must complete. Regression tests cover the stale sidecar, missing tools, revision mismatch, and disabled executor; live preflight and operations gates pass.

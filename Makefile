@@ -65,7 +65,7 @@ build-job-sandbox-local:
 
 check-background-jobs-local:
 	set -a; . var/.env; . var/job-executor.env; set +a; \
-		uv run python scripts/background_job_preflight.py
+		uv run python scripts/background_job_preflight.py --wait 30
 
 services-install-local:
 	uv run python scripts/radcliffe_services.py install --include-compat-worker
