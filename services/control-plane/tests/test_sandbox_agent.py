@@ -4,6 +4,7 @@ from pathlib import Path
 
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
+    COMMAND_OUTPUT_LIMIT,
     DockerSandbox,
     OllamaAgent,
     PrivateTranscript,
@@ -55,6 +56,40 @@ def tool_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
         "role": "assistant",
         "content": "",
         "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
+    }
+
+
+def test_command_output_limit_leaves_room_for_the_bounded_model_context() -> None:
+    assert COMMAND_OUTPUT_LIMIT == 24 * 1024
+
+
+def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"message":{"role":"assistant","content":"bounded"}}'
+
+    def open_request(request, *, timeout):
+        captured.update(json.loads(request.data))
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+
+    message = OllamaAgent(url="http://127.0.0.1:11434", model="qwen3:8b").chat([])
+
+    assert message["content"] == "bounded"
+    assert captured["options"] == {
+        "temperature": 0.1,
+        "num_ctx": 8_192,
+        "num_predict": 512,
     }
 
 

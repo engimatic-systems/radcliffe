@@ -26,7 +26,7 @@ from radcliffe_control.job_results import (
     write_promoted_result,
 )
 
-COMMAND_OUTPUT_LIMIT = 64 * 1024
+COMMAND_OUTPUT_LIMIT = 24 * 1024
 MODEL_RESPONSE_LIMIT = 2 * 1024 * 1024
 AGENT_TRANSCRIPT_LIMIT = 1024 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
@@ -325,7 +325,11 @@ class OllamaAgent:
                     "think": False,
                     "messages": messages,
                     "tools": AGENT_TOOLS,
-                    "options": {"temperature": 0.1},
+                    "options": {
+                        "temperature": 0.1,
+                        "num_ctx": 8_192,
+                        "num_predict": 512,
+                    },
                 },
                 separators=(",", ":"),
             ).encode(),
