@@ -48,3 +48,7 @@ Started rad-0eyx for the Android checkpoint: session-scoped JobEvent replay/dedu
 **2026-07-19T03:36:40Z**
 
 Completed rad-0eyx: Android now hydrates and replay-deduplicates privacy-minimized background job status for the active session, shows accessible bounded job cards, and issues enrolled-device follow-up, priority, and cancellation commands without exposing private instructions or executor output. Full repository checks pass; physical-phone validation remains the checkpoint.
+
+**2026-07-19T20:46:18Z**
+
+Phone checkpoint failed before any job call: the live sidecar and control plane were still Friday processes predating run_job/manage_job, while the checkout and managed media worker were current; var/.env also has no opt-in job executor configuration. Filed P0 rad-cyg0 to make deployed capability/revision and executor readiness an enforced, content-free preflight before future APK handoffs.
