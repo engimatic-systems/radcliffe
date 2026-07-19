@@ -21,3 +21,9 @@ Add a content-free deployed-capability/version handshake across the sidecar, con
 ## Acceptance Criteria
 
 A deterministic preflight fails before APK handoff when the running sidecar omits run_job/manage_job, the control plane lacks the background-job contract, the running revision differs from the expected checkout/build, or the job executor is disabled/unhealthy; passing proves a synthetic no-provider job can be accepted and driven through a configured test wrapper without exposing content or making a paid request; operations and documentation name the corrective restart/configuration action; automated tests reproduce the stale-Friday-sidecar/current-checkout failure and an executor-disabled failure; no credentials, prompts, raw session IDs, or transcripts enter readiness output.
+
+## Notes
+
+**2026-07-19T20:47:50Z**
+
+Live reproduction on 2026-07-19: /readyz returned HTTP 200 ready with database, sidecar liveness, LiveKit, source-root, and worker-supervisor checks only, even though the sidecar/control processes predated the job feature and the configured environment had no executor. The current conversation advertised only list_sources/read_source; no job tool call, background job, or job command was recorded.
