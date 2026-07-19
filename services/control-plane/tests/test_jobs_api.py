@@ -1,8 +1,10 @@
 import asyncio
+import json
 import time
 
 from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
+from radcliffe_control.job_results import PromotedArtifact, PromotedJobResult, write_promoted_result
 from radcliffe_control.settings import Settings
 
 DEVICE_CREDENTIAL = "rdc_dev_" + "j" * 43
@@ -403,3 +405,78 @@ def test_foreground_api_remains_responsive_while_executor_process_is_running(tmp
             time.sleep(0.01)
         assert status == "cancelled"
         assert launcher.processes[0].terminated
+
+
+def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    private_instruction = "private instruction that must stay out of status"
+    private_transcript = "private command transcript that must stay out of status"
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-result",
+            arguments={"instruction": private_instruction},
+        )
+        job_id = accepted.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "result-worker", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        workspace = workspace_root / job_id / "attempt-1"
+        workspace.mkdir(parents=True)
+        workspace.joinpath("agent-transcript.jsonl").write_text(private_transcript)
+        write_promoted_result(
+            workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=job_id,
+                summary="Calculated and recurrence-checked the first 100 Fibonacci numbers.",
+                artifacts=(
+                    PromotedArtifact(
+                        artifactId="artifact:file:fibonacci",
+                        path="report.md",
+                        sha256="a" * 64,
+                        byteLength=123,
+                    ),
+                ),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "result-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+            },
+        )
+        assert succeeded.status_code == 200
+
+        status = tool(
+            client,
+            tool_name="manage_job",
+            call_id="status-result",
+            arguments={"operation": "status", "jobId": job_id},
+        )
+
+        assert status.status_code == 200
+        content = json.loads(status.json()["modelContent"])
+        assert content["result"] == {
+            "summary": "Calculated and recurrence-checked the first 100 Fibonacci numbers.",
+            "artifacts": [
+                {
+                    "artifactId": "artifact:file:fibonacci",
+                    "path": "report.md",
+                    "sha256": "a" * 64,
+                    "byteLength": 123,
+                }
+            ],
+        }
+        assert status.json()["details"]["artifactCount"] == "1"
+        assert private_instruction not in status.text
+        assert private_transcript not in status.text

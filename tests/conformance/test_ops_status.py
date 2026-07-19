@@ -92,10 +92,26 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
                 },
             )
         if require_json:
+            if ":8000" in url:
+                return OPS.HttpObservation(
+                    200,
+                    {
+                        "status": "ok",
+                        "build_revision": "abc123",
+                        "capabilities": [
+                            "background_jobs_v1",
+                            "promoted_job_results_v1",
+                        ],
+                    },
+                )
             return OPS.HttpObservation(
                 200,
                 {
                     "status": "ok",
+                    "build_revision": "abc123",
+                    "capabilities": {
+                        "tools": ["list_sources", "read_source", "run_job", "manage_job"]
+                    },
                     "active_turns": 0,
                     "cancelled_turns": 2,
                     "provider": "anthropic",

@@ -52,3 +52,7 @@ Completed rad-0eyx: Android now hydrates and replay-deduplicates privacy-minimiz
 **2026-07-19T20:46:18Z**
 
 Phone checkpoint failed before any job call: the live sidecar and control plane were still Friday processes predating run_job/manage_job, while the checkout and managed media worker were current; var/.env also has no opt-in job executor configuration. Filed P0 rad-cyg0 to make deployed capability/revision and executor readiness an enforced, content-free preflight before future APK handoffs.
+
+**2026-07-19T20:52:08Z**
+
+Started rad-erac to supply the missing concrete Colima/Docker + local-Ollama Unix job wrapper and deploy it to the protected local profile; rad-cyg0 separately enforces the preflight that would have caught the stale processes and disabled executor.

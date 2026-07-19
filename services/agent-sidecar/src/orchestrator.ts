@@ -40,6 +40,15 @@ export interface AgentOrchestrator {
   ): Promise<void>;
 }
 
+export const RADCLIFFE_TOOL_NAMES = [
+  "list_sources",
+  "read_source",
+  "configure",
+  "manage_session",
+  "run_job",
+  "manage_job",
+] as const;
+
 const EMPTY_USAGE = {
   input: 0,
   output: 0,

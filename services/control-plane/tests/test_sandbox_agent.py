@@ -1,0 +1,168 @@
+import json
+import subprocess
+from pathlib import Path
+
+from radcliffe_control.job_results import read_promoted_result
+from radcliffe_control.sandbox_agent import (
+    DockerSandbox,
+    OllamaAgent,
+    PrivateTranscript,
+    StartFrame,
+    run_agent,
+    safe_artifacts,
+)
+
+
+def start_frame() -> StartFrame:
+    return StartFrame.model_validate(
+        {
+            "type": "start",
+            "schemaVersion": 1,
+            "jobId": "job-1",
+            "attempt": 1,
+            "instruction": "Create and check a report.",
+            "followUps": [],
+            "limits": {
+                "budgetUsd": None,
+                "maxRuntimeSeconds": 300,
+                "maxOutputBytes": 65_536,
+            },
+        }
+    )
+
+
+class FakeSandbox:
+    def __init__(self, workspace: Path) -> None:
+        self.workspace = workspace
+        self.commands: list[tuple[str, int]] = []
+
+    def execute(self, command: str, *, timeout_seconds: int) -> tuple[int, str, bool]:
+        self.commands.append((command, timeout_seconds))
+        self.workspace.joinpath("report.md").write_text("verified result\n")
+        return 0, "private shell output", False
+
+
+class ScriptedOllama(OllamaAgent):
+    def __init__(self, messages: list[dict[str, object]]) -> None:
+        self.messages = messages
+
+    def chat(self, _messages: list[dict[str, object]]) -> dict[str, object]:
+        return self.messages.pop(0)
+
+
+def tool_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
+    }
+
+
+def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+    sandbox = FakeSandbox(artifact_workspace)
+    ollama = ScriptedOllama(
+        [
+            tool_call(
+                "run_shell",
+                {"command": "python verify.py", "purpose": "testing", "timeoutSeconds": 12},
+            ),
+            tool_call(
+                "finish_job",
+                {"summary": "Verified the result.", "artifactPaths": ["report.md"]},
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            ollama=ollama,
+            transcript=transcript,
+            max_steps=3,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    emitted = capsys.readouterr().out
+    frames = [json.loads(line) for line in emitted.splitlines()]
+    assert [frame["kind"] for frame in frames] == ["progress", "succeeded"]
+    assert "private shell output" not in emitted
+    assert "python verify.py" not in emitted
+    promoted = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert promoted is not None
+    assert promoted.summary == "Verified the result."
+    assert promoted.artifacts[0].path == "report.md"
+    assert not artifact_workspace.joinpath("agent-transcript.jsonl").exists()
+    assert not artifact_workspace.joinpath("promoted-result.json").exists()
+    assert sandbox.commands == [("python verify.py", 12)]
+
+
+def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
+            ollama=ScriptedOllama([{"role": "assistant", "content": "no tool"}]),
+            transcript=transcript,
+            max_steps=1,
+        )
+    finally:
+        transcript.close()
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "resource_exhausted"
+
+
+def test_artifact_promotion_rejects_symlinks_and_workspace_escape(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("report.md").write_text("safe")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private host data")
+    workspace.joinpath("link.txt").symlink_to(outside)
+    workspace.joinpath("linked-dir").symlink_to(tmp_path, target_is_directory=True)
+
+    artifacts = safe_artifacts(
+        workspace,
+        ["report.md", "link.txt", "linked-dir/outside.txt", "../outside.txt"],
+    )
+
+    assert [artifact.path for artifact in artifacts] == ["report.md"]
+
+
+def test_docker_sandbox_mounts_only_attempt_workspace_and_uses_internal_network(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    calls: list[list[str]] = []
+
+    def capture(arguments, *, timeout=30, check=True):
+        del timeout, check
+        calls.append(list(arguments))
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    sandbox._run = capture  # type: ignore[method-assign]
+    sandbox.start()
+    sandbox.cleanup()
+
+    job_run = next(call for call in calls if call[:2] == ["run", "--detach"] and "--init" in call)
+    mounts = [job_run[index + 1] for index, value in enumerate(job_run) if value == "--mount"]
+    assert mounts == [f"type=bind,src={workspace.resolve()},dst=/workspace"]
+    assert ["network", "create", "--internal", sandbox.network_name] in calls
+    assert "--cap-drop" in job_run and "ALL" in job_run
+    assert not any("TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_run)

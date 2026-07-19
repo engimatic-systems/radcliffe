@@ -1,0 +1,9 @@
+**
+!infra/
+!infra/job-sandbox/
+!infra/job-sandbox/Containerfile
+!services/
+!services/control-plane/
+!services/control-plane/src/
+!services/control-plane/src/radcliffe_control/
+!services/control-plane/src/radcliffe_control/job_egress_proxy.py

@@ -197,6 +197,47 @@ def readiness_check(observation: HttpObservation) -> OperationalCheck:
     )
 
 
+def deployment_check(
+    component: str,
+    observation: HttpObservation,
+    *,
+    expected_revision: str,
+    required_capabilities: frozenset[str],
+    nested_tools: bool = False,
+) -> OperationalCheck:
+    payload = observation.payload if isinstance(observation.payload, dict) else {}
+    if payload.get("build_revision") != expected_revision:
+        return OperationalCheck(
+            f"{component}_deployment",
+            "failed",
+            f"{component}_revision_mismatch",
+            {},
+        )
+    raw_capabilities = payload.get("capabilities")
+    if nested_tools:
+        raw_capabilities = (
+            raw_capabilities.get("tools") if isinstance(raw_capabilities, dict) else None
+        )
+    capabilities = (
+        {item for item in raw_capabilities if isinstance(item, str)}
+        if isinstance(raw_capabilities, list)
+        else set()
+    )
+    if not required_capabilities.issubset(capabilities):
+        return OperationalCheck(
+            f"{component}_deployment",
+            "failed",
+            f"{component}_capability_missing",
+            {},
+        )
+    return OperationalCheck(
+        f"{component}_deployment",
+        "ok",
+        f"{component}_revision_and_capability_current",
+        {"build_revision": expected_revision},
+    )
+
+
 def service_checks(statuses: Sequence[ServiceStatus]) -> tuple[OperationalCheck, ...]:
     return tuple(
         OperationalCheck(
@@ -253,19 +294,35 @@ def collect_report(
     livekit_url = safe_endpoint(environment.get("RADCLIFFE_LIVEKIT_URL", "ws://127.0.0.1:7880"))
     raw_database = Path(environment.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3"))
     database_path = raw_database if raw_database.is_absolute() else root / raw_database
+    control_health = http_fetcher(f"{control_url}/healthz", True)
+    control_readiness = http_fetcher(f"{control_url}/readyz", True)
+    sidecar_health = http_fetcher(f"{sidecar_url}/healthz", True)
     checks: list[OperationalCheck] = list(service_checks(statuses))
     checks.extend(
         (
             http_check(
                 "control_liveness",
-                http_fetcher(f"{control_url}/healthz", True),
+                control_health,
                 expected_status="ok",
             ),
-            readiness_check(http_fetcher(f"{control_url}/readyz", True)),
+            deployment_check(
+                "control",
+                control_health,
+                expected_revision=revision,
+                required_capabilities=frozenset({"background_jobs_v1", "promoted_job_results_v1"}),
+            ),
+            readiness_check(control_readiness),
             http_check(
                 "sidecar",
-                http_fetcher(f"{sidecar_url}/healthz", True),
+                sidecar_health,
                 expected_status="ok",
+            ),
+            deployment_check(
+                "sidecar",
+                sidecar_health,
+                expected_revision=revision,
+                required_capabilities=frozenset({"run_job", "manage_job"}),
+                nested_tools=True,
             ),
             http_check("livekit", http_fetcher(livekit_http_url(livekit_url), False)),
             database_check(database_path, latest_schema_version(root)),
@@ -383,7 +440,7 @@ def main() -> int:
             root=ROOT,
             environment=os.environ,
             statuses=manager.statuses(services),
-            revision=command_output("git", "rev-parse", "--short=12", "HEAD"),
+            revision=command_output("git", "rev-parse", "HEAD"),
             dirty=bool(command_output("git", "status", "--porcelain")),
             versions={
                 "python": sys.version.split()[0],

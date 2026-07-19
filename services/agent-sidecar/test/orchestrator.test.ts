@@ -10,6 +10,7 @@ import {
   modelContextFromRequest,
   PiAgentOrchestrator,
   RADCLIFFE_SYSTEM_PROMPT,
+  RADCLIFFE_TOOL_NAMES,
 } from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
 import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
@@ -273,6 +274,7 @@ describe("PiAgentOrchestrator", () => {
     expect(context.tools.map((tool) => tool.name)).toContain("manage_session");
     expect(context.tools.map((tool) => tool.name)).toContain("run_job");
     expect(context.tools.map((tool) => tool.name)).toContain("manage_job");
+    expect(context.tools.map((tool) => tool.name)).toEqual(RADCLIFFE_TOOL_NAMES);
   });
 
   it("accepts a background job without folding its private context into the response", async () => {

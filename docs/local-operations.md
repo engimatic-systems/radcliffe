@@ -64,6 +64,7 @@ source text, or exception string. Current components and failure codes are:
 | LiveKit signal | `signal_reachable` | `livekit_url_invalid`, `signal_unavailable` |
 | Source root | `source_root_readable` | `source_root_unavailable` |
 | Worker supervisor | `supervisor_running` | `supervisor_unavailable`, `maintenance_stopped` |
+| Background-job executor | `job_executor_running` | `job_executor_unavailable`, `job_executor_stopped` |
 
 Managed workers deliberately report `managed_workers_disabled` when disabled
 in an isolated test profile; this is not a readiness failure.
@@ -87,6 +88,22 @@ Use `scripts/run-local-ops.sh --json` for stdout JSON or
 `scripts/run-local-ops.sh --wait 60` during a cold Ollama start. A nonzero exit
 means at least one required component is not ready; the legacy compatibility
 worker is reported but optional for generated Android sessions.
+
+Before handing an APK to a phone tester for background-job work, run:
+
+```sh
+make check-background-jobs-local
+```
+
+This content-free gate compares the running control plane and sidecar revisions
+to the checkout, requires the live sidecar to advertise `run_job` and
+`manage_job`, requires the control executor to be running, inspects the
+configured Colima image, and drives a synthetic job through the real JSON-lines
+process contract without invoking any model provider. A revision or capability
+failure requires rebuilding the sidecar and restarting local services; an
+executor or image failure requires rebuilding/configuring the job sandbox
+before restart. Do not hand off an APK until this gate and
+`make check-operations-local` both pass.
 
 For a content-free correlated trace/metrics bundle, run
 `make export-diagnostics-local`. Its bounded schema and redaction rules are in

@@ -1,6 +1,6 @@
 ---
 id: rad-cyg0
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-19T20:46:12Z

@@ -12,7 +12,7 @@ import {
   AnthropicPayloadMeter,
   OllamaContextMeter,
 } from "./context-meter.js";
-import { PiAgentOrchestrator } from "./orchestrator.js";
+import { PiAgentOrchestrator, RADCLIFFE_TOOL_NAMES } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
 import { warmOllama } from "./ollama-runtime.js";
 import {
@@ -34,6 +34,7 @@ import { validTurnIdentity } from "./protocol.js";
 const port = Number(process.env.RADCLIFFE_SIDECAR_PORT ?? "8787");
 const provider = process.env.RADCLIFFE_MODEL_PROVIDER ?? "ollama";
 const modelId = process.env.RADCLIFFE_MODEL_ID ?? "qwen3:8b";
+const buildRevision = deploymentRevision(process.env.RADCLIFFE_BUILD_REVISION);
 assertProviderAllowed(provider, process.env.RADCLIFFE_ALLOW_CLOUD_MODELS);
 assertSupportedModelProfile(provider, modelId);
 const gatewayUrl = process.env.RADCLIFFE_TOOL_GATEWAY_URL;
@@ -229,6 +230,14 @@ function positiveNumber(name: string, value: string): number {
   return parsed;
 }
 
+function deploymentRevision(value: string | undefined): string {
+  const revision = value ?? "development";
+  if (revision !== "development" && !/^[a-f0-9]{7,64}$/.test(revision)) {
+    throw new Error("RADCLIFFE_BUILD_REVISION must be a Git revision");
+  }
+  return revision;
+}
+
 createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/healthz") {
     const budget = cloudBudget?.ledger.summary();
@@ -236,6 +245,8 @@ createServer(async (request, response) => {
     response.end(
       JSON.stringify({
         status: "ok",
+        build_revision: buildRevision,
+        capabilities: { tools: RADCLIFFE_TOOL_NAMES },
         active_turns: activeTurns,
         cancelled_turns: cancelledTurns,
         provider,

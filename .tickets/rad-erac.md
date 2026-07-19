@@ -1,0 +1,23 @@
+---
+id: rad-erac
+status: in_progress
+deps: []
+links: []
+created: 2026-07-19T20:51:44Z
+type: feature
+priority: 0
+assignee: coopwilliams
+parent: rad-tg8o
+tags: [radcliffe, agent, unix, docker, ollama, sandbox, deployment]
+---
+# Deploy a Colima-backed Unix background agent
+
+Provide the concrete user-owned Colima/Docker wrapper needed for Radcliffe background research, coding, download, and analysis jobs, then deploy it to the protected local profile.
+
+## Design
+
+Keep orchestration and local-model inference in a credential-free host wrapper while every model-selected Unix command executes in a disposable Linux container with only the per-job workspace mounted. Use the local Ollama endpoint without provider credentials; apply explicit resource, process, filesystem, and network limits; translate only allowlisted lifecycle/result references into the existing JSON-lines executor contract; retain private reasoning and command output only in the mode-0600 executor transcript/workspace.
+
+## Acceptance Criteria
+
+A protected local profile can opt into a pinned Colima/Docker image and start a job from voice; the wrapper supports iterative local-Ollama planning, arbitrary shell commands inside the container, bounded public-internet acquisition, workspace-local package installation, durable report/artifact output, follow-ups, cancellation, and timeout; it mounts no host path except the private attempt workspace and receives no Radcliffe/provider/GitHub/keychain credentials; private/LAN endpoints and host metadata are blocked while required local inference is brokered outside the container; deterministic tests cover coding, public-web analysis, malformed model output, command/output/resource limits, secret and host-path probes, and container cleanup; an end-to-end deployed smoke proves the foreground remains responsive and Android sees lifecycle completion.

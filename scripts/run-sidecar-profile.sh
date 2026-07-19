@@ -19,6 +19,7 @@ fi
 set -a
 source "$env_file"
 set +a
+export RADCLIFFE_BUILD_REVISION="$(git rev-parse HEAD)"
 
 case "$profile" in
   local-ollama)

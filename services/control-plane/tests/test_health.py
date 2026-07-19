@@ -33,7 +33,11 @@ def settings(tmp_path) -> Settings:
 
 def test_health(tmp_path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
-        assert client.get("/healthz").json() == {"status": "ok"}
+        assert client.get("/healthz").json() == {
+            "status": "ok",
+            "build_revision": "development",
+            "capabilities": ["background_jobs_v1", "promoted_job_results_v1"],
+        }
 
 
 def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) -> None:

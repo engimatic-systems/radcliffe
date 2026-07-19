@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     source_root: Path = Path("fixtures/sources")
     telemetry_path: Path = Path("var/telemetry/events.jsonl")
     sidecar_url: str = "http://127.0.0.1:8787"
+    build_revision: str = Field(default="development", pattern=r"^(development|[a-f0-9]{7,64})$")
     room_token_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     managed_workers_enabled: bool = True
     worker_idle_seconds: int = Field(default=1800, ge=60)
