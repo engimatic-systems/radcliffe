@@ -40,3 +40,11 @@ Started rad-96c5 for the safe-pause notification slice: durable session-ordered 
 **2026-07-19T03:22:17Z**
 
 Completed rad-96c5: background JobEvent visibility is session-ordered and reconnectable, while fixed-phrase speech uses durable at-most-once dispositions and the existing foreground owner. Candidate user speech, transcription, active/paused turns, and unacknowledged current-generation playback all defer announcements; barge-in interrupts without restart duplication.
+
+**2026-07-19T03:24:17Z**
+
+Started rad-0eyx for the Android checkpoint: session-scoped JobEvent replay/deduplication, device-API hydration, accessible lifecycle cards, and idempotent follow-up/priority/cancel controls.
+
+**2026-07-19T03:36:40Z**
+
+Completed rad-0eyx: Android now hydrates and replay-deduplicates privacy-minimized background job status for the active session, shows accessible bounded job cards, and issues enrolled-device follow-up, priority, and cancellation commands without exposing private instructions or executor output. Full repository checks pass; physical-phone validation remains the checkpoint.
