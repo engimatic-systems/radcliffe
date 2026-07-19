@@ -128,6 +128,10 @@ RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sa
 RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/radcliffe/var/jobs
 ```
 
+The private macOS launcher reads these non-secret machine-specific values from
+ignored, mode-0600 `var/job-executor.env` when present; application and provider
+secrets remain in `var/.env`.
+
 The broker itself receives no application/provider credentials. Each
 model-selected command runs in a new container with Docker's default seccomp
 boundary, all Linux capabilities dropped, `no-new-privileges`, PID/CPU/memory,
