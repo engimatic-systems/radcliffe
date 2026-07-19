@@ -105,6 +105,22 @@ executor or image failure requires rebuilding/configuring the job sandbox
 before restart. Do not hand off an APK until this gate and
 `make check-operations-local` both pass.
 
+For a phone connecting from outside the Mac's LAN, expose the loopback control
+plane on a dedicated tailnet-only HTTPS port without replacing unrelated Serve
+handlers:
+
+```sh
+tailscale serve --bg --https=8443 http://127.0.0.1:8000
+curl --fail https://<machine>.<tailnet>.ts.net:8443/healthz
+```
+
+Configure Android with that exact HTTPS origin, not the Mac's LAN address and
+not another Tailscale Serve port. Changing origins deliberately requires device
+re-enrollment with the protected bootstrap token. A successful host-side curl
+does not prove the phone route: before declaring the checkpoint passed, require
+the app's Connection test and Recent conversations load to succeed over the
+intended phone network.
+
 For a content-free correlated trace/metrics bundle, run
 `make export-diagnostics-local`. Its bounded schema and redaction rules are in
 [`telemetry-operations.md`](telemetry-operations.md).

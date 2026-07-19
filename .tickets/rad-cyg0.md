@@ -1,6 +1,6 @@
 ---
 id: rad-cyg0
-status: closed
+status: open
 deps: []
 links: []
 created: 2026-07-19T20:46:12Z
@@ -31,3 +31,7 @@ Live reproduction on 2026-07-19: /readyz returned HTTP 200 ready with database, 
 **2026-07-19T21:28:19Z**
 
 Implemented the enforced content-free phone preflight: live control/sidecar revisions and capabilities must match the checkout, run_job/manage_job must be advertised, the executor and configured image must be available, and a credential-free synthetic process-contract job must complete. Regression tests cover the stale sidecar, missing tools, revision mismatch, and disabled executor; live preflight and operations gates pass.
+
+**2026-07-19T23:01:01Z**
+
+Physical checkpoint exposed a remaining procedural gap: host-side revision/capability/executor checks passed while the Pixel's saved control origin was not tailnet-reachable. The Mac and Android Tailscale peers were online, the control listener was healthy, and no Pixel request reached the server. Added a dedicated tailnet-only HTTPS control endpoint on port 8443 without disturbing the existing dashboard, and updated the runbook to require the app Connection test plus Recent conversations load before calling a phone handoff ready.
