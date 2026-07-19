@@ -1,5 +1,7 @@
 # Radcliffe agent instructions
 
+Copy every Android APK produced for testing to `/Users/ravd/agent-share/radcliffe/`.
+
 ## Conversation data
 
 - Treat Radcliffe conversation text and stored conversation envelopes as available for agent
