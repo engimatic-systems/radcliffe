@@ -548,9 +548,21 @@ record returned to the authenticated internal executor. Conversation-facing
 `JobEvent` messages contain lifecycle metadata, stable detail codes, and
 promoted entity/artifact IDs. They have no instruction, follow-up, raw command
 output, worker transcript, or generic text field. Event revisions replay after
-restart, allowing the later foreground notification scheduler to apply
-`immediate`, `next_safe_pause`, `silent`, or `user_waiting` policy without
-reconstructing private job context.
+restart, while a database-wide delivery sequence orders interleaved events
+across every job in a session.
+
+The media worker sends typed event visibility as soon as it observes that
+ordered feed and replays it by stable event ID on reconnect. Speech is a
+separate durable disposition. Only registered lifecycle kind/detail pairs map
+to fixed phrases; job instructions and executor output can never become
+announcement text. `silent` records visibility without speech. `immediate`,
+`next_safe_pause`, and `user_waiting` all remain subject to the same hard gate:
+the endpoint has no candidate user speech or transcription in flight, the
+foreground pipeline is listening with no active owner or paused source, and
+no current-generation playback remains unacknowledged. The pipeline rechecks
+the gate after reserving the delivery and releases it if safety changed before
+audio starts. Once audio starts, completion, interruption, or failure is
+terminal and survives restart so an announcement cannot be duplicated.
 
 Execution is a separate opt-in process protocol. The configured command is a
 user-supplied VM/container/sandbox wrapper and is invoked without a shell in a

@@ -333,6 +333,7 @@ def test_job_commands_executor_lease_and_restart_are_deterministic(tmp_path) -> 
             "cancellation_requested",
             "cancelled",
         ]
+        assert [item["delivery_sequence"] for item in events.json()["items"]] == list(range(1, 9))
         assert private_instruction not in events.text
         assert private_follow_up not in events.text
         assert private_live_follow_up not in events.text

@@ -733,7 +733,7 @@ class JobCommand(_message.Message):
     def __init__(self, schema_version: _Optional[int] = ..., command_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobCommandKind, str]] = ..., idempotency_key: _Optional[str] = ..., follow_up: _Optional[str] = ..., priority: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class JobEvent(_message.Message):
-    __slots__ = ("schema_version", "event_id", "job", "kind", "notification_policy", "priority", "detail_code", "entity_ids", "artifact_ids", "occurred_at")
+    __slots__ = ("schema_version", "event_id", "job", "kind", "notification_policy", "priority", "detail_code", "entity_ids", "artifact_ids", "occurred_at", "delivery_sequence")
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     JOB_FIELD_NUMBER: _ClassVar[int]
@@ -744,6 +744,7 @@ class JobEvent(_message.Message):
     ENTITY_IDS_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_IDS_FIELD_NUMBER: _ClassVar[int]
     OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    DELIVERY_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     schema_version: int
     event_id: str
     job: JobRef
@@ -754,7 +755,8 @@ class JobEvent(_message.Message):
     entity_ids: _containers.RepeatedScalarFieldContainer[str]
     artifact_ids: _containers.RepeatedScalarFieldContainer[str]
     occurred_at: _timestamp_pb2.Timestamp
-    def __init__(self, schema_version: _Optional[int] = ..., event_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobEventKind, str]] = ..., notification_policy: _Optional[_Union[JobNotificationPolicy, str]] = ..., priority: _Optional[int] = ..., detail_code: _Optional[str] = ..., entity_ids: _Optional[_Iterable[str]] = ..., artifact_ids: _Optional[_Iterable[str]] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    delivery_sequence: int
+    def __init__(self, schema_version: _Optional[int] = ..., event_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobEventKind, str]] = ..., notification_policy: _Optional[_Union[JobNotificationPolicy, str]] = ..., priority: _Optional[int] = ..., detail_code: _Optional[str] = ..., entity_ids: _Optional[_Iterable[str]] = ..., artifact_ids: _Optional[_Iterable[str]] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., delivery_sequence: _Optional[int] = ...) -> None: ...
 
 class Reconnect(_message.Message):
     __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key")

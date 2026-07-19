@@ -437,6 +437,7 @@ class JobListResponse(BaseModel):
 
 class JobEventResponse(BaseModel):
     event_id: str
+    delivery_sequence: int
     job_id: str
     revision: int
     kind: Literal[
@@ -666,6 +667,7 @@ def _job_summary(record: JobRecord) -> JobSummaryResponse:
 def _job_event(event: JobEventRecord) -> JobEventResponse:
     return JobEventResponse(
         event_id=event.event_id,
+        delivery_sequence=event.delivery_sequence,
         job_id=event.job_id,
         revision=event.revision,
         kind=event.kind.value,

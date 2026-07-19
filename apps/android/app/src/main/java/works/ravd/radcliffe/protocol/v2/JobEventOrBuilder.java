@@ -139,4 +139,10 @@ public interface JobEventOrBuilder extends
    * @return The occurredAt.
    */
   com.google.protobuf.Timestamp getOccurredAt();
+
+  /**
+   * <code>uint64 delivery_sequence = 11;</code>
+   * @return The deliverySequence.
+   */
+  long getDeliverySequence();
 }

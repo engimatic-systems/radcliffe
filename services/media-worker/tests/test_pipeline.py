@@ -28,7 +28,11 @@ from radcliffe_domain.session import (
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolGateway
-from radcliffe_media.pipeline import VoicePipeline
+from radcliffe_media.pipeline import (
+    JobAnnouncement,
+    NotificationAnnouncementOutcome,
+    VoicePipeline,
+)
 from radcliffe_media.sidecar import SidecarEvent
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
@@ -98,6 +102,26 @@ class FailFirstPublisher(FakePublisher):
             pcm_audio,
             wait_for_playback=wait_for_playback,
         )
+
+
+class BlockingPublisher(FakePublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        del wait_for_playback
+        self.segment_ids.append(segment_id)
+        self.audio.append(pcm_audio)
+        self.published.set()
+        await self.release.wait()
+        return len(pcm_audio)
 
 
 class PauseAtSecondBoundaryPublisher(FakePublisher):
@@ -1512,3 +1536,141 @@ async def test_punctuation_poor_output_streams_before_model_completion(tmp_path)
     assert "".join(tts.inputs) == orchestrator.text + "Done."
     assert len(publisher.segment_ids) == len(set(publisher.segment_ids))
     assert all(len(chunk) <= 40 for chunk in tts.inputs[:-1])
+
+
+@pytest.mark.asyncio
+async def test_job_announcement_uses_the_foreground_owner_without_entering_context(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        tts,
+        publisher,
+    )
+    await pipeline.start()
+    claimed = []
+
+    async def claim() -> bool:
+        claimed.append(True)
+        return True
+
+    async def release() -> bool:
+        raise AssertionError("a safe announcement must not release its claim")
+
+    outcome = await pipeline.announce_job(
+        "job-event:job-1:3",
+        JobAnnouncement.COMPLETE,
+        foreground_quiet=lambda: True,
+        claim=claim,
+        release=release,
+    )
+
+    assert outcome is NotificationAnnouncementOutcome.SPOKEN
+    assert claimed == [True]
+    assert tts.inputs == ["Your background job is complete."]
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert await store.replay("s1") == ()
+
+
+@pytest.mark.asyncio
+async def test_job_announcement_rechecks_user_speech_after_claim(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+    quiet = [True]
+    released = []
+
+    async def claim() -> bool:
+        quiet[0] = False
+        return True
+
+    async def release() -> bool:
+        released.append(True)
+        return True
+
+    outcome = await pipeline.announce_job(
+        "job-event:job-1:3",
+        JobAnnouncement.COMPLETE,
+        foreground_quiet=lambda: quiet[0],
+        claim=claim,
+        release=release,
+    )
+
+    assert outcome is NotificationAnnouncementOutcome.DEFERRED
+    assert released == [True]
+    assert pipeline.engine.state is ConversationState.LISTENING
+
+
+@pytest.mark.asyncio
+async def test_barge_in_interrupts_job_announcement_without_stale_audio(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = BlockingPublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+    )
+    await pipeline.start()
+
+    async def claim() -> bool:
+        return True
+
+    async def release() -> bool:
+        raise AssertionError("audio started, so the claim must remain terminal")
+
+    announcement = asyncio.create_task(
+        pipeline.announce_job(
+            "job-event:job-1:3",
+            JobAnnouncement.COMPLETE,
+            foreground_quiet=lambda: True,
+            claim=claim,
+            release=release,
+        )
+    )
+    await asyncio.wait_for(publisher.published.wait(), timeout=1)
+
+    await pipeline.barge_in()
+
+    assert await announcement is NotificationAnnouncementOutcome.INTERRUPTED
+    assert publisher.flushed
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert pipeline.notification_foreground_available()
+
+
+@pytest.mark.asyncio
+async def test_unacknowledged_current_generation_audio_blocks_job_announcement(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Leave playback awaiting acknowledgement")
+
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert events.playback_segments
+    assert not pipeline.notification_foreground_available()

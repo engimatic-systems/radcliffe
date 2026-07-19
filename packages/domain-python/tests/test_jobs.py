@@ -7,6 +7,7 @@ from radcliffe_domain.jobs import (
     JobConflictError,
     JobEventKind,
     JobLeaseError,
+    JobNotificationDisposition,
     JobNotificationPolicy,
     JobStateError,
     JobStatus,
@@ -255,3 +256,115 @@ async def test_restart_replays_metadata_and_claim_keeps_private_context_separate
     final_event = (await reopened.events(claim.record.job_id))[-1]
     assert final_event.entity_ids == ("paper:one",)
     assert final_event.artifact_ids == ("artifact:report",)
+
+
+@pytest.mark.asyncio
+async def test_session_events_have_one_durable_order_across_jobs(tmp_path) -> None:
+    path, session, store = await job_store(tmp_path, ids=("job-1", "job-2"))
+    first = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-1",
+        instruction="private first instruction",
+    )
+    await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-2",
+        instruction="private second instruction",
+    )
+    await store.set_priority(
+        principal_id="owner",
+        job_id=first.record.job_id,
+        priority=0,
+        idempotency_key="priority-1",
+    )
+
+    events = await store.session_events(session.session_id)
+    assert [event.delivery_sequence for event in events] == [1, 2, 3]
+    assert [event.job_id for event in events] == ["job-1", "job-2", "job-1"]
+    assert [
+        event.delivery_sequence
+        for event in await store.session_events(session.session_id, after_sequence=1)
+    ] == [2, 3]
+    assert "private" not in repr(events)
+
+    reopened = JobStore(path)
+    assert await reopened.session_events(session.session_id) == events
+
+
+@pytest.mark.asyncio
+async def test_notification_claim_and_final_disposition_are_restart_safe(tmp_path) -> None:
+    path, session, store = await job_store(tmp_path)
+    accepted = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-1",
+        instruction="private instruction",
+    )
+    event = (await store.events(accepted.record.job_id))[0]
+
+    claims = await asyncio.gather(
+        *(
+            store.claim_notification(
+                session_id=session.session_id,
+                event_id=event.event_id,
+                claim_owner=f"media-{index}",
+            )
+            for index in range(8)
+        )
+    )
+    assert sum(claims) == 1
+    winner = f"media-{claims.index(True)}"
+    assert await store.complete_notification(
+        session_id=session.session_id,
+        event_id=event.event_id,
+        claim_owner=winner,
+        disposition=JobNotificationDisposition.SPOKEN,
+    )
+
+    reopened = JobStore(path)
+    assert (
+        await reopened.notification_disposition(
+            session_id=session.session_id,
+            event_id=event.event_id,
+        )
+        is JobNotificationDisposition.SPOKEN
+    )
+    assert not await reopened.claim_notification(
+        session_id=session.session_id,
+        event_id=event.event_id,
+        claim_owner="media-after-restart",
+    )
+
+
+@pytest.mark.asyncio
+async def test_notification_claim_can_be_released_before_audio_starts(tmp_path) -> None:
+    _path, session, store = await job_store(tmp_path)
+    accepted = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-1",
+        instruction="private instruction",
+    )
+    event = (await store.events(accepted.record.job_id))[0]
+
+    assert await store.claim_notification(
+        session_id=session.session_id,
+        event_id=event.event_id,
+        claim_owner="media-one",
+    )
+    assert await store.release_notification(
+        session_id=session.session_id,
+        event_id=event.event_id,
+        claim_owner="media-one",
+    )
+    assert await store.claim_notification(
+        session_id=session.session_id,
+        event_id=event.event_id,
+        claim_owner="media-two",
+    )

@@ -160,13 +160,20 @@ def populated_database(path: Path, *, suffix: str = "one") -> Path:
                 now,
             ),
         )
+        sequence_start = database.execute(
+            "SELECT COALESCE(MAX(delivery_sequence), 0) FROM background_job_events"
+        ).fetchone()[0]
         for revision, kind, detail in (
             (1, "accepted", "accepted"),
             (2, "follow_up_added", "follow_up_added"),
         ):
             database.execute(
-                """INSERT INTO background_job_events VALUES (
-                    ?, ?, ?, ?, 'queued', 'next_safe_pause', 2, ?, '[]', '[]', ?
+                """INSERT INTO background_job_events(
+                    event_id, job_id, revision, kind, status, notification_policy,
+                    priority, detail_code, entity_ids_json, artifact_ids_json,
+                    occurred_at, delivery_sequence
+                ) VALUES (
+                    ?, ?, ?, ?, 'queued', 'next_safe_pause', 2, ?, '[]', '[]', ?, ?
                 )""",
                 (
                     f"job-event-{suffix}-{revision}",
@@ -175,6 +182,7 @@ def populated_database(path: Path, *, suffix: str = "one") -> Path:
                     kind,
                     detail,
                     now,
+                    sequence_start + revision,
                 ),
             )
         database.commit()
@@ -250,7 +258,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 9,
+        "schema_migrations": 10,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
@@ -264,6 +272,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
         "background_job_follow_ups": 1,
         "background_job_commands": 1,
         "background_job_events": 2,
+        "background_job_notification_deliveries": 0,
     }
     with pytest.raises(RECOVERY.RecoveryError, match="cannot replace the live"):
         RECOVERY.restore_backup(

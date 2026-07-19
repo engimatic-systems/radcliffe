@@ -16,6 +16,7 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
 from radcliffe_domain.configuration import ConfigurationRegistry
+from radcliffe_domain.jobs import JobStore
 from radcliffe_domain.session import PlaybackAcknowledgement
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
@@ -28,6 +29,7 @@ from radcliffe_media.livekit_adapter import (
     RadcliffeLiveKitTransport,
     create_transport,
 )
+from radcliffe_media.notifications import JobNotificationScheduler
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.session_actions import SessionActionClient
 from radcliffe_media.sidecar import SidecarClient
@@ -184,6 +186,14 @@ class EndpointProcessor(FrameProcessor):
         self.turn_task: asyncio.Task[None] | None = None
         self.paused = False
 
+    def foreground_quiet(self) -> bool:
+        return (
+            not self.paused
+            and not self.speaking
+            and not self.buffer
+            and (self.turn_task is None or self.turn_task.done())
+        )
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if not isinstance(frame, UserAudioRawFrame):
@@ -221,7 +231,8 @@ class EndpointProcessor(FrameProcessor):
             self.candidate_participant_id = frame.user_id
             if self.capture is not None:
                 self.capture.candidate_started(frame.user_id)
-            self.started_during_active_turn = (
+            voice_active = self.voice is not None and self.voice.foreground_turn_active()
+            self.started_during_active_turn = voice_active or (
                 self.turn_task is not None and not self.turn_task.done()
             )
         if not self.speaking:
@@ -677,6 +688,17 @@ async def run() -> None:
     )
     endpoint.voice = voice
     await voice.start()
+    notifications = JobNotificationScheduler(
+        store=JobStore(database_path),
+        session_id=required["RADCLIFFE_SESSION_ID"] or "",
+        events=event_sink,
+        voice=voice,
+        foreground_quiet=endpoint.foreground_quiet,
+        poll_interval_seconds=float(
+            os.environ.get("RADCLIFFE_JOB_NOTIFICATION_POLL_SECONDS", "0.25")
+        ),
+    )
+    await notifications.start()
     controls = ClientControlHandler(endpoint)
 
     async def on_data_received(
@@ -697,6 +719,7 @@ async def run() -> None:
                 active_transport.participant_identity(participant_id),
             )
         await endpoint.participant_connected()
+        await notifications.replay_visibility(participant_id)
 
     async def on_audio_track_subscribed(
         active_transport: RadcliffeLiveKitTransport, participant_id: str
@@ -712,6 +735,7 @@ async def run() -> None:
     async def on_input_ready(participant_id: str) -> None:
         generation = await voice.input_ready()
         await event_sink.session_ready(generation, participant_id)
+        notifications.wake()
         logger.info(
             "voice input ready participant_id={} generation={}",
             participant_id,
@@ -736,7 +760,10 @@ async def run() -> None:
     )
     runner = WorkerRunner(handle_sigint=True)
     await runner.add_workers(worker)
-    await runner.run()
+    try:
+        await runner.run()
+    finally:
+        await notifications.stop()
 
 
 def main() -> None:
