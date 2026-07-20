@@ -46,8 +46,10 @@ class FakeSandbox:
 class ScriptedOllama(OllamaAgent):
     def __init__(self, messages: list[dict[str, object]]) -> None:
         self.messages = messages
+        self.contexts: list[list[dict[str, object]]] = []
 
-    def chat(self, _messages: list[dict[str, object]]) -> dict[str, object]:
+    def chat(self, messages: list[dict[str, object]]) -> dict[str, object]:
+        self.contexts.append(json.loads(json.dumps(messages)))
         return self.messages.pop(0)
 
 
@@ -56,6 +58,20 @@ def tool_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
         "role": "assistant",
         "content": "",
         "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
+    }
+
+
+def tool_batch(*calls: tuple[str, dict[str, object]]) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": f"call-{index}",
+                "function": {"name": name, "arguments": arguments},
+            }
+            for index, (name, arguments) in enumerate(calls)
+        ],
     }
 
 
@@ -152,6 +168,133 @@ def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) ->
     finally:
         transcript.close()
     assert json.loads(capsys.readouterr().out)["detailCode"] == "resource_exhausted"
+
+
+def test_agent_sequences_and_repairs_the_observed_batched_fibonacci_calls(tmp_path, capsys) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+
+    class FibonacciSandbox(FakeSandbox):
+        def execute(self, command: str, *, timeout_seconds: int) -> tuple[int, str, bool]:
+            self.commands.append((command, timeout_seconds))
+            if "fibonacci_script.py" in command and ">" in command:
+                self.workspace.joinpath("fibonacci_script.py").write_text(
+                    "print(sum([1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]) / 17)\n"
+                )
+                return 0, "", False
+            if command == "python3 fibonacci_script.py":
+                return 0, "13.647058823529411\n", False
+            return 1, "unexpected command", False
+
+    sandbox = FibonacciSandbox(artifact_workspace)
+    ollama = ScriptedOllama(
+        [
+            tool_batch(
+                (
+                    "run_shell",
+                    {
+                        "command": "printf script > fibonacci_script.py",
+                        "purpose": "coding",
+                        "timeoutSeconds": 30,
+                    },
+                ),
+                (
+                    "run_shell",
+                    {
+                        "command": "python3 fibonacci_script.py",
+                        "purpose": "executing",
+                        "timeoutSeconds": 10,
+                    },
+                ),
+                (
+                    "finish_job",
+                    {
+                        "artifactPaths": ["/workspace/fibonacci_script.py"],
+                        "summary": "Calculated and checked the result.",
+                    },
+                ),
+            ),
+            tool_batch(
+                (
+                    "run_shell",
+                    {
+                        "command": "python3 fibonacci_script.py",
+                        "purpose": "executing",
+                        "timeoutSeconds": 10,
+                    },
+                ),
+                (
+                    "finish_job",
+                    {
+                        "artifactPaths": ["/workspace/fibonacci_script.py"],
+                        "summary": "Calculated and checked the result.",
+                    },
+                ),
+            ),
+            tool_call(
+                "finish_job",
+                {
+                    "artifactPaths": ["/workspace/fibonacci_script.py"],
+                    "summary": "Calculated and checked the result: 13.647058823529411.",
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            ollama=ollama,
+            transcript=transcript,
+            max_steps=3,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(frame["kind"], frame["detailCode"]) for frame in frames] == [
+        ("progress", "coding"),
+        ("progress", "testing"),
+        ("succeeded", "completed"),
+    ]
+    assert sandbox.commands == [
+        ("printf script > fibonacci_script.py", 30),
+        ("python3 fibonacci_script.py", 10),
+    ]
+    promoted = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert promoted is not None
+    assert promoted.artifacts[0].path == "fibonacci_script.py"
+    assert len(ollama.contexts[1][-2]["tool_calls"]) == 1
+
+
+def test_agent_retries_invalid_arguments_then_reports_a_specific_failure(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+    invalid = tool_call(
+        "run_shell",
+        {"command": "true", "purpose": "emailing", "timeoutSeconds": 10},
+    )
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
+            ollama=ScriptedOllama([invalid, invalid, invalid]),
+            transcript=transcript,
+            max_steps=3,
+        )
+    finally:
+        transcript.close()
+
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "tool_arguments_invalid"
+    records = [
+        json.loads(line)
+        for line in workspace.joinpath("agent-transcript.jsonl").read_text().splitlines()
+    ]
+    assert [record["kind"] for record in records].count("tool_error") == 3
 
 
 def test_artifact_promotion_rejects_symlinks_and_workspace_escape(tmp_path) -> None:

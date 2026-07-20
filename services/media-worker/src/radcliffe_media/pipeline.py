@@ -26,6 +26,7 @@ from radcliffe_domain.projection import (
     CONFIGURATION_EVENT,
     PROVIDER_BUDGET_EVENT,
     SESSION_TRANSITION_EVENT,
+    TOOL_FAILURE_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
@@ -49,6 +50,9 @@ from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
 _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
+_REGISTERED_TOOL_NAMES = frozenset(
+    {"list_sources", "read_source", "configure", "manage_session", "run_job", "manage_job"}
+)
 
 
 class JobAnnouncement(StrEnum):
@@ -610,7 +614,33 @@ class VoicePipeline:
                 if not source_rendered:
                     buffer += delta
                     buffer = await self._speak_complete_sentences(buffer, operation, turn)
-            elif event.type == "tool_end" and not bool(event.payload.get("isError")):
+            elif event.type == "tool_end" and bool(event.payload.get("isError")):
+                raw_tool_name = event.payload.get("toolName")
+                tool_name = (
+                    raw_tool_name
+                    if isinstance(raw_tool_name, str) and raw_tool_name in _REGISTERED_TOOL_NAMES
+                    else "unknown"
+                )
+                await self._append_text(
+                    SourceKind.SYSTEM,
+                    "Tool call failed",
+                    {
+                        TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+                        TURN_ID_METADATA: turn.turn_id,
+                        "radcliffe.tool.name": tool_name,
+                        "radcliffe.tool.outcome": "failed",
+                    },
+                )
+                self.telemetry.emit(
+                    component="media_worker",
+                    event="tool_call",
+                    outcome="failed",
+                    session_id=self.engine.session_id,
+                    generation=operation.generation,
+                    phase=tool_name,
+                    operation=operation,
+                )
+            elif event.type == "tool_end":
                 source = await self._resolve_source(event.payload.get("result"))
                 if source is not None:
                     if self.engine.state is ConversationState.THINKING:

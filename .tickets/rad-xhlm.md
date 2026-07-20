@@ -21,3 +21,9 @@ Remove the Conversation behavior card and replace it with one compact cycling bu
 ## Acceptance Criteria
 
 The large Conversation behavior box is gone; two compact accessible buttons show and cycle the effective speech rate and detail level, with detail rendered as +, ++, or +++; pending, success, reconnect, and failure states cannot display a value that was not applied; adding one or several jobs leaves a practically usable conversation timeline on the target Pixel; job status and controls remain reachable; Compose/UI tests cover all cycles, restored state, errors, multiple jobs, font scaling, and TalkBack labels.
+
+## Notes
+
+**2026-07-20T02:12:02Z**
+
+2026-07-19 product clarification: background jobs use an expandable summary; the speech-rate control displays exactly one current value at a time, and each tap advances to the next value in the registered cycle.

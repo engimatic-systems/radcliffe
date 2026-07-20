@@ -6,11 +6,18 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CONFIGURE_PARAMETERS,
   convertRadcliffeContext,
+  MANAGE_JOB_PARAMETERS,
+  MANAGE_SESSION_PARAMETERS,
   modelContextFromRequest,
   PiAgentOrchestrator,
+  prepareManageJobArguments,
+  prepareManageSessionArguments,
+  prepareRunJobArguments,
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
+  RUN_JOB_PARAMETERS,
 } from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
 import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
@@ -275,6 +282,107 @@ describe("PiAgentOrchestrator", () => {
     expect(context.tools.map((tool) => tool.name)).toContain("run_job");
     expect(context.tools.map((tool) => tool.name)).toContain("manage_job");
     expect(context.tools.map((tool) => tool.name)).toEqual(RADCLIFFE_TOOL_NAMES);
+  });
+
+  it("publishes provider-compatible object schemas with standard enums", () => {
+    for (const schema of [
+      CONFIGURE_PARAMETERS,
+      MANAGE_SESSION_PARAMETERS,
+      RUN_JOB_PARAMETERS,
+      MANAGE_JOB_PARAMETERS,
+    ]) {
+      const wireSchema = schema as unknown as Record<string, unknown>;
+      expect(wireSchema.type).toBe("object");
+      expect(wireSchema).not.toHaveProperty("anyOf");
+      expect(wireSchema).toHaveProperty("properties");
+      expect(wireSchema).toHaveProperty("required");
+    }
+    const manageSessionSchema = MANAGE_SESSION_PARAMETERS as unknown as {
+      properties: Record<string, unknown>;
+    };
+    const manageJobSchema = MANAGE_JOB_PARAMETERS as unknown as {
+      properties: Record<string, unknown>;
+    };
+    const runJobSchema = RUN_JOB_PARAMETERS as unknown as {
+      properties: Record<string, unknown>;
+    };
+    expect(manageSessionSchema.properties.operation).toMatchObject({
+      type: "string",
+      enum: ["create", "switch", "restart", "end"],
+    });
+    expect(manageJobSchema.properties.operation).toMatchObject({
+      type: "string",
+      enum: ["status", "follow_up", "set_priority", "cancel"],
+    });
+    expect(runJobSchema.properties.notificationPolicy).toMatchObject({
+      type: "string",
+      enum: ["immediate", "next_safe_pause", "silent", "user_waiting"],
+    });
+  });
+
+  it("normalizes the observed safe weak-model arguments and rejects destructive aliases", () => {
+    expect(
+      prepareRunJobArguments({
+        instruction: "Create and test a Fibonacci script.",
+        notificationPolicy: "email",
+        priority: 5,
+        budgetUsd: 0,
+        maxRuntimeSeconds: 30,
+      }),
+    ).toEqual({
+      instruction: "Create and test a Fibonacci script.",
+      maxRuntimeSeconds: 30,
+    });
+    expect(prepareManageSessionArguments({ action: "create" })).toEqual({
+      operation: "create",
+    });
+    expect(prepareManageJobArguments({ action: "status", jobId: "job-1" })).toEqual({
+      operation: "status",
+      jobId: "job-1",
+    });
+    expect(() =>
+      prepareManageJobArguments({ action: "cancel", jobId: "job-1" }),
+    ).toThrow(/valid operation/);
+  });
+
+  it("applies safe argument preparation before executing a weak-model run_job call", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-weak-tool-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          {
+            instruction: "Create and test a Fibonacci script.",
+            notificationPolicy: "email",
+            priority: 5,
+            budgetUsd: 0,
+            maxRuntimeSeconds: 30,
+          },
+          { id: "weak-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The background job was accepted."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"queued"}',
+      details: { jobId: "job-1" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Run a Fibonacci job")]), () => undefined);
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        arguments: {
+          instruction: "Create and test a Fibonacci script.",
+          maxRuntimeSeconds: 30,
+        },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("accepts a background job without folding its private context into the response", async () => {

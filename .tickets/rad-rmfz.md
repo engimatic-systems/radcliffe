@@ -1,6 +1,6 @@
 ---
 id: rad-rmfz
-status: open
+status: in_progress
 deps: []
 links: [rad-i6i7]
 created: 2026-07-20T01:53:18Z

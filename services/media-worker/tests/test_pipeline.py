@@ -275,6 +275,25 @@ class ConfigurationEventOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class FailedToolEventOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "toolName": "manage_job",
+                "isError": True,
+                "result": {
+                    "privatePrompt": "must not persist",
+                    "arguments": {"jobId": "private-job-id"},
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "I corrected the tool call."})
+        yield SidecarEvent("model_complete", {"text": "I corrected the tool call."})
+        yield SidecarEvent("complete", {})
+
+
 class ImmediateSessionHandoffOrchestrator:
     def __init__(self) -> None:
         self.calls = 0
@@ -837,6 +856,40 @@ async def test_configuration_tool_result_is_live_auditable_and_excluded_from_mod
     audit_packet = context_replay(history)[history.index(audit)]
     assert not audit_packet.include
     assert "Behavior setting updated" not in audit_packet.content
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        FailedToolEventOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        telemetry=TelemetrySink(telemetry_path, strict=True),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Check a background job")
+
+    history = await store.replay("s1")
+    audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
+    assert audit.content.inline_text == "Tool call failed"
+    assert audit.metadata["radcliffe.tool.name"] == "manage_job"
+    assert not context_replay((audit,))[0].include
+    persisted = (tmp_path / "events.sqlite3").read_bytes()
+    telemetry = telemetry_path.read_text()
+    assert b"privatePrompt" not in persisted
+    assert b"private-job-id" not in persisted
+    assert "privatePrompt" not in telemetry
+    assert "private-job-id" not in telemetry
+    assert '"event":"tool_call"' in telemetry
+    assert '"outcome":"failed"' in telemetry
 
 
 @pytest.mark.asyncio

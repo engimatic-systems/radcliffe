@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from radcliffe_control.job_results import (
     PromotedArtifact,
@@ -30,8 +30,25 @@ COMMAND_OUTPUT_LIMIT = 24 * 1024
 MODEL_RESPONSE_LIMIT = 2 * 1024 * 1024
 AGENT_TRANSCRIPT_LIMIT = 1024 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+MAX_TOOL_ARGUMENT_CORRECTIONS = 3
 IMAGE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$")
 PURPOSES = frozenset({"searching", "downloading", "analyzing", "coding", "testing", "compacting"})
+PURPOSE_ALIASES = {
+    "analysis": "analyzing",
+    "analyze": "analyzing",
+    "browsing": "searching",
+    "code": "coding",
+    "download": "downloading",
+    "execute": "testing",
+    "executing": "testing",
+    "programming": "coding",
+    "research": "searching",
+    "running": "testing",
+    "test": "testing",
+    "verification": "testing",
+    "verifying": "testing",
+    "writing": "coding",
+}
 
 
 class StartFollowUp(BaseModel):
@@ -77,12 +94,35 @@ class RunShellArguments(BaseModel):
     purpose: Literal["searching", "downloading", "analyzing", "coding", "testing", "compacting"]
     timeout_seconds: int = Field(default=60, alias="timeoutSeconds", ge=1, le=180)
 
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def normalize_purpose(cls, value: object) -> object:
+        if isinstance(value, str):
+            return PURPOSE_ALIASES.get(value.strip().lower(), value)
+        return value
+
+
+def workspace_relative_artifact(value: str) -> str:
+    relative = PurePosixPath(value)
+    if relative.is_absolute():
+        if len(relative.parts) < 3 or relative.parts[:2] != ("/", "workspace"):
+            raise ValueError("artifact path is outside /workspace")
+        relative = PurePosixPath(*relative.parts[2:])
+    if not relative.parts or ".." in relative.parts or relative.as_posix() in {"", "."}:
+        raise ValueError("artifact path must name a workspace-relative file")
+    return relative.as_posix()
+
 
 class FinishJobArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     summary: str = Field(min_length=1, max_length=4_000)
     artifact_paths: tuple[str, ...] = Field(default=(), alias="artifactPaths", max_length=20)
+
+    @field_validator("artifact_paths")
+    @classmethod
+    def normalize_artifact_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(workspace_relative_artifact(value) for value in values)
 
 
 class PrivateTranscript:
@@ -444,8 +484,9 @@ def safe_artifacts(workspace: Path, paths: Sequence[str]) -> tuple[PromotedArtif
     artifacts: list[PromotedArtifact] = []
     seen: set[Path] = set()
     for value in paths:
-        relative = PurePosixPath(value)
-        if relative.is_absolute() or ".." in relative.parts:
+        try:
+            relative = PurePosixPath(workspace_relative_artifact(value))
+        except ValueError:
             continue
         raw_candidate = workspace / Path(*relative.parts)
         if any(
@@ -511,6 +552,39 @@ def run_agent(
         messages.append(
             {"role": "user", "content": f"User follow-up: {initial_follow_up.instruction}"}
         )
+    invalid_tool_calls = 0
+    executed_commands = 0
+
+    def reject_tool_call(tool_name: object, guidance: str) -> bool:
+        nonlocal invalid_tool_calls
+        invalid_tool_calls += 1
+        safe_name = (
+            tool_name
+            if isinstance(tool_name, str) and tool_name in {"run_shell", "finish_job"}
+            else "unknown"
+        )
+        transcript.append(
+            "tool_error",
+            {"tool": safe_name, "code": "invalid_tool_arguments"},
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": safe_name,
+                "content": json.dumps(
+                    {
+                        "error": "invalid_tool_arguments",
+                        "guidance": guidance,
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+        )
+        if invalid_tool_calls >= MAX_TOOL_ARGUMENT_CORRECTIONS:
+            emit_event("failed", "tool_arguments_invalid")
+            return True
+        return False
+
     for _step in range(max_steps):
         while not follow_ups.empty():
             new_follow_up = follow_ups.get()
@@ -523,9 +597,9 @@ def run_agent(
             )
         message = ollama.chat(messages)
         transcript.append("model", message)
-        messages.append(message)
         tool_calls = message.get("tool_calls")
         if not isinstance(tool_calls, list) or not tool_calls:
+            messages.append(message)
             messages.append(
                 {
                     "role": "user",
@@ -533,56 +607,102 @@ def run_agent(
                 }
             )
             continue
-        for raw_call in tool_calls:
-            if not isinstance(raw_call, dict) or not isinstance(raw_call.get("function"), dict):
-                raise RuntimeError("local model returned an invalid tool call")
-            function = raw_call["function"]
-            name = function.get("name")
-            arguments = function.get("arguments")
-            if not isinstance(arguments, dict):
-                raise RuntimeError("local model returned invalid tool arguments")
-            if name == "run_shell":
+
+        raw_call = tool_calls[0]
+        if not isinstance(raw_call, dict) or not isinstance(raw_call.get("function"), dict):
+            messages.append({"role": "assistant", "content": str(message.get("content", ""))})
+            if reject_tool_call("unknown", "Reissue exactly one run_shell or finish_job call."):
+                return False
+            continue
+        messages.append({**message, "tool_calls": [raw_call]})
+        if len(tool_calls) > 1:
+            transcript.append(
+                "tool_batch",
+                {"received": len(tool_calls), "executed": 1},
+            )
+        function = raw_call["function"]
+        name = function.get("name")
+        arguments = function.get("arguments")
+        if not isinstance(arguments, dict):
+            if reject_tool_call(
+                name,
+                "Tool arguments must be one JSON object; reissue exactly one call.",
+            ):
+                return False
+            continue
+        if name == "run_shell":
+            try:
                 shell_args = RunShellArguments.model_validate(arguments)
-                emit_event("progress", shell_args.purpose)
-                code, output, truncated = sandbox.execute(
-                    shell_args.command,
-                    timeout_seconds=shell_args.timeout_seconds,
-                )
-                observation = {
-                    "exitCode": code,
-                    "output": output,
-                    "truncated": truncated,
-                }
-                transcript.append(
-                    "shell",
-                    {"command": shell_args.command, **observation},
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_name": "run_shell",
-                        "content": json.dumps(observation, separators=(",", ":")),
-                    }
-                )
+            except ValidationError:
+                if reject_tool_call(
+                    name,
+                    "run_shell requires command, purpose, and an optional timeoutSeconds. "
+                    f"purpose must be one of {', '.join(sorted(PURPOSES))}.",
+                ):
+                    return False
                 continue
-            if name == "finish_job":
+            invalid_tool_calls = 0
+            emit_event("progress", shell_args.purpose)
+            code, output, truncated = sandbox.execute(
+                shell_args.command,
+                timeout_seconds=shell_args.timeout_seconds,
+            )
+            executed_commands += 1
+            observation = {
+                "exitCode": code,
+                "output": output,
+                "truncated": truncated,
+            }
+            transcript.append(
+                "shell",
+                {"command": shell_args.command, **observation},
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_name": "run_shell",
+                    "content": json.dumps(observation, separators=(",", ":")),
+                }
+            )
+            continue
+        if name == "finish_job":
+            try:
                 finish_args = FinishJobArguments.model_validate(arguments)
-                artifacts = safe_artifacts(sandbox.workspace, finish_args.artifact_paths)
-                result = PromotedJobResult(
-                    schemaVersion=1,
-                    jobId=start.job_id,
-                    summary=finish_args.summary.strip(),
-                    artifacts=artifacts,
-                )
-                write_promoted_result(result_workspace or sandbox.workspace, result)
-                result_id = hashlib.sha256(
-                    f"{start.job_id}:{finish_args.summary}".encode()
-                ).hexdigest()[:16]
-                artifact_ids = [f"artifact:result:{result_id}"]
-                artifact_ids.extend(item.artifact_id for item in artifacts)
-                emit_event("succeeded", "completed", artifact_ids=artifact_ids)
-                return True
-            raise RuntimeError("local model requested an unknown tool")
+            except ValidationError:
+                if reject_tool_call(
+                    name,
+                    "finish_job requires a summary and artifactPaths containing only files under "
+                    "/workspace; reissue exactly one call after checking the work.",
+                ):
+                    return False
+                continue
+            artifacts = safe_artifacts(sandbox.workspace, finish_args.artifact_paths)
+            expected_artifacts = len(set(finish_args.artifact_paths))
+            if executed_commands == 0 or len(artifacts) != expected_artifacts:
+                if reject_tool_call(
+                    name,
+                    "Run and check the work before finish_job, and name only existing regular "
+                    "workspace files in artifactPaths.",
+                ):
+                    return False
+                continue
+            invalid_tool_calls = 0
+            result = PromotedJobResult(
+                schemaVersion=1,
+                jobId=start.job_id,
+                summary=finish_args.summary.strip(),
+                artifacts=artifacts,
+            )
+            write_promoted_result(result_workspace or sandbox.workspace, result)
+            result_id = hashlib.sha256(
+                f"{start.job_id}:{finish_args.summary}".encode()
+            ).hexdigest()[:16]
+            artifact_ids = [f"artifact:result:{result_id}"]
+            artifact_ids.extend(item.artifact_id for item in artifacts)
+            emit_event("succeeded", "completed", artifact_ids=artifact_ids)
+            return True
+        if reject_tool_call(name, "Use exactly one run_shell or finish_job call."):
+            return False
     emit_event("failed", "resource_exhausted")
     return False
 
