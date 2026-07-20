@@ -1,6 +1,6 @@
 ---
 id: rad-tg8o
-status: open
+status: closed
 deps: []
 links: [rad-erac, rad-7t9h]
 created: 2026-07-17T23:54:20Z
@@ -27,3 +27,7 @@ The user can select a documented restricted profile or an advanced host-trust sa
 **2026-07-18T00:47:41Z**
 
 2026-07-17 target workflow: during an hour-long hands-free drive, the foreground agent can launch a six-month lab-paper search, keep chatting or remain quietly listening, announce completion safely, resolve a spoken reference to one returned paper, read its abstract exactly, search the full paper for applications, then launch a sandboxed website/TAM analysis while the conversation stays responsive. Background tool transcripts remain separate; only selected findings, sources, calculations, and artifacts are promoted.
+
+**2026-07-20T06:04:58Z**
+
+Acceptance complete across closed children rad-erac and rad-nhai plus linked rad-7t9h. The documented opt-in Colima/Docker restricted profile uses a pinned image, credential-free local broker, disposable per-job workspace, process/runtime/output/filesystem limits, no unrelated mounts, and default-deny public-only proxy. Deterministic and deployed evidence covers Unix code/data workflows, workspace-local packages, web acquisition, large-output bounds, separate replayable context, restart/lease recovery, follow-up/cancellation, secret/host probes, private-network/metadata/redirect/DNS escape attempts, and cleanup. Deployed 75d8bae readiness is green; artifacts/background-job-findings/20260720T055825Z/report.json proves public acquisition, durable exact source plus source-bound findings and inference labels; artifacts/voice-conformance/20260720T060147Z/report.json proves the responsive voice/source/interruption path. Private command transcripts remain separate and only bounded summaries, artifacts, source entities, and findings are promoted.

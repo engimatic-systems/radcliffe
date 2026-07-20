@@ -1,6 +1,6 @@
 ---
 id: rad-nhai
-status: in_progress
+status: closed
 deps: [rad-7h1e]
 links: []
 created: 2026-07-18T00:47:41Z
@@ -64,3 +64,7 @@ The Unix executor is live behind the new deployed-feature preflight. An isolated
 **2026-07-20T05:52:00Z**
 
 Implemented durable promoted job-source entities on commit 6e6b1f0. Background finish_job can bind a human source title and locator to a bounded UTF-8 Markdown artifact and SHA-256; succeeded JobEvents carry entity IDs. New read_job_source resolves an exact ID or unambiguous normalized title within the current session, rejects ambiguity/tampering/links/hash drift, and hands the verified source through direct canonical rendering without exposing private job transcripts. Full checks pass (316 Python passed/1 skipped, 56 sidecar, Android unit/lint). Deployed revision 6e6b1f0 passed the background-job readiness gate. Live local-Qwen + Colima evidence artifacts/background-job-sources/20260720T055123Z/report.json fetched a pinned public source via bounded egress, promoted one source, and rendered byte-identical content with SHA-256 b2580eab7825b9f22f790fb0edb7a6e239616e79907004adf36023c7ec4b9a4c; disposable session archived and test device revoked.
+
+**2026-07-20T06:03:53Z**
+
+Final autonomous acceptance on deployed commit 75d8bae: artifacts/background-job-findings/20260720T055825Z/report.json passes a real local-Qwen/Colima public acquisition with one exact hash-verified promoted source, two source-bound findings, and inference flags [false,true]. Full external LiveKit report artifacts/voice-conformance/20260720T060147Z/report.json passes after warm model load; first audio was 2.428s, interruption/source playback/restart/ownership checks passed. Deterministic suites cover prompt acceptance and foreground responsiveness; status/follow-up/priority/cancel grounding; running-cancel wins over late success; separate private executor context; crash/lease restart; all notification policies and safe-pause scheduling; interrupted announcement replay; ambiguous source failure; session-ordered simultaneous jobs; durable artifacts/entities; and exact canonical reading. The preceding cold run missed only first-turn latency at 5.268s, with all behavioral checks green, and the immediate warm rerun passed.
