@@ -22,3 +22,9 @@ Give the model a bounded acknowledgement contract for successful run_job calls a
 
 Successful run_job acceptance produces at most one short spoken sentence and never speaks the job ID, notification policy, priority, budget, runtime, revision, or serialized tool result. The Android job card still receives the canonical typed metadata, manage_job can use the exact ID later without the user repeating it, replay does not duplicate the acknowledgement, failure remains clear, and local plus Haiku prompt/tool-result tests cover acceptance, replay, and error paths.
 
+
+## Notes
+
+**2026-07-20T03:28:10Z**
+
+Implemented and deployed in b1bf61e: run_job tool-result prompting now requires exactly 'I started it.', sidecar output is canonically bounded on success/failure, and exact job IDs persist as deduplicated model-only context hidden from the Android message timeline. make check passed (300 Python, 1 skipped; 54 sidecar; Android unit/lint), operations and background-job preflight are ready, and a bounded live Haiku run_job turn emitted only 'I started it.' Physical phone confirmation remains.
