@@ -94,7 +94,7 @@ class ConversationControlsTest {
     }
 
     @Test
-    fun compactControlsHaveStableOrderIndependentOfApiOrdering() {
+    fun compactControlsShowOnlyValuesWhileTalkBackRetainsSettingNames() {
         val controls = configurationCycleControls(
             listOf(
                 setting("response_detail", "standard"),
@@ -104,6 +104,11 @@ class ConversationControlsTest {
         )
 
         assertEquals(listOf("Pace", "Detail"), controls.map { it.label })
+        assertEquals(listOf("1.0x", "++"), controls.map { it.displayValue })
+        assertTrue(controls.zip(listOf("Pace", "Detail")).all { (control, label) ->
+            control.accessibilityLabel.startsWith(label)
+        })
+        assertTrue(controls.all { "Pace" !in it.displayValue && "Detail" !in it.displayValue })
         assertTrue(controls.all { it.accessibilityLabel.contains("Double tap") })
     }
 }
