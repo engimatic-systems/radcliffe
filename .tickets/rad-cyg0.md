@@ -39,3 +39,7 @@ Physical checkpoint exposed a remaining procedural gap: host-side revision/capab
 **2026-07-20T00:00:49Z**
 
 Checked the live Tailscale Serve allocation before sharing the endpoint, moved the Radcliffe tailnet-only HTTPS proxy from 8443 to the permitted available port 8090, verified /healthz, removed the obsolete 8443 handler, and preserved the existing 8083 dashboard.
+
+**2026-07-20T00:13:19Z**
+
+The phone passed control connection and Recent loading but exposed a second un-gated route: room credentials advertised the Mac LAN-only LiveKit URL, so Android signaling timed out. Revision ef59f64 adds a protected network override, tailnet WSS signaling, configurable advertised ICE/TCP+UDP ports, regression coverage, and an operations requirement for a real room/audio checkpoint. Live gates and a fresh managed-room join pass; keep open until the Pixel confirms join/audio over the tailnet.

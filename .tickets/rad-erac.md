@@ -27,3 +27,7 @@ A protected local profile can opt into a pinned Colima/Docker image and start a 
 **2026-07-19T21:28:19Z**
 
 Deployed the revision-tagged Colima image and protected local executor profile. Real local-Ollama/Colima jobs completed through the live control-plane lease path, promoted bounded results, kept a concurrent foreground tool responsive, and cleaned up containers/networks; private/LAN, host-path, credential, malformed-output, resource, and artifact boundaries are covered. Physical Android lifecycle confirmation remains the checkpoint.
+
+**2026-07-20T00:13:19Z**
+
+Revision ef59f64 fixes the phone voice route discovered at deployment: LiveKit now advertises the verified tailnet address on the selected RTC port and room credentials use the tailnet WSS origin. Operations, background-job, and fresh managed-worker room checks pass; Android lifecycle confirmation remains pending.
