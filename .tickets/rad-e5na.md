@@ -2,7 +2,7 @@
 id: rad-e5na
 status: closed
 deps: []
-links: []
+links: [rad-mz5a]
 created: 2026-07-17T23:53:29Z
 type: feature
 priority: 1

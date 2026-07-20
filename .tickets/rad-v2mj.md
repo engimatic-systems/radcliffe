@@ -2,7 +2,7 @@
 id: rad-v2mj
 status: closed
 deps: [rad-7h1e]
-links: []
+links: [rad-xhlm]
 created: 2026-07-17T23:28:33Z
 type: feature
 priority: 1

@@ -2,7 +2,7 @@
 id: rad-0eyx
 status: closed
 deps: []
-links: []
+links: [rad-xhlm]
 created: 2026-07-19T03:24:11Z
 type: feature
 priority: 1
