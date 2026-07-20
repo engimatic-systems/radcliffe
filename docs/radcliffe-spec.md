@@ -561,6 +561,13 @@ hash-mismatched sources fail closed. A valid source enters the existing direct
 canonical-rendering path with the promoted title and locator as provenance, so
 the conversational model never recreates exact source text.
 
+Jobs may also promote bounded findings. Each finding has its own opaque entity
+ID, cites one or more promoted source entity IDs, and carries a required
+inference flag. A status inspection exposes only those claims and their source
+bindings alongside the promoted summary; it never exposes the job transcript.
+The foreground prompt requires source-title or locator citations and an
+explicit inference label when rendering those findings.
+
 The enrolled Android client hydrates privacy-minimized job summaries through
 the device API and folds replayed `JobEvent` messages into an active-session
 model by revision and delivery sequence. Accessible lifecycle cards show only

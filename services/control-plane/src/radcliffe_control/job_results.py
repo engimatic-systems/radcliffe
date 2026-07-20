@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 RESULT_FILENAME = "promoted-result.json"
 RESULT_LIMIT_BYTES = 64 * 1024
@@ -35,6 +36,28 @@ class PromotedSource(BaseModel):
     byte_length: int = Field(alias="byteLength", ge=1, le=1024 * 1024)
 
 
+class PromotedFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    entity_id: str = Field(alias="entityId", pattern=r"^finding:[a-f0-9]{16}$")
+    text: str = Field(min_length=1, max_length=1_000)
+    source_entity_ids: tuple[str, ...] = Field(
+        alias="sourceEntityIds",
+        min_length=1,
+        max_length=10,
+    )
+    inference: bool = False
+
+    @field_validator("source_entity_ids")
+    @classmethod
+    def valid_source_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if not all(re.fullmatch(r"source:[a-f0-9]{16}", value) for value in values):
+            raise ValueError("finding source entity IDs are invalid")
+        if len(set(values)) != len(values):
+            raise ValueError("finding source entity IDs must be unique")
+        return values
+
+
 class PromotedJobResult(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -43,6 +66,19 @@ class PromotedJobResult(BaseModel):
     summary: str = Field(min_length=1, max_length=4_000)
     artifacts: tuple[PromotedArtifact, ...] = Field(default=(), max_length=20)
     sources: tuple[PromotedSource, ...] = Field(default=(), max_length=20)
+    findings: tuple[PromotedFinding, ...] = Field(default=(), max_length=20)
+
+    @model_validator(mode="after")
+    def valid_entity_graph(self) -> PromotedJobResult:
+        source_ids = {source.entity_id for source in self.sources}
+        finding_ids = {finding.entity_id for finding in self.findings}
+        if len(source_ids) != len(self.sources) or len(finding_ids) != len(self.findings):
+            raise ValueError("promoted entity IDs must be unique")
+        if any(
+            not set(finding.source_entity_ids).issubset(source_ids) for finding in self.findings
+        ):
+            raise ValueError("promoted finding cites an unavailable source")
+        return self
 
 
 @dataclass(frozen=True, slots=True)

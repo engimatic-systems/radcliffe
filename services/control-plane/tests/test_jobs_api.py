@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
 from radcliffe_control.job_results import (
     PromotedArtifact,
+    PromotedFinding,
     PromotedJobResult,
     PromotedSource,
     write_promoted_result,
@@ -548,6 +549,18 @@ def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) ->
             sha256=other_digest,
             byteLength=len(other_canonical),
         )
+        direct_finding = PromotedFinding(
+            entityId=f"finding:{digest[:16]}",
+            text="The paper reports exact abstract bytes.",
+            sourceEntityIds=(source.entity_id,),
+            inference=False,
+        )
+        inferred_finding = PromotedFinding(
+            entityId=f"finding:{other_digest[:16]}",
+            text="The two papers likely share a scaling-law methodology.",
+            sourceEntityIds=(source.entity_id, other_source.entity_id),
+            inference=True,
+        )
         write_promoted_result(
             workspace,
             PromotedJobResult(
@@ -556,6 +569,7 @@ def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) ->
                 summary="Found the requested paper.",
                 artifacts=(artifact, other_artifact),
                 sources=(source, other_source),
+                findings=(direct_finding, inferred_finding),
             ),
         )
         succeeded = client.post(
@@ -565,11 +579,40 @@ def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) ->
                 "lease_owner": "paper-worker",
                 "kind": "succeeded",
                 "detail_code": "completed",
-                "entity_ids": [source.entity_id, other_source.entity_id],
+                "entity_ids": [
+                    source.entity_id,
+                    other_source.entity_id,
+                    direct_finding.entity_id,
+                    inferred_finding.entity_id,
+                ],
                 "artifact_ids": [artifact.artifact_id, other_artifact.artifact_id],
             },
         )
         assert succeeded.status_code == 200
+
+        job_status = tool(
+            client,
+            tool_name="manage_job",
+            call_id="status-paper",
+            arguments={"operation": "status", "jobId": job_id},
+        )
+        assert job_status.status_code == 200
+        result = json.loads(job_status.json()["modelContent"])["result"]
+        assert result["findings"] == [
+            {
+                "entityId": direct_finding.entity_id,
+                "text": direct_finding.text,
+                "sourceEntityIds": [source.entity_id],
+                "inference": False,
+            },
+            {
+                "entityId": inferred_finding.entity_id,
+                "text": inferred_finding.text,
+                "sourceEntityIds": [source.entity_id, other_source.entity_id],
+                "inference": True,
+            },
+        ]
+        assert job_status.json()["details"]["findingCount"] == "2"
 
         response = tool(
             client,

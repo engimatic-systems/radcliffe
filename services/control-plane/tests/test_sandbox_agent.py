@@ -20,6 +20,8 @@ def test_background_prompt_keeps_radcliffe_as_the_harness_not_the_model() -> Non
     normalized = " ".join(SYSTEM_PROMPT.split())
     assert normalized.count("harness is called Radcliffe") == 1
     assert "selected Unix job model" in normalized
+    assert "set inference true" in normalized
+    assert "paths of every source" in normalized
     assert "You are Radcliffe" not in normalized
     assert "Radcliffe's background Unix job agent" not in normalized
 
@@ -142,6 +144,13 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
                             "path": "report.md",
                         }
                     ],
+                    "findings": [
+                        {
+                            "text": "The result was verified.",
+                            "sourcePaths": ["report.md"],
+                            "inference": False,
+                        }
+                    ],
                 },
             ),
         ]
@@ -170,7 +179,12 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
     assert promoted.artifacts[0].path == "report.md"
     assert promoted.sources[0].name == "A Verified Result"
     assert promoted.sources[0].sha256 == promoted.artifacts[0].sha256
-    assert frames[-1]["entityIds"] == [promoted.sources[0].entity_id]
+    assert promoted.findings[0].source_entity_ids == (promoted.sources[0].entity_id,)
+    assert not promoted.findings[0].inference
+    assert frames[-1]["entityIds"] == [
+        promoted.sources[0].entity_id,
+        promoted.findings[0].entity_id,
+    ]
     assert not artifact_workspace.joinpath("agent-transcript.jsonl").exists()
     assert not artifact_workspace.joinpath("promoted-result.json").exists()
     assert sandbox.commands == [("python verify.py", 12)]
