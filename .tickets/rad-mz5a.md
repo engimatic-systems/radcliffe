@@ -16,7 +16,7 @@ The model-facing system prompt currently says You are Radcliffe, causing the sel
 
 ## Design
 
-Remove instructions that assign Radcliffe as the model persona from every model-facing prompt. State once that the harness is called Radcliffe, preserve operational and safety instructions, and let the selected model retain its actual identity without hard-coding a provider that may change.
+Remove instructions that assign Radcliffe as the model persona from every model-facing prompt. State once that the harness is called Radcliffe.
 
 ## Acceptance Criteria
 
