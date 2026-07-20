@@ -35,3 +35,7 @@ Implemented the enforced content-free phone preflight: live control/sidecar revi
 **2026-07-19T23:01:01Z**
 
 Physical checkpoint exposed a remaining procedural gap: host-side revision/capability/executor checks passed while the Pixel's saved control origin was not tailnet-reachable. The Mac and Android Tailscale peers were online, the control listener was healthy, and no Pixel request reached the server. Added a dedicated tailnet-only HTTPS control endpoint on port 8443 without disturbing the existing dashboard, and updated the runbook to require the app Connection test plus Recent conversations load before calling a phone handoff ready.
+
+**2026-07-20T00:00:49Z**
+
+Checked the live Tailscale Serve allocation before sharing the endpoint, moved the Radcliffe tailnet-only HTTPS proxy from 8443 to the permitted available port 8090, verified /healthz, removed the obsolete 8443 handler, and preserved the existing 8083 dashboard.

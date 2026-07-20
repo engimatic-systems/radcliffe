@@ -110,8 +110,8 @@ plane on a dedicated tailnet-only HTTPS port without replacing unrelated Serve
 handlers:
 
 ```sh
-tailscale serve --bg --https=8443 http://127.0.0.1:8000
-curl --fail https://<machine>.<tailnet>.ts.net:8443/healthz
+tailscale serve --bg --https=8090 http://127.0.0.1:8000
+curl --fail https://<machine>.<tailnet>.ts.net:8090/healthz
 ```
 
 Configure Android with that exact HTTPS origin, not the Mac's LAN address and
