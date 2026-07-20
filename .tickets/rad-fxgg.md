@@ -1,6 +1,6 @@
 ---
 id: rad-fxgg
-status: open
+status: closed
 deps: [rad-nhwy]
 links: []
 created: 2026-07-18T02:30:45Z
@@ -22,3 +22,9 @@ Use a small square visual inside a standard Android minimum touch target. Render
 
 The conversation toolbar uses a compact square icon instead of the visible Show system messages label; the off state is grayscale and the on state is orange; selected state is also distinguishable without color; the visual may be small but the touch target meets Android accessibility sizing and does not crowd adjacent controls; TalkBack announces Show system messages or Hide system messages plus checked state; tapping preserves the existing immediate filtering, ordering, persistence, diagnostics, and export behavior; focus, large-font, narrow-screen, light/dark-theme, and rapid-toggle tests pass; and no tooltip or transient label obscures the active conversation.
 
+
+## Notes
+
+**2026-07-20T05:19:37Z**
+
+Implemented a 20dp square visual within an exact 48dp focusable/toggleable touch target in the compact conversation toolbar. Off is a grayscale outline; on is an orange fill with a check, so state is not color-only. Switch semantics expose Show/Hide system messages plus Checked/Not checked, with no tooltip or transient overlay. The existing persisted boolean/filter/export path is unchanged. Tests cover actions/states, grayscale/orange cues, light/dark non-text contrast, and rapid state sequences; existing persistence/filter/order/export tests remain green. Android unit/lint passes.
