@@ -61,8 +61,10 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("run_job");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("respond with exactly one short sentence");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Never speak or reproduce its job ID");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("in one short sentence using only a few words");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("do not omit it");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("without a preamble");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("never speak or reproduce the job ID");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("matching manage_job call succeeds");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
   });
@@ -431,13 +433,14 @@ describe("PiAgentOrchestrator", () => {
           {
             type: "text",
             text:
-              "Background job accepted. Internal job ID: job-1. " +
-              "The identifier and all job metadata are private tool state: never quote them to the user. " +
-              "Reply with exactly: I started it.",
+              "The background job was accepted. " +
+              "Describe this job tool action in one short sentence using only a few words. " +
+              "Then provide any additional useful context the user requested; do not omit it. " +
+              "Do not quote job identifiers or serialized job metadata.",
           },
         ]);
         return fauxAssistantMessage(
-          "Accepted. Job ID job-1 is queued with next_safe_pause, priority 1, and revision 7.",
+          "I started it. While that runs, the earlier comparison still favors the smaller design.",
         );
       },
     ]);
@@ -467,13 +470,16 @@ describe("PiAgentOrchestrator", () => {
       expect.anything(),
       expect.any(Function),
     );
-    expect(events.filter((event) => event.type === "model_delta")).toEqual([
-      { type: "model_delta", requestId: "request-1", text: "I started it." },
-    ]);
+    expect(
+      events
+        .filter((event) => event.type === "model_delta")
+        .map((event) => ("text" in event ? event.text : ""))
+        .join(""),
+    ).toBe("I started it. While that runs, the earlier comparison still favors the smaller design.");
     expect(events).toContainEqual({
       type: "model_complete",
       requestId: "request-1",
-      text: "I started it.",
+      text: "I started it. While that runs, the earlier comparison still favors the smaller design.",
     });
     expect(
       JSON.stringify(
@@ -592,16 +598,23 @@ describe("PiAgentOrchestrator", () => {
     expect(JSON.stringify(events)).not.toContain("job-private-machine-identifier");
   });
 
-  it("forces and grounds a cancellation then replaces verbose output with a brief truth", async () => {
+  it("forces and grounds a cancellation while preserving useful context after a brief action", async () => {
     const faux = createFauxCore({ provider: "radcliffe-grounded-job-test" });
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("manage_job", { operation: "cancel", jobId: "job-1" }, { id: "cancel-1" }),
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage(
-        "Your job has been cancelled. Job ID: job-1. Status: Cancelled. Operation: Cancel.",
-      ),
+      (context) => {
+        const result = context.messages.find(
+          (message) => message.role === "toolResult" && message.toolCallId === "cancel-1",
+        );
+        expect(JSON.stringify(result?.content)).not.toContain("job-1");
+        expect(JSON.stringify(result?.content)).toContain("one short sentence");
+        return fauxAssistantMessage(
+          "I requested cancellation. I’ll keep the comparison available while it stops.",
+        );
+      },
     ]);
     const events: SidecarEvent[] = [];
     const stream = vi.fn(faux.streamSimple);
@@ -633,9 +646,13 @@ describe("PiAgentOrchestrator", () => {
     expect(events).toContainEqual({
       type: "model_complete",
       requestId: "request-1",
-      text: "I requested cancellation.",
+      text: "I requested cancellation. I’ll keep the comparison available while it stops.",
     });
-    expect(JSON.stringify(events)).not.toContain("Operation: Cancel");
+    expect(
+      JSON.stringify(
+        events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
+      ),
+    ).not.toContain("job-1");
   });
 
   it("does not ground cancellation on a mismatched successful status call", async () => {
@@ -674,22 +691,30 @@ describe("PiAgentOrchestrator", () => {
       requestText: "Add this as a follow-up to the job.",
       operation: "follow_up" as const,
       arguments: { operation: "follow_up" as const, jobId: "job-1", instruction: "Use CSV." },
-      response: "I added that to the job.",
+      response: "I added it. The final comparison will use CSV.",
     },
     {
       requestText: "Make the background job high priority.",
       operation: "set_priority" as const,
       arguments: { operation: "set_priority" as const, jobId: "job-1", priority: 4 },
-      response: "I changed the job priority.",
+      response: "I reprioritized it. The original analysis scope is unchanged.",
     },
-  ])("grounds and bounds an explicit $operation response", async (scenario) => {
+  ])("grounds an explicit $operation response without swallowing useful context", async (scenario) => {
     const faux = createFauxCore({ provider: `radcliffe-${scenario.operation}-test` });
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("manage_job", scenario.arguments, { id: `${scenario.operation}-1` }),
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("Verbose untrusted mutation details with job-1."),
+      (context) => {
+        const result = context.messages.find(
+          (message) =>
+            message.role === "toolResult" && message.toolCallId === `${scenario.operation}-1`,
+        );
+        expect(JSON.stringify(result?.content)).not.toContain("job-1");
+        expect(JSON.stringify(result?.content)).toContain("additional useful context");
+        return fauxAssistantMessage(scenario.response);
+      },
     ]);
     const events: SidecarEvent[] = [];
     const tool = vi.fn(async () => ({
@@ -715,7 +740,11 @@ describe("PiAgentOrchestrator", () => {
       requestId: "request-1",
       text: scenario.response,
     });
-    expect(JSON.stringify(events)).not.toContain("Verbose untrusted mutation details");
+    expect(
+      JSON.stringify(
+        events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
+      ),
+    ).not.toContain("job-1");
   });
 
   it("fails a status claim closed when manage_job errors", async () => {

@@ -16,11 +16,11 @@ After run_job succeeds, the conversational model reads a long machine-oriented s
 
 ## Design
 
-Give the model a bounded acknowledgement contract for successful run_job calls and keep detailed tool results available for subsequent manage_job reasoning without inviting them into ordinary speech. Prefer one short natural sentence such as I started it or That is running. Preserve visible typed lifecycle details and provide a concise actionable failure response when acceptance fails.
+Give the model a bounded acknowledgement contract for successful run_job and manage_job mutation calls and keep detailed tool results available for subsequent manage_job reasoning without inviting them into ordinary speech. The sentence describing the tool action should use only a few words, such as I started it or I requested cancellation. Any additional useful context requested by the user must follow normally instead of being swallowed. Preserve visible typed lifecycle details and provide a concise actionable failure response when acceptance fails.
 
 ## Acceptance Criteria
 
-Successful run_job acceptance produces at most one short spoken sentence and never speaks the job ID, notification policy, priority, budget, runtime, revision, or serialized tool result. The Android job card still receives the canonical typed metadata, manage_job can use the exact ID later without the user repeating it, replay does not duplicate the acknowledgement, failure remains clear, and local plus Haiku prompt/tool-result tests cover acceptance, replay, and error paths.
+Successful run_job acceptance and manage_job mutation describe the tool action in exactly one short spoken sentence and never speak the job ID, notification policy, priority, budget, runtime, revision, or serialized tool result. Additional useful foreground context from the model is delivered after that sentence without truncation. The Android job card still receives the canonical typed metadata, manage_job can use the exact ID later without the user repeating it, replay does not duplicate the acknowledgement, failure remains clear, and local plus Haiku prompt/tool-result tests cover acceptance, replay, error, and mixed acknowledgement-plus-context paths.
 
 
 ## Notes

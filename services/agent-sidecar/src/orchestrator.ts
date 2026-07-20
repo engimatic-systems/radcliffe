@@ -317,23 +317,35 @@ function groundedJobResponse(
         ? "I couldn't cancel that job."
         : "I couldn't update that job.";
   }
+  if (modelResponse.trim()) return modelResponse;
   if (operation === "cancel") return "I requested cancellation.";
   if (operation === "follow_up") return "I added that to the job.";
   if (operation === "set_priority") return "I changed the job priority.";
-  if (modelResponse.trim()) return modelResponse;
   const status = typeof details?.status === "string" ? details.status : "available";
   return `The job status is ${status}.`;
 }
 
-function runJobModelContent(result: { details: Record<string, unknown> }): string {
-  const jobId = result.details.jobId;
-  const internalReference =
-    typeof jobId === "string" && JOB_ID.test(jobId) ? ` Internal job ID: ${jobId}.` : "";
-  return (
-    `Background job accepted.${internalReference} ` +
-    "The identifier and all job metadata are private tool state: never quote them to the user. " +
-    "Reply with exactly: I started it."
-  );
+const JOB_ACTION_RESPONSE_INSTRUCTION =
+  "Describe this job tool action in one short sentence using only a few words. " +
+  "Then provide any additional useful context the user requested; do not omit it. " +
+  "Do not quote job identifiers or serialized job metadata.";
+
+function runJobModelContent(): string {
+  return `The background job was accepted. ${JOB_ACTION_RESPONSE_INSTRUCTION}`;
+}
+
+function manageJobModelContent(
+  parameters: ManageJobArguments,
+  result: { modelContent: string },
+): string {
+  if (parameters.operation === "status") return result.modelContent;
+  const outcome =
+    parameters.operation === "cancel"
+      ? "The cancellation request was accepted."
+      : parameters.operation === "follow_up"
+        ? "The job follow-up was accepted."
+        : "The priority change was accepted.";
+  return `${outcome} ${JOB_ACTION_RESPONSE_INSTRUCTION}`;
 }
 
 const EMPTY_USAGE = {
@@ -355,9 +367,12 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "end the current conversation with manage_session. Never guess between returned choices and " +
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
-  "continues. After run_job succeeds, respond with exactly one short sentence: I started it. Never " +
-  "speak or reproduce its job ID, status, notification policy, priority, budget, runtime, revision, " +
-  "or serialized tool result. Use manage_job to inspect, follow up, reprioritize, or cancel an " +
+  "continues. Call job tools without a preamble. For each successful run_job or manage_job mutation, " +
+  "first describe the job tool action " +
+  "in one short sentence using only a few words. Then provide any additional useful context the user " +
+  "requested; do not omit it. In that tool-action sentence, never speak or reproduce the job ID, " +
+  "status, notification policy, priority, budget, runtime, revision, or serialized tool result. " +
+  "Use manage_job to inspect, follow up, reprioritize, or cancel an " +
   "existing job. Never " +
   "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
@@ -775,7 +790,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           });
         });
         return {
-          content: [{ type: "text" as const, text: runJobModelContent(result) }],
+          content: [{ type: "text" as const, text: runJobModelContent() }],
           details: result.details,
         };
       },
@@ -815,7 +830,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           });
         });
         return {
-          content: [{ type: "text" as const, text: result.modelContent }],
+          content: [{ type: "text" as const, text: manageJobModelContent(params, result) }],
           details: result.details,
         };
       },
@@ -844,8 +859,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         if (
-          !runJobCallSeen &&
-          (!jobOperation || (jobOperation === "status" && groundedJobCall))
+          (!runJobCallSeen || runJobSucceeded) &&
+          (!jobOperation || groundedJobCall)
         ) {
           modelText += event.assistantMessageEvent.delta;
           await emit({
@@ -861,8 +876,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           .join("");
         if (
           complete &&
-          !runJobCallSeen &&
-          (!jobOperation || (jobOperation === "status" && groundedJobCall))
+          (!runJobCallSeen || runJobSucceeded) &&
+          (!jobOperation || groundedJobCall)
         ) {
           modelText = complete;
         }
@@ -932,16 +947,19 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       await agent.prompt({ role: "radcliffe", packet: current });
       if (providerError) throw new Error(providerError);
       if (runJobCallSeen) {
-        modelText = runJobSucceeded ? "I started it." : "I couldn't start that job.";
-        await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+        if (!runJobSucceeded || !modelText.trim()) {
+          modelText = runJobSucceeded ? "I started it." : "I couldn't start that job.";
+          await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+        }
       } else if (jobOperation) {
+        const modelSuppliedResponse = Boolean(modelText.trim());
         modelText = groundedJobResponse(
           jobOperation,
           groundedJobCall,
           modelText,
           groundedJobDetails,
         );
-        if (jobOperation !== "status" || !groundedJobCall) {
+        if (!groundedJobCall || !modelSuppliedResponse) {
           await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
         }
       }
