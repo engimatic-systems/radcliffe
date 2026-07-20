@@ -52,6 +52,8 @@ object BehaviorConfigurationModel {
     val updates = mutableUpdates.asStateFlow()
 
     fun update(value: ConfigurationUpdate) {
+        val current = mutableUpdates.value[value.key]
+        if (current != null && current.revision > value.revision) return
         mutableUpdates.value = mutableUpdates.value + (value.key to value)
     }
 

@@ -56,6 +56,21 @@ class SessionModelTest {
     }
 
     @Test
+    fun staleConfigurationUpdatesCannotReplaceNewerEffectiveState() {
+        BehaviorConfigurationModel.clear()
+        BehaviorConfigurationModel.update(
+            ConfigurationUpdate("response_detail", "detailed", "session", 4, "new"),
+        )
+        BehaviorConfigurationModel.update(
+            ConfigurationUpdate("response_detail", "brief", "turn", 3, "stale"),
+        )
+
+        val effective = BehaviorConfigurationModel.updates.value.getValue("response_detail")
+        assertEquals("detailed", effective.value)
+        assertEquals(4, effective.revision)
+    }
+
+    @Test
     fun nonDefaultSpeechDeliveryHasAnExplicitAccessibilityDescription() {
         assertEquals(
             "Speech delivery: Fast (1.25×)",

@@ -219,6 +219,29 @@ data class BackgroundJobCardModel(
     val accessibilityLabel: String,
 )
 
+data class BackgroundJobsSummaryModel(
+    val visibleLabel: String,
+    val accessibilityLabel: String,
+)
+
+internal fun backgroundJobsSummaryModel(
+    jobs: List<BackgroundJobSummary>,
+): BackgroundJobsSummaryModel {
+    val active = jobs.count { !it.status.terminal }
+    val attention = jobs.count { it.status == BackgroundJobStatus.WAITING }
+    val complete = jobs.size - active
+    val parts = buildList {
+        if (active > 0) add("$active active ${if (active == 1) "job" else "jobs"}")
+        if (attention > 0) add("$attention ${if (attention == 1) "needs" else "need"} attention")
+        if (complete > 0) add("$complete completed")
+    }
+    val visible = parts.joinToString(" · ").ifBlank { "No jobs" }
+    return BackgroundJobsSummaryModel(
+        visibleLabel = visible,
+        accessibilityLabel = "Background jobs. ${parts.joinToString(", ").ifBlank { "No jobs" }}",
+    )
+}
+
 internal fun backgroundJobCardModel(job: BackgroundJobSummary): BackgroundJobCardModel {
     val status = backgroundJobStatusLabel(job)
     val priority = when (job.priority) {

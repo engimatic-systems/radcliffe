@@ -38,15 +38,41 @@ fun BackgroundJobsCard(
     modifier: Modifier = Modifier,
 ) {
     if (jobs.isEmpty() && notice == null) return
+    var expanded by remember(jobs.firstOrNull()?.sessionId) { mutableStateOf(false) }
+    val summary = backgroundJobsSummaryModel(jobs)
     Card(modifier.fillMaxWidth()) {
         Column(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Background jobs", Modifier.semantics { heading() })
-            if (jobs.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Background jobs", Modifier.semantics { heading() })
+                    Text(
+                        summary.visibleLabel,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (jobs.isNotEmpty()) {
+                    TextButton(
+                        onClick = { expanded = !expanded },
+                        modifier = Modifier.semantics {
+                            contentDescription = if (expanded) {
+                                "Hide ${summary.accessibilityLabel}"
+                            } else {
+                                "Show ${summary.accessibilityLabel}"
+                            }
+                        },
+                    ) { Text(if (expanded) "Hide" else "Show") }
+                }
+            }
+            if (jobs.isNotEmpty() && expanded) {
                 LazyColumn(
-                    Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    Modifier.fillMaxWidth().heightIn(max = 280.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(jobs, key = { it.jobId }) { job ->
