@@ -1,11 +1,20 @@
 import asyncio
+import base64
+import hashlib
 import json
 import time
 
 from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
-from radcliffe_control.job_results import PromotedArtifact, PromotedJobResult, write_promoted_result
+from radcliffe_control.job_results import (
+    PromotedArtifact,
+    PromotedJobResult,
+    PromotedSource,
+    write_promoted_result,
+)
 from radcliffe_control.settings import Settings
+from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 DEVICE_CREDENTIAL = "rdc_dev_" + "j" * 43
 DEVICE_AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
@@ -480,3 +489,117 @@ def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
         assert status.json()["details"]["artifactCount"] == "1"
         assert private_instruction not in status.text
         assert private_transcript not in status.text
+
+
+def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    canonical = b"# Scaling Laws for Neural Language Models\n\nExact abstract bytes.\n"
+    digest = hashlib.sha256(canonical).hexdigest()
+    other_canonical = b"# Scaling Laws for Vision\n\nA different exact abstract.\n"
+    other_digest = hashlib.sha256(other_canonical).hexdigest()
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-paper",
+            arguments={"instruction": "Find the scaling laws paper."},
+        )
+        job_id = accepted.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "paper-worker", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        workspace = workspace_root / job_id / "attempt-1"
+        files = workspace / "files"
+        files.mkdir(parents=True)
+        files.joinpath("scaling-laws.md").write_bytes(canonical)
+        files.joinpath("vision-scaling-laws.md").write_bytes(other_canonical)
+        artifact = PromotedArtifact(
+            artifactId=f"artifact:file:{digest[:16]}",
+            path="scaling-laws.md",
+            sha256=digest,
+            byteLength=len(canonical),
+        )
+        source = PromotedSource(
+            entityId=f"source:{digest[:16]}",
+            name="Scaling Laws for Neural Language Models",
+            locator="https://example.test/scaling-laws",
+            artifactId=artifact.artifact_id,
+            path=artifact.path,
+            sha256=digest,
+            byteLength=len(canonical),
+        )
+        other_artifact = PromotedArtifact(
+            artifactId=f"artifact:file:{other_digest[:16]}",
+            path="vision-scaling-laws.md",
+            sha256=other_digest,
+            byteLength=len(other_canonical),
+        )
+        other_source = PromotedSource(
+            entityId=f"source:{other_digest[:16]}",
+            name="Scaling Laws for Vision",
+            locator="https://example.test/vision-scaling-laws",
+            artifactId=other_artifact.artifact_id,
+            path=other_artifact.path,
+            sha256=other_digest,
+            byteLength=len(other_canonical),
+        )
+        write_promoted_result(
+            workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=job_id,
+                summary="Found the requested paper.",
+                artifacts=(artifact, other_artifact),
+                sources=(source, other_source),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "paper-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+                "entity_ids": [source.entity_id, other_source.entity_id],
+                "artifact_ids": [artifact.artifact_id, other_artifact.artifact_id],
+            },
+        )
+        assert succeeded.status_code == 200
+
+        response = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-paper",
+            arguments={"reference": source.name, "rate": "fast"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        envelope = MessageEnvelope.from_proto(
+            protocol_pb2.MessageEnvelope.FromString(
+                base64.b64decode(body["details"]["sourceEnvelopeProtoBase64"], validate=True)
+            )
+        )
+        assert envelope.source is SourceKind.TEXT_SOURCE
+        assert envelope.content.inline_text.encode() == canonical
+        assert envelope.content_sha256.hex() == digest
+        assert envelope.provenance.display_name == source.name
+        assert envelope.provenance.locator == source.locator
+        assert envelope.provenance.extractor == "promoted-job-source"
+        assert body["details"]["contentSha256"] == digest
+
+        ambiguous = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-ambiguous-paper",
+            arguments={"reference": "scaling laws"},
+        )
+        assert ambiguous.status_code == 409
+        assert "ambiguous" in ambiguous.text
+        assert source.name in ambiguous.text
+        assert other_source.name in ambiguous.text

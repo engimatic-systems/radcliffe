@@ -43,6 +43,7 @@ export interface AgentOrchestrator {
 export const RADCLIFFE_TOOL_NAMES = [
   "list_sources",
   "read_source",
+  "read_job_source",
   "configure",
   "manage_session",
   "run_job",
@@ -383,6 +384,9 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
+  "Use read_job_source when the user asks to read a named source promoted by a completed " +
+  "background job. Pass its human title or entity ID; an ambiguous title must be clarified, never " +
+  "guessed. " +
   "Set read_source rate only when the user explicitly requests a delivery speed. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
@@ -406,6 +410,24 @@ export const READ_SOURCE_PARAMETERS = Type.Object({
     ]),
   ),
 });
+export const READ_JOB_SOURCE_DESCRIPTION =
+  "Read one canonical Markdown source promoted by a completed background job. Resolve it by its " +
+  "human title or exact entity ID within this conversation; ambiguous references fail closed.";
+export const READ_JOB_SOURCE_PARAMETERS = Type.Object(
+  {
+    reference: Type.String({ minLength: 1, maxLength: 300 }),
+    rate: Type.Optional(
+      Type.Union([
+        Type.Literal("slow"),
+        Type.Literal("normal"),
+        Type.Literal("fast"),
+        Type.Literal("very_fast"),
+        Type.Number({ minimum: 0.75, maximum: 1.5 }),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
 export const CONFIGURE_DESCRIPTION =
   "Inspect, set, reset, or undo one registered Radcliffe setting. Only response_detail and " +
   "default_speech_rate are allowed. Turn overrides expire after the current turn; session values " +
@@ -530,6 +552,11 @@ export function modelContextFromRequest(request: TurnRequest) {
         name: "read_source",
         description: READ_SOURCE_DESCRIPTION,
         parameters: READ_SOURCE_PARAMETERS,
+      },
+      {
+        name: "read_job_source",
+        description: READ_JOB_SOURCE_DESCRIPTION,
+        parameters: READ_JOB_SOURCE_PARAMETERS,
       },
       {
         name: "configure",
@@ -662,6 +689,48 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "read_source",
+          arguments: params,
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
+    const readJobSource: AgentTool<typeof READ_JOB_SOURCE_PARAMETERS> = {
+      name: "read_job_source",
+      label: "Read background job source",
+      description: READ_JOB_SOURCE_DESCRIPTION,
+      parameters: READ_JOB_SOURCE_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        params: {
+          reference: string;
+          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
+        },
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
+          traceId: request.traceId!,
+          turnId,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "read_job_source",
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {
@@ -846,7 +915,15 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         systemPrompt: systemPrompt(request),
         model: this.model,
         thinkingLevel: "off",
-        tools: [listSources, readSource, configure, manageSession, runJob, manageJob],
+        tools: [
+          listSources,
+          readSource,
+          readJobSource,
+          configure,
+          manageSession,
+          runJob,
+          manageJob,
+        ],
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,

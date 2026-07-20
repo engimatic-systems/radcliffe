@@ -109,6 +109,16 @@ describe("Ollama context accounting", () => {
         {
           type: "function",
           function: {
+            name: "read_job_source",
+            parameters: {
+              type: "object",
+              required: ["reference"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "configure",
           },
         },

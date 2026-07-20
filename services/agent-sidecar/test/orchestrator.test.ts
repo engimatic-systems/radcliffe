@@ -16,6 +16,7 @@ import {
   prepareManageJobArguments,
   prepareManageSessionArguments,
   prepareRunJobArguments,
+  READ_JOB_SOURCE_PARAMETERS,
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
   RUN_JOB_PARAMETERS,
@@ -67,6 +68,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("never speak or reproduce the job ID");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("matching manage_job call succeeds");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("read_job_source");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("ambiguous title must be clarified");
   });
 
   it("identifies Radcliffe as the harness without assigning the model that identity", () => {
@@ -321,6 +324,7 @@ describe("PiAgentOrchestrator", () => {
       MANAGE_SESSION_PARAMETERS,
       RUN_JOB_PARAMETERS,
       MANAGE_JOB_PARAMETERS,
+      READ_JOB_SOURCE_PARAMETERS,
     ]) {
       const wireSchema = schema as unknown as Record<string, unknown>;
       expect(wireSchema.type).toBe("object");
@@ -863,6 +867,54 @@ describe("PiAgentOrchestrator", () => {
       }),
     ]);
     expect(events.filter((event) => event.type === "tool_end")).toHaveLength(2);
+  });
+
+  it("resolves a named promoted job source through direct canonical rendering", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-job-source-test" });
+    const sourceEnvelope = "opaque-promoted-source-envelope";
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "read_job_source",
+          { reference: "Scaling Laws", rate: "fast" },
+          { id: "read-job-source-1" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The promoted source is being read."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: "source:promoted-paper",
+      details: {
+        sourceMessageId: "source:read-job-source-1",
+        sourceEnvelopeProtoBase64: sourceEnvelope,
+      },
+    }));
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([packet("new-user", "Read the Scaling Laws abstract exactly")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "read_job_source",
+        arguments: { reference: "Scaling Laws", rate: "fast" },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_end",
+        toolName: "read_job_source",
+        isError: false,
+      }),
+    );
   });
 
   it("filters excluded packets and labels canonical sources", () => {

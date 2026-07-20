@@ -551,6 +551,16 @@ output, worker transcript, or generic text field. Event revisions replay after
 restart, while a database-wide delivery sequence orders interleaved events
 across every job in a session.
 
+A completed job may promote bounded UTF-8 Markdown sources in addition to
+ordinary artifacts. Each source binds a human title and locator to an
+owner-only artifact using its byte length and SHA-256 digest; the succeeded
+`JobEvent` carries only its opaque entity ID. `read_job_source` resolves an
+exact entity ID or an unambiguous normalized title among the current session's
+durable results. Missing, ambiguous, linked, moved, oversized, non-UTF-8, or
+hash-mismatched sources fail closed. A valid source enters the existing direct
+canonical-rendering path with the promoted title and locator as provenance, so
+the conversational model never recreates exact source text.
+
 The enrolled Android client hydrates privacy-minimized job summaries through
 the device API and folds replayed `JobEvent` messages into an active-session
 model by revision and delivery sequence. Accessible lifecycle cards show only

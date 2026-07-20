@@ -93,6 +93,7 @@ class ToolGateway:
         grant: CapabilityGrant,
         raw_arguments: object,
         cancelled: asyncio.Event | None = None,
+        provenance: Provenance | None = None,
     ) -> ReadSourceResult:
         arguments = ReadSourceArguments.model_validate(raw_arguments)
         arguments_json = json.dumps(
@@ -144,6 +145,25 @@ class ToolGateway:
                     raise ToolDeniedError("source exceeds the 1 MiB limit")
                 text = canonical.decode("utf-8")
                 digest = hashlib.sha256(canonical).digest()
+                if provenance is not None and provenance.source_sha256 not in {b"", digest}:
+                    raise ToolDeniedError("promoted source no longer matches its canonical hash")
+                source_provenance = (
+                    provenance.model_copy(
+                        update={
+                            "source_sha256": digest,
+                            "permission_basis": grant.grant_id,
+                        }
+                    )
+                    if provenance is not None
+                    else Provenance(
+                        locator=str(path),
+                        display_name=path.name,
+                        extractor="utf8-markdown",
+                        extractor_version="1",
+                        source_sha256=digest,
+                        permission_basis=grant.grant_id,
+                    )
+                )
                 source_envelope = MessageEnvelope.text(
                     session_id=session_id,
                     sequence=await self.store.next_sequence(session_id),
@@ -151,14 +171,7 @@ class ToolGateway:
                     text=text,
                     message_id=f"source:{call_id}",
                     metadata={"tool_name": "read_source", "call_id": call_id},
-                    provenance=Provenance(
-                        locator=str(path),
-                        display_name=path.name,
-                        extractor="utf8-markdown",
-                        extractor_version="1",
-                        source_sha256=digest,
-                        permission_basis=grant.grant_id,
-                    ),
+                    provenance=source_provenance,
                 )
                 if arguments.rate is not None:
                     source_envelope = with_delivery_rate_for_all(

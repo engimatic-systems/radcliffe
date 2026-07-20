@@ -52,7 +52,15 @@ from radcliffe_media.sidecar import SidecarEvent
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
 _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
 _REGISTERED_TOOL_NAMES = frozenset(
-    {"list_sources", "read_source", "configure", "manage_session", "run_job", "manage_job"}
+    {
+        "list_sources",
+        "read_source",
+        "read_job_source",
+        "configure",
+        "manage_session",
+        "run_job",
+        "manage_job",
+    }
 )
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
 
