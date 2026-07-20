@@ -2,6 +2,7 @@ import asyncio
 from array import array
 
 import pytest
+from loguru import logger
 from pipecat.frames.frames import UserAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection
 from radcliffe_media.production import EndpointProcessor, EndpointSettings
@@ -207,6 +208,8 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "3")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.55")
     monkeypatch.setenv("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-0.9")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_FOREGROUND_MS", "650")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_MIN_AVG_LOGPROB", "-0.7")
     monkeypatch.setenv("RADCLIFFE_WHISPER_MAX_NO_SPEECH_PROBABILITY", "0.65")
     monkeypatch.setenv("RADCLIFFE_WHISPER_MAX_COMPRESSION_RATIO", "2.2")
 
@@ -226,6 +229,8 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         minimum_speech_windows=3,
         speech_probability=0.55,
         minimum_average_log_probability=-0.9,
+        short_foreground_voice_ms=650,
+        short_minimum_average_log_probability=-0.7,
         maximum_no_speech_probability=0.65,
         maximum_compression_ratio=2.2,
     )
@@ -235,6 +240,11 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         EndpointSettings(minimum_maximum_voice_ratio=0)
     with pytest.raises(ValueError, match="foreground RMS"):
         EndpointSettings(foreground_rms_threshold=500)
+    with pytest.raises(ValueError, match="short decoder confidence"):
+        EndpointSettings(
+            minimum_average_log_probability=-0.5,
+            short_minimum_average_log_probability=-0.9,
+        )
 
 
 @pytest.mark.asyncio
@@ -452,6 +462,96 @@ async def test_legitimate_short_speech_survives_activity_and_decoder_gates() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("foreground_voice_ms", "speech_windows", "maximum_probability", "average_log_probability"),
+    [
+        (550.0, 6, 0.7162, -1.0959),
+        (343.75, 12, 0.914, -0.922),
+    ],
+)
+async def test_retained_silent_thank_you_evidence_never_reaches_the_conversation(
+    foreground_voice_ms: float,
+    speech_windows: int,
+    maximum_probability: float,
+    average_log_probability: float,
+) -> None:
+    speech = DetailedFakeSpeech(
+        Transcription(
+            "Thank you.",
+            (TranscriptionSegmentEvidence(average_log_probability, 0.02, 0.5),),
+        )
+    )
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(
+        speech,
+        activity=FakeActivity(
+            speech_windows=speech_windows,
+            maximum_probability=maximum_probability,
+        ),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    diagnostics: list[str] = []
+    sink = logger.add(diagnostics.append, format="{message}")
+    try:
+        await endpoint._complete(
+            array("h", [2500] * 24_000).tobytes(),
+            16_000,
+            1,
+            voice_ms=foreground_voice_ms,
+            foreground_voice_ms=foreground_voice_ms,
+            voice_ratio=0.4,
+            endpoint_reason="silence",
+            pre_roll_ms=600,
+            trailing_silence_ms=900,
+            participant_id="retained-evidence",
+        )
+    finally:
+        logger.remove(sink)
+
+    assert voice.transcripts == []
+    assert voice.clarifications == []
+    diagnostic = "".join(diagnostics)
+    assert "accepted=False reason=low_log_probability" in diagnostic
+    assert f"foreground_voice_ms={foreground_voice_ms}" in diagnostic
+    assert f"speech_windows={speech_windows}" in diagnostic
+    assert "decoder_confidence_floor=-0.9 short_candidate=True" in diagnostic
+    assert "Thank you" not in diagnostic
+
+
+@pytest.mark.asyncio
+async def test_deliberately_spoken_thank_you_remains_accepted_as_a_short_turn() -> None:
+    speech = DetailedFakeSpeech(
+        Transcription(
+            "Thank you.",
+            (TranscriptionSegmentEvidence(-0.54, 0.01, 0.56),),
+        )
+    )
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(
+        speech,
+        activity=FakeActivity(speech_windows=8, maximum_probability=0.99),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await endpoint._complete(
+        array("h", [3000] * 20_000).tobytes(),
+        16_000,
+        1,
+        voice_ms=420,
+        foreground_voice_ms=420,
+        voice_ratio=0.5,
+        endpoint_reason="silence",
+        pre_roll_ms=600,
+        trailing_silence_ms=900,
+        participant_id="deliberate-thanks",
+    )
+
+    assert voice.transcripts == ["Thank you."]
+    assert voice.clarifications == []
+
+
+@pytest.mark.asyncio
 async def test_repetitive_whisper_hallucination_never_reaches_conversation_pipeline() -> None:
     speech = DetailedFakeSpeech(
         Transcription(
@@ -503,7 +603,7 @@ async def test_uncertain_transcript_requests_clarification_without_persisting_us
     )
     endpoint.voice = voice  # type: ignore[assignment]
 
-    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=True, frames=40)
     await feed(endpoint, voiced=False, frames=45)
     task = endpoint.turn_task
     if task is not None:

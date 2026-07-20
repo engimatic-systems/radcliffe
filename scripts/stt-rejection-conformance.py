@@ -31,6 +31,7 @@ class CorpusCase:
     samples: np.ndarray
     should_accept: bool
     expected_text: str = ""
+    route: str = "synthetic"
 
 
 class RecordingSpeech(LocalAppleSpeechProvider):
@@ -48,12 +49,19 @@ class RecordingSpeech(LocalAppleSpeechProvider):
 class CaptureVoice:
     def __init__(self) -> None:
         self.transcripts: list[str] = []
+        self.clarifications: list[str] = []
 
     async def handle_transcript(self, transcript: str) -> None:
         self.transcripts.append(transcript)
 
     async def barge_in(self) -> None:
         return None
+
+    def foreground_turn_active(self) -> bool:
+        return False
+
+    async def request_clarification(self, reason: str) -> None:
+        self.clarifications.append(reason)
 
 
 def _pcm(samples: np.ndarray) -> bytes:
@@ -166,7 +174,7 @@ async def _corpus() -> tuple[CorpusCase, ...]:
         ("Fred", "Stop."),
         ("Moira", "No."),
         ("Karen", "Yes."),
-        ("Tessa", "Stop."),
+        ("Samantha", "Stop."),
         ("Samantha", "Thank you."),
     ):
         provider = LocalAppleSpeechProvider(voice=voice)
@@ -174,12 +182,31 @@ async def _corpus() -> tuple[CorpusCase, ...]:
         samples = provider._waveform(audio, 24000, 1)
         cases.append(
             CorpusCase(
-                f"short-{voice.casefold()}-{_normalize(phrase).replace(' ', '-')}",
+                "short-earbud-thank-you"
+                if phrase == "Thank you."
+                else f"short-{voice.casefold()}-{_normalize(phrase).replace(' ', '-')}",
                 samples,
                 True,
                 phrase,
+                "earbud" if phrase == "Thank you." else "synthetic",
             )
         )
+    speaker_provider = LocalAppleSpeechProvider(voice="Fred")
+    speaker_pcm = await speaker_provider.synthesize("Thank you.")
+    near_field = speaker_provider._waveform(speaker_pcm, 24000, 1)
+    delay = round(SAMPLE_RATE * 0.07)
+    speaker_route = near_field.copy()
+    speaker_route[delay:] += near_field[:-delay] * 0.2
+    speaker_route += random.normal(0, 0.0015, len(speaker_route)).astype(np.float32)
+    cases.append(
+        CorpusCase(
+            "short-speaker-thank-you",
+            speaker_route,
+            True,
+            "Thank you.",
+            "speaker",
+        )
+    )
     return tuple(cases)
 
 
@@ -220,8 +247,10 @@ async def _run_case(case: CorpusCase, output: Path) -> dict[str, object]:
         "expected_accept": case.should_accept,
         "accepted": accepted,
         "expected_text": case.expected_text,
+        "route": case.route,
         "transcript": transcript,
         "transcription_calls": speech.transcription_calls,
+        "clarifications": voice.clarifications,
         "passed": passed,
         "audio": audio_name,
         "audio_sha256": hashlib.sha256(_pcm(samples)).hexdigest(),
