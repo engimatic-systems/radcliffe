@@ -2,7 +2,7 @@
 id: rad-erac
 status: in_progress
 deps: []
-links: []
+links: [rad-7t9h, rad-tg8o]
 created: 2026-07-19T20:51:44Z
 type: feature
 priority: 0
