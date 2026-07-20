@@ -325,6 +325,17 @@ function groundedJobResponse(
   return `The job status is ${status}.`;
 }
 
+function runJobModelContent(result: { details: Record<string, unknown> }): string {
+  const jobId = result.details.jobId;
+  const internalReference =
+    typeof jobId === "string" && JOB_ID.test(jobId) ? ` Internal job ID: ${jobId}.` : "";
+  return (
+    `Background job accepted.${internalReference} ` +
+    "The identifier and all job metadata are private tool state: never quote them to the user. " +
+    "Reply with exactly: I started it."
+  );
+}
+
 const EMPTY_USAGE = {
   input: 0,
   output: 0,
@@ -344,7 +355,10 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "end the current conversation with manage_session. Never guess between returned choices and " +
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
-  "continues. Use manage_job to inspect, follow up, reprioritize, or cancel an existing job. Never " +
+  "continues. After run_job succeeds, respond with exactly one short sentence: I started it. Never " +
+  "speak or reproduce its job ID, status, notification policy, priority, budget, runtime, revision, " +
+  "or serialized tool result. Use manage_job to inspect, follow up, reprioritize, or cancel an " +
+  "existing job. Never " +
   "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
@@ -761,7 +775,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           });
         });
         return {
-          content: [{ type: "text" as const, text: result.modelContent }],
+          content: [{ type: "text" as const, text: runJobModelContent(result) }],
           details: result.details,
         };
       },
@@ -825,9 +839,14 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       sessionId: request.sessionId,
       toolExecution: "sequential",
     });
+    let runJobCallSeen = false;
+    let runJobSucceeded = false;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        if (!jobOperation || (jobOperation === "status" && groundedJobCall)) {
+        if (
+          !runJobCallSeen &&
+          (!jobOperation || (jobOperation === "status" && groundedJobCall))
+        ) {
           modelText += event.assistantMessageEvent.delta;
           await emit({
             type: "model_delta",
@@ -840,7 +859,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("");
-        if (complete && (!jobOperation || (jobOperation === "status" && groundedJobCall))) {
+        if (
+          complete &&
+          !runJobCallSeen &&
+          (!jobOperation || (jobOperation === "status" && groundedJobCall))
+        ) {
           modelText = complete;
         }
         if (event.message.stopReason === "error") {
@@ -858,6 +881,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           estimatedCostUsd: event.message.usage.cost.total,
         });
       } else if (event.type === "tool_execution_start") {
+        if (event.toolName === "run_job") {
+          runJobCallSeen = true;
+        }
         if (
           jobOperation &&
           event.toolName === "manage_job" &&
@@ -883,6 +909,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           update: event.partialResult,
         });
       } else if (event.type === "tool_execution_end") {
+        if (event.toolName === "run_job" && !event.isError) {
+          runJobSucceeded = true;
+        }
         if (matchingJobCalls.has(event.toolCallId) && !event.isError) {
           groundedJobCall = true;
           groundedJobDetails = toolResultDetails(event.result);
@@ -902,7 +931,10 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     try {
       await agent.prompt({ role: "radcliffe", packet: current });
       if (providerError) throw new Error(providerError);
-      if (jobOperation) {
+      if (runJobCallSeen) {
+        modelText = runJobSucceeded ? "I started it." : "I couldn't start that job.";
+        await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+      } else if (jobOperation) {
         modelText = groundedJobResponse(
           jobOperation,
           groundedJobCall,

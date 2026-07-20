@@ -19,6 +19,7 @@ CONFIGURATION_EVENT = "configuration_changed"
 SESSION_TRANSITION_EVENT = "session_transition"
 PROVIDER_BUDGET_EVENT = "provider_budget_exhausted"
 TOOL_FAILURE_EVENT = "tool_failure"
+BACKGROUND_JOB_REFERENCE_EVENT = "background_job_reference"
 EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 DELIVERY_RATE_METADATA_PREFIX = "radcliffe.delivery.rate."
 DELIVERY_SUMMARY_METADATA = "radcliffe.delivery.summary"

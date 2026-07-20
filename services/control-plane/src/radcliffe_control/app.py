@@ -74,6 +74,7 @@ from radcliffe_domain.jobs import (
     JobStore,
 )
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     CONTEXT_PROJECTION_VERSION,
     TURN_DISPOSITION_EVENT,
     TURN_EVENT_METADATA,
@@ -2028,10 +2029,9 @@ def create_app(
                 break
             for envelope in page.items:
                 cursor = envelope.sequence
-                if (
-                    envelope.sensitivity is not Sensitivity.SECRET
-                    and envelope.metadata.get(TURN_EVENT_METADATA) != TURN_DISPOSITION_EVENT
-                ):
+                if envelope.sensitivity is not Sensitivity.SECRET and envelope.metadata.get(
+                    TURN_EVENT_METADATA
+                ) not in {TURN_DISPOSITION_EVENT, BACKGROUND_JOB_REFERENCE_EVENT}:
                     visible.append(envelope)
                 if len(visible) > limit:
                     break

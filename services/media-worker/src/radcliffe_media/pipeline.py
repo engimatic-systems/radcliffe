@@ -23,6 +23,7 @@ from radcliffe_domain.configuration import (
 )
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     CONFIGURATION_EVENT,
     PROVIDER_BUDGET_EVENT,
     SESSION_TRANSITION_EVENT,
@@ -53,6 +54,7 @@ _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
 _REGISTERED_TOOL_NAMES = frozenset(
     {"list_sources", "read_source", "configure", "manage_session", "run_job", "manage_job"}
 )
+_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
 
 
 class JobAnnouncement(StrEnum):
@@ -658,6 +660,8 @@ class VoicePipeline:
                     turn.model_text = turn.rendered_model_text
                 else:
                     result = event.payload.get("result")
+                    if event.payload.get("toolName") == "run_job":
+                        await self._persist_background_job_reference(result, turn)
                     if await self._handle_session_action_tool_result(result, turn):
                         await self._finish_handoff_from_turn(turn)
                         return
@@ -1180,6 +1184,49 @@ class VoicePipeline:
             notify=True,
         )
         return True
+
+    async def _persist_background_job_reference(
+        self,
+        result: object,
+        turn: _ActiveTurn,
+    ) -> MessageEnvelope | None:
+        details = self._tool_details(result)
+        if details is None:
+            return None
+        job_id = self._detail_text(details, "jobId")
+        if job_id is None or _JOB_ID.fullmatch(job_id) is None:
+            return None
+        message_id = f"job-reference:{hashlib.sha256(job_id.encode()).hexdigest()}"
+        async with self._append_lock:
+            existing = next(
+                (
+                    item
+                    for item in await self.store.replay(self.engine.session_id)
+                    if item.message_id == message_id
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            envelope = MessageEnvelope.text(
+                session_id=self.engine.session_id,
+                sequence=await self.store.next_sequence(self.engine.session_id),
+                source=SourceKind.CALL,
+                text=(
+                    f"Internal background job reference: {job_id}. "
+                    "Use this exact ID with manage_job when the user refers to this job. "
+                    "Never quote the ID aloud."
+                ),
+                metadata={
+                    TURN_EVENT_METADATA: BACKGROUND_JOB_REFERENCE_EVENT,
+                    "radcliffe.job.id": job_id,
+                    "radcliffe.job.origin_turn_id": turn.turn_id,
+                    "radcliffe.tool.name": "run_job",
+                },
+                message_id=message_id,
+            )
+            await self.store.append(envelope)
+        return envelope
 
     async def _handle_session_action_tool_result(
         self,

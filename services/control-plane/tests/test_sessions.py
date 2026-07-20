@@ -7,6 +7,7 @@ from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
@@ -384,6 +385,14 @@ def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -
                 },
                 message_id="audit-1",
             ),
+            MessageEnvelope.text(
+                session_id="timeline-session",
+                sequence=5,
+                source=SourceKind.CALL,
+                text="Internal background job reference: job-hidden",
+                metadata={TURN_EVENT_METADATA: BACKGROUND_JOB_REFERENCE_EVENT},
+                message_id="job-reference-1",
+            ),
         )
         for envelope in envelopes:
             asyncio.run(store.append(envelope))
@@ -417,6 +426,7 @@ def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -
         assert second.json()["next_after"] is None
         assert "provider-secret" not in second.text
         assert "internal interrupted-turn audit" not in second.text
+        assert "job-hidden" not in second.text
         assert client.get("/v1/sessions/missing/messages", headers=AUTHORIZATION).status_code == 404
 
 
