@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 set -a
 source var/.env
+source scripts/load-local-network-env.sh
 if [[ -f var/job-executor.env ]]; then
   mode="$(stat -f '%Lp' var/job-executor.env 2>/dev/null || stat -c '%a' var/job-executor.env)"
   if [[ "$mode" != "600" ]]; then

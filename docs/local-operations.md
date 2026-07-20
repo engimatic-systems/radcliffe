@@ -121,6 +121,12 @@ does not prove the phone route: before declaring the checkpoint passed, require
 the app's Connection test and Recent conversations load to succeed over the
 intended phone network.
 
+Voice joining is a separate network gate from the control API. The
+`livekit_url` returned in newly issued room credentials must also be reachable
+from the phone, and LiveKit must advertise an allowed tailnet ICE/TCP or ICE/UDP
+port rather than a LAN address. Require a newly created conversation to join
+and exchange audio before declaring the complete phone path ready.
+
 For a content-free correlated trace/metrics bundle, run
 `make export-diagnostics-local`. Its bounded schema and redaction rules are in
 [`telemetry-operations.md`](telemetry-operations.md).
