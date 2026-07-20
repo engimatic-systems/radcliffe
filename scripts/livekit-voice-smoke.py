@@ -1433,6 +1433,35 @@ async def run(commit: str) -> int:
             ),
         )
         assert replacement_model is not None
+        replacement_playback = _event_after(
+            state,
+            replacement_user_index + 1,
+            lambda event: event.HasField("playback_segment"),
+        )
+        interrupted_generation = (
+            speech_interrupt_event.event.state_changed.operation.generation
+            if speech_interrupt_event is not None
+            else 0
+        )
+        replacement_generation = (
+            replacement_playback.event.playback_segment.operation.generation
+            if replacement_playback is not None
+            else 0
+        )
+        checks.append(
+            Check(
+                "interruption_rearms_next_playback_generation",
+                interrupted_generation > 0 and replacement_generation > interrupted_generation,
+                (
+                    f"interrupted generation {interrupted_generation}; "
+                    f"replacement playback generation {replacement_generation}"
+                ),
+                {
+                    "interrupted_generation": interrupted_generation,
+                    "replacement_generation": replacement_generation,
+                },
+            )
+        )
         replacement_model_text = replacement_model.event.message.content.inline_text.casefold()
         checks.append(
             Check(
