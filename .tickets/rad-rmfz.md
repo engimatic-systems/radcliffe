@@ -28,3 +28,7 @@ A deterministic test reproduces one response containing a valid file-writing run
 **2026-07-20T01:53:59Z**
 
 2026-07-19 private executor evidence: Qwen returned three calls in one response. It first wrote fibonacci_script.py successfully, then requested run_shell with purpose=executing, which is outside the allowed purpose enum and raised validation, and finally proposed finish_job before execution with artifactPaths=[/workspace/fibonacci_script.py]. The exception boundary emitted only executor_failed, obscuring the actionable cause.
+
+**2026-07-20T02:36:39Z**
+
+2026-07-19 deployed revision b0f090c. The exact batched-call regression is covered deterministically; the live local Qwen executor completed job_09b48ee8d336dea954254a8a0df4d00a on its first attempt with coding and testing progress and a verified Fibonacci artifact. Host-side and deployment gates pass; keep open until the user confirms a phone-initiated job and visible Android completion.

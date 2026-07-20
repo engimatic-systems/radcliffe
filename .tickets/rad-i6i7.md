@@ -1,6 +1,6 @@
 ---
 id: rad-i6i7
-status: in_progress
+status: closed
 deps: []
 links: [rad-rmfz]
 created: 2026-07-20T01:32:15Z
@@ -27,3 +27,7 @@ Deterministic tests reproduce qwen3:8b emitting run_job with notificationPolicy=
 **2026-07-20T01:53:59Z**
 
 2026-07-19 phone evidence under Haiku: run_job received a usable object schema and accepted the job, but repeated manage_job attempts failed before persistence because the Anthropic adapter had reduced its top-level union schema to an unusable shape. The user requires the full usable tool contract whenever a session begins or changes.
+
+**2026-07-20T02:36:39Z**
+
+2026-07-19 deployed revision b0f090c. Anthropic and Ollama adapter contract tests pass for all six tools; a live Haiku 4.5 probe successfully executed manage_job and run_job; invalid tool outcomes now persist as content-free, model-excluded audits and telemetry. The resulting real local sandbox job job_09b48ee8d336dea954254a8a0df4d00a succeeded after coding and testing, and both operations and background-job preflight gates are ready.
