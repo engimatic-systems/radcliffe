@@ -1,6 +1,6 @@
 ---
 id: rad-6dal
-status: open
+status: in_progress
 deps: [rad-214n, rad-fvx9]
 links: [rad-l1jc, rad-fvx9, rad-214n, rad-ghti]
 created: 2026-07-20T03:00:01Z

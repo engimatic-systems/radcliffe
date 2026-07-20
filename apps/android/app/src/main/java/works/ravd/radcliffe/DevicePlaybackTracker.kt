@@ -1,6 +1,7 @@
 package works.ravd.radcliffe
 
 import com.google.protobuf.Timestamp
+import works.ravd.radcliffe.protocol.v2.OperationRef
 import works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement
 import works.ravd.radcliffe.protocol.v2.PlaybackSegment
 import works.ravd.radcliffe.protocol.v2.PlaybackStatus
@@ -21,12 +22,22 @@ class DevicePlaybackTracker(
 
     private val pending = ArrayDeque<Pending>()
     private val knownPlaybackIds = mutableSetOf<String>()
+    private val invalidatedGenerationBySession = mutableMapOf<String, Long>()
 
     @Synchronized
     fun announce(segment: PlaybackSegment): Boolean {
-        if (segment.playbackId.isBlank() || segment.segmentId.isBlank() || segment.durationMs == 0L) {
+        val operation = segment.operation
+        if (
+            segment.playbackId.isBlank() ||
+            segment.segmentId.isBlank() ||
+            segment.durationMs == 0L ||
+            operation.sessionId.isBlank() ||
+            operation.generation == 0L
+        ) {
             return false
         }
+        val invalidatedGeneration = invalidatedGenerationBySession[operation.sessionId] ?: 0L
+        if (operation.generation <= invalidatedGeneration) return false
         if (!knownPlaybackIds.add(segment.playbackId)) return false
         pending.addLast(Pending(segment))
         return true
@@ -79,6 +90,44 @@ class DevicePlaybackTracker(
         finishPending(PlaybackStatus.PLAYBACK_STATUS_FLUSHED, detail, nowMs)
 
     @Synchronized
+    fun invalidatePending(
+        detail: String,
+        nowMs: Long = clockMs(),
+    ): List<PlaybackAcknowledgement> {
+        pending.forEach { item ->
+            val operation = item.segment.operation
+            invalidatedGenerationBySession.merge(
+                operation.sessionId,
+                operation.generation,
+                ::maxOf,
+            )
+        }
+        return finishPending(PlaybackStatus.PLAYBACK_STATUS_FLUSHED, detail, nowMs)
+    }
+
+    @Synchronized
+    fun invalidateThrough(
+        operation: OperationRef,
+        detail: String,
+        nowMs: Long = clockMs(),
+    ): List<PlaybackAcknowledgement> {
+        if (operation.sessionId.isBlank() || operation.generation == 0L) return emptyList()
+        invalidatedGenerationBySession.merge(
+            operation.sessionId,
+            operation.generation,
+            ::maxOf,
+        )
+        return finishPending(
+            PlaybackStatus.PLAYBACK_STATUS_FLUSHED,
+            detail,
+            nowMs,
+        ) { item ->
+            item.segment.operation.sessionId == operation.sessionId &&
+                item.segment.operation.generation <= operation.generation
+        }
+    }
+
+    @Synchronized
     fun fail(detail: String, nowMs: Long = clockMs()): List<PlaybackAcknowledgement> =
         finishPending(PlaybackStatus.PLAYBACK_STATUS_FAILED, detail, nowMs)
 
@@ -89,19 +138,26 @@ class DevicePlaybackTracker(
         status: PlaybackStatus,
         detail: String,
         nowMs: Long,
+        matches: (Pending) -> Boolean = { true },
     ): List<PlaybackAcknowledgement> = buildList {
+        val retained = ArrayDeque<Pending>()
         while (pending.isNotEmpty()) {
             val item = pending.removeFirst()
-            add(
-                item.acknowledgement(
-                    status,
-                    positionMs = item.positionMs,
-                    boundaryIndex = item.segment.boundaryIndex,
-                    nowMs = nowMs,
-                    detail = detail,
-                ),
-            )
+            if (matches(item)) {
+                add(
+                    item.acknowledgement(
+                        status,
+                        positionMs = item.positionMs,
+                        boundaryIndex = item.segment.boundaryIndex,
+                        nowMs = nowMs,
+                        detail = detail,
+                    ),
+                )
+            } else {
+                retained.addLast(item)
+            }
         }
+        pending.addAll(retained)
     }
 
     private fun Pending.acknowledgement(
