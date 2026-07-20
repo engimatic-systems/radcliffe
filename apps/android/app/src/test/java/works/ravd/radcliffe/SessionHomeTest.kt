@@ -35,6 +35,64 @@ class SessionHomeTest {
     }
 
     @Test
+    fun coldResumeCostIsQualifiedAndIncludesAuditableDetails() {
+        val exact = resumeCostUiModel(
+            cost(minimum = 0.000125, maximum = 0.002685),
+        )
+        val estimated = resumeCostUiModel(
+            cost(
+                minimum = 0.000125,
+                maximum = 0.002685,
+                tokenBasis = "estimated_projected_payload",
+            ),
+        )
+
+        assertEquals("Cold estimate ≤$0.0027", exact.visibleLabel)
+        assertEquals("Approx. cold estimate ≤$0.0027", estimated.visibleLabel)
+        assertTrue(exact.detail.contains("claude-haiku-4-5-20251001"))
+        assertTrue(exact.detail.contains("512 output tokens"))
+        assertTrue(exact.detail.contains("Pricing effective 2026-05-27"))
+        assertTrue(exact.detail.contains("system and tool overhead"))
+        assertTrue(exact.accessibilityLabel.contains("Cold estimate"))
+    }
+
+    @Test
+    fun localOverflowAndUnknownCostStatesNeverFabricateACharge() {
+        val local = resumeCostUiModel(
+            cost(
+                minimum = 0.0,
+                maximum = 0.0,
+                modelId = "qwen3:8b",
+                noApiCharge = true,
+            ),
+        )
+        val overflow = resumeCostUiModel(
+            cost(
+                minimum = null,
+                maximum = null,
+                available = false,
+                reason = "context_overflow",
+            ),
+        )
+        val unknown = resumeCostUiModel(
+            cost(
+                minimum = null,
+                maximum = null,
+                available = false,
+                reason = "unknown_model",
+            ),
+        )
+
+        assertEquals("No API charge", local.visibleLabel)
+        assertTrue(local.detail.contains("local"))
+        assertEquals("Resume cost unavailable", overflow.visibleLabel)
+        assertTrue(overflow.detail.contains("context limit"))
+        assertTrue(unknown.detail.contains("no reviewed pricing entry"))
+        assertFalse(unknown.detail.contains("$0"))
+        assertTrue(unavailableResumeCostUiModel().detail.contains("context accounting"))
+    }
+
+    @Test
     fun homeReducerCoversLoadingEmptyOfflineAndExpiredAuth() {
         val existing = recent("first")
         val loading = sessionHomeLoading(SessionHomeUiState(items = listOf(existing)))
@@ -130,6 +188,40 @@ class SessionHomeTest {
         measurementBasis = "test",
         exact = exact,
         overflow = overflow,
+        resumeCost = cost(
+            minimum = 0.0,
+            maximum = 0.0,
+            modelId = "qwen3:8b",
+            noApiCharge = true,
+        ),
+    )
+
+    private fun cost(
+        minimum: Double?,
+        maximum: Double?,
+        modelId: String = "claude-haiku-4-5-20251001",
+        available: Boolean = true,
+        noApiCharge: Boolean = false,
+        tokenBasis: String = "exact_projected_payload",
+        reason: String? = null,
+    ): ResumeCostEstimate = ResumeCostEstimate(
+        available = available,
+        noApiCharge = noApiCharge,
+        provider = if (noApiCharge) "ollama" else "anthropic",
+        modelId = modelId,
+        currency = "USD",
+        minimumUsd = minimum,
+        maximumUsd = maximum,
+        projectedInputTokens = 100,
+        representativeOutputTokens = 512,
+        tokenBasis = tokenBasis,
+        cacheAssumption = "cold",
+        pricingBasis = "test-basis",
+        pricingEffectiveDate = "2026-05-27",
+        pricingExpiresOn = null,
+        inputRatePerMillion = if (noApiCharge) 0.0 else 1.25,
+        outputRatePerMillion = if (noApiCharge) 0.0 else 5.0,
+        unavailableReason = reason,
     )
 
     private fun recent(id: String) = RecentSessionItem(

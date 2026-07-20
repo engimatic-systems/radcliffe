@@ -46,8 +46,13 @@ without request bodies, credentials, or conversational content.
   is deliberately absent.
 - `GET /v1/sessions/{session_id}/context-usage` replays the current deterministic
   projection and returns model ID, exact/estimated input usage, reserved output,
-  remaining capacity, percentage, projection version, and overflow state. It
-  never returns message content or the internal request digest.
+  remaining capacity, percentage, projection version, and overflow state. The
+  response also includes a content-free cold-cache resume-cost range from the
+  versioned `config/model-pricing-v1.json` registry and the configurable
+  representative output allowance. Local models report no API charge; unknown,
+  expired, promotional, overflow, and missing-tier cases return an explicit
+  unavailable reason. It never returns message content or the internal request
+  digest, and cost calculation makes no additional provider request.
 - `GET /v1/sessions/{session_id}/messages?after=...&limit=...` returns the
   owner-authenticated, chronological persisted timeline for reopen. Secret
   envelopes are skipped without breaking the stable sequence cursor.

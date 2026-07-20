@@ -117,7 +117,26 @@ class SessionApiTest {
                     "projection_version": "context-v2",
                     "measurement_basis": "ollama-openai-prompt_tokens-v1",
                     "exact": true,
-                    "overflow": false
+                    "overflow": false,
+                    "resume_cost": {
+                        "available": true,
+                        "no_api_charge": false,
+                        "provider": "anthropic",
+                        "model_id": "claude-haiku-4-5-20251001",
+                        "currency": "USD",
+                        "minimum_usd": 0.00125,
+                        "maximum_usd": 0.00381,
+                        "projected_input_tokens": 1000,
+                        "representative_output_tokens": 512,
+                        "token_basis": "exact_projected_payload",
+                        "cache_assumption": "cold",
+                        "pricing_basis": "anthropic/haiku/test",
+                        "pricing_effective_date": "2026-05-27",
+                        "pricing_expires_on": null,
+                        "input_rate_per_million": 1.25,
+                        "output_rate_per_million": 5.0,
+                        "unavailable_reason": null
+                    }
                 }""".trimIndent(),
             ),
         )
@@ -128,6 +147,9 @@ class SessionApiTest {
         assertEquals(3.1, usage.percentage, 0.0)
         assertTrue(usage.exact)
         assertFalse(usage.overflow)
+        assertEquals("claude-haiku-4-5-20251001", usage.resumeCost.modelId)
+        assertEquals(0.00381, usage.resumeCost.maximumUsd!!, 0.0)
+        assertEquals("2026-05-27", usage.resumeCost.pricingEffectiveDate)
     }
 
     @Test

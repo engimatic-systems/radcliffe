@@ -109,6 +109,7 @@ from radcliffe_control.job_executor import (
 )
 from radcliffe_control.job_results import PromotedJobResult, read_promoted_result
 from radcliffe_control.readiness import ReadinessProbe
+from radcliffe_control.resume_cost import ModelPricingRegistry, ResumeCostEstimate
 from radcliffe_control.settings import Settings
 from radcliffe_control.workers import (
     LocalWorkerLauncher,
@@ -259,6 +260,7 @@ class ContextUsageResponse(BaseModel):
     measurement_basis: str
     exact: bool
     overflow: bool
+    resume_cost: ResumeCostEstimate
 
 
 class SessionMessageResponse(BaseModel):
@@ -617,6 +619,7 @@ class Runtime:
     workers: WorkerSupervisor | None
     worker_maintenance: asyncio.Task[None] | None
     context_usage: ContextUsageClient
+    model_pricing: ModelPricingRegistry
     devices: DeviceRegistry
     readiness: ReadinessProbe
     telemetry: TelemetrySink
@@ -1568,6 +1571,7 @@ def create_app(
             workers,
             None,
             context_usage_client or SidecarContextUsageClient(settings.sidecar_url),
+            ModelPricingRegistry.load(settings.model_pricing_path),
             DeviceRegistry(settings.database_path),
             readiness_probe or ReadinessProbe(settings),
             TelemetrySink(settings.telemetry_path),
@@ -1998,8 +2002,16 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if measured.projection_version != CONTEXT_PROJECTION_VERSION:
             raise HTTPException(status_code=503, detail="context projection version mismatch")
+        resume_cost = active.model_pricing.estimate(
+            model_id=measured.model_id,
+            projected_input_tokens=measured.projected_input_tokens,
+            representative_output_tokens=active.settings.resume_representative_output_tokens,
+            exact=measured.exact,
+            overflow=measured.overflow,
+        )
         return ContextUsageResponse(
             session_id=session_id,
+            resume_cost=resume_cost,
             **measured.model_dump(exclude={"request_digest"}),
         )
 

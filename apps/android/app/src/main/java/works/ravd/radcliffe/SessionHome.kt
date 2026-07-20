@@ -31,12 +31,15 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.util.Locale
+import kotlin.math.ceil
 
 sealed interface ContextUsageState {
     data object Loading : ContextUsageState
@@ -128,6 +131,78 @@ data class ContextIndicatorModel(
     val progress: Boolean,
 )
 
+data class ResumeCostUiModel(
+    val visibleLabel: String,
+    val detail: String,
+    val accessibilityLabel: String,
+)
+
+internal fun resumeCostUiModel(cost: ResumeCostEstimate): ResumeCostUiModel {
+    val tokenBasis = if (cost.tokenBasis == "exact_projected_payload") {
+        "exact measured model payload"
+    } else {
+        "estimated model payload"
+    }
+    val cache = if (cost.cacheAssumption == "cold") {
+        "cold 5-minute cache-write or uncached-input assumption"
+    } else {
+        "warm cache-read assumption"
+    }
+    if (cost.noApiCharge) {
+        val detail = "${cost.modelId} is local. Resuming has no provider API-token charge. " +
+            "The estimate used ${cost.projectedInputTokens} $tokenBasis input tokens and " +
+            "allows up to ${cost.representativeOutputTokens} output tokens."
+        return ResumeCostUiModel("No API charge", detail, "No API charge. $detail")
+    }
+    if (!cost.available || cost.maximumUsd == null) {
+        val reason = when (cost.unavailableReason) {
+            "context_overflow" -> "the conversation exceeds the model context limit"
+            "unknown_model" -> "the model has no reviewed pricing entry"
+            "pricing_not_yet_effective" -> "the pricing entry is not effective yet"
+            "pricing_expired" -> "the reviewed pricing entry expired"
+            "pricing_tier_unavailable" -> "no reviewed long-context tier applies"
+            "promotion_expired" -> "the promotional pricing entry expired"
+            else -> "pricing or context accounting is unavailable"
+        }
+        val detail = "Resume cost unavailable for ${cost.modelId}: $reason."
+        return ResumeCostUiModel("Resume cost unavailable", detail, detail)
+    }
+    val maximum = qualifiedUpperUsd(cost.maximumUsd)
+    val qualifier = if (cost.tokenBasis == "exact_projected_payload") "Cold estimate" else "Approx. cold estimate"
+    val visible = "$qualifier ≤$maximum"
+    val priceDates = buildString {
+        cost.pricingEffectiveDate?.let { append(" Pricing effective $it.") }
+        cost.pricingExpiresOn?.let { append(" Pricing expires $it.") }
+    }
+    val rates = if (cost.inputRatePerMillion != null && cost.outputRatePerMillion != null) {
+        " Input rate ${cost.inputRatePerMillion} USD per million; " +
+            "output rate ${cost.outputRatePerMillion} USD per million."
+    } else {
+        ""
+    }
+    val detail = "$visible for ${cost.modelId} in ${cost.currency}. " +
+        "Uses ${cost.projectedInputTokens} $tokenBasis input tokens, including measured " +
+        "system and tool overhead, with up to ${cost.representativeOutputTokens} output tokens; " +
+        "$cache.$priceDates$rates"
+    return ResumeCostUiModel(visible, detail, "$visible. $detail")
+}
+
+internal fun unavailableResumeCostUiModel(): ResumeCostUiModel {
+    val detail = "Resume cost unavailable because model-visible context accounting is unavailable."
+    return ResumeCostUiModel("Resume cost unavailable", detail, detail)
+}
+
+private fun qualifiedUpperUsd(value: Double): String {
+    if (value <= 0.0) return "$0.00"
+    val scale = if (value < 0.01) 10_000.0 else 100.0
+    val upper = ceil(value * scale) / scale
+    return if (scale == 10_000.0) {
+        String.format(Locale.US, "$%.4f", upper)
+    } else {
+        String.format(Locale.US, "$%.2f", upper)
+    }
+}
+
 internal fun contextIndicator(state: ContextUsageState): ContextIndicatorModel = when (state) {
     ContextUsageState.Loading -> ContextIndicatorModel(
         ContextSeverity.UNKNOWN,
@@ -204,6 +279,7 @@ fun SessionHome(
     modifier: Modifier = Modifier,
 ) {
     var pendingArchive by remember { mutableStateOf<RecentSessionItem?>(null) }
+    var costDetail by remember { mutableStateOf<ResumeCostUiModel?>(null) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(onClick = onNewSession, modifier = Modifier.fillMaxWidth()) {
             Text("New conversation")
@@ -261,6 +337,7 @@ fun SessionHome(
                             onClick = { onOpenSession(item.summary.sessionId) },
                             onArchive = { pendingArchive = item },
                             onRestore = { onRestoreSession(item.summary.sessionId) },
+                            onCostDetail = { costDetail = it },
                         )
                     }
                     if (state.nextCursor != null) {
@@ -296,6 +373,16 @@ fun SessionHome(
             },
             dismissButton = {
                 TextButton(onClick = { pendingArchive = null }) { Text("Cancel") }
+            },
+        )
+    }
+    costDetail?.let { model ->
+        AlertDialog(
+            onDismissRequest = { costDetail = null },
+            title = { Text("Cold-cache resume estimate") },
+            text = { Text(model.detail) },
+            confirmButton = {
+                Button(onClick = { costDetail = null }) { Text("Done") }
             },
         )
     }
@@ -338,11 +425,17 @@ private fun SessionRow(
     onClick: () -> Unit,
     onArchive: () -> Unit,
     onRestore: () -> Unit,
+    onCostDetail: (ResumeCostUiModel) -> Unit,
 ) {
     val summary = item.summary
     val date = formatSessionDate(summary.lastActivityAt)
     val title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation from $date"
     val indicator = contextIndicator(item.contextUsage)
+    val resumeCost = when (val usage = item.contextUsage) {
+        is ContextUsageState.Available -> resumeCostUiModel(usage.usage.resumeCost)
+        ContextUsageState.Unavailable -> unavailableResumeCostUiModel()
+        ContextUsageState.Loading -> null
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -359,6 +452,14 @@ private fun SessionRow(
                 )
                 Text(date, style = MaterialTheme.typography.bodySmall)
                 Text(indicator.statusLabel, style = MaterialTheme.typography.labelSmall)
+                resumeCost?.let { cost ->
+                    TextButton(
+                        onClick = { onCostDetail(cost) },
+                        modifier = Modifier.semantics {
+                            contentDescription = cost.accessibilityLabel
+                        },
+                    ) { Text(cost.visibleLabel) }
+                }
                 if (selected) {
                     Text("Most recently opened", style = MaterialTheme.typography.labelSmall)
                 }

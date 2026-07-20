@@ -42,6 +42,27 @@ data class ContextUsage(
     val measurementBasis: String,
     val exact: Boolean,
     val overflow: Boolean,
+    val resumeCost: ResumeCostEstimate,
+)
+
+data class ResumeCostEstimate(
+    val available: Boolean,
+    val noApiCharge: Boolean,
+    val provider: String?,
+    val modelId: String,
+    val currency: String,
+    val minimumUsd: Double?,
+    val maximumUsd: Double?,
+    val projectedInputTokens: Int,
+    val representativeOutputTokens: Int,
+    val tokenBasis: String,
+    val cacheAssumption: String,
+    val pricingBasis: String?,
+    val pricingEffectiveDate: String?,
+    val pricingExpiresOn: String?,
+    val inputRatePerMillion: Double?,
+    val outputRatePerMillion: Double?,
+    val unavailableReason: String?,
 )
 
 data class TimelinePage(
@@ -413,6 +434,47 @@ object SessionApi {
         measurementBasis = json.getString("measurement_basis"),
         exact = json.getBoolean("exact"),
         overflow = json.getBoolean("overflow"),
+        resumeCost = parseResumeCost(json.getJSONObject("resume_cost")),
+    )
+
+    private fun parseResumeCost(json: JSONObject): ResumeCostEstimate = ResumeCostEstimate(
+        available = json.getBoolean("available"),
+        noApiCharge = json.getBoolean("no_api_charge"),
+        provider = if (json.isNull("provider")) null else json.getString("provider"),
+        modelId = json.getString("model_id"),
+        currency = json.getString("currency"),
+        minimumUsd = if (json.isNull("minimum_usd")) null else json.getDouble("minimum_usd"),
+        maximumUsd = if (json.isNull("maximum_usd")) null else json.getDouble("maximum_usd"),
+        projectedInputTokens = json.getInt("projected_input_tokens"),
+        representativeOutputTokens = json.getInt("representative_output_tokens"),
+        tokenBasis = json.getString("token_basis"),
+        cacheAssumption = json.getString("cache_assumption"),
+        pricingBasis = if (json.isNull("pricing_basis")) null else json.getString("pricing_basis"),
+        pricingEffectiveDate = if (json.isNull("pricing_effective_date")) {
+            null
+        } else {
+            json.getString("pricing_effective_date")
+        },
+        pricingExpiresOn = if (json.isNull("pricing_expires_on")) {
+            null
+        } else {
+            json.getString("pricing_expires_on")
+        },
+        inputRatePerMillion = if (json.isNull("input_rate_per_million")) {
+            null
+        } else {
+            json.getDouble("input_rate_per_million")
+        },
+        outputRatePerMillion = if (json.isNull("output_rate_per_million")) {
+            null
+        } else {
+            json.getDouble("output_rate_per_million")
+        },
+        unavailableReason = if (json.isNull("unavailable_reason")) {
+            null
+        } else {
+            json.getString("unavailable_reason")
+        },
     )
 
     internal fun parseSessionSummary(json: JSONObject): SessionSummary = SessionSummary(

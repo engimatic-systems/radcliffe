@@ -313,6 +313,25 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
             "measurement_basis": "test-exact-model-request",
             "exact": True,
             "overflow": False,
+            "resume_cost": {
+                "available": True,
+                "no_api_charge": True,
+                "provider": "ollama",
+                "model_id": "qwen3:8b",
+                "currency": "USD",
+                "minimum_usd": 0.0,
+                "maximum_usd": 0.0,
+                "projected_input_tokens": 67,
+                "representative_output_tokens": 512,
+                "token_basis": "exact_projected_payload",
+                "cache_assumption": "cold",
+                "pricing_basis": ("ollama/qwen3:8b/usd-2026-05-27/radcliffe-model-pricing-v1"),
+                "pricing_effective_date": "2026-05-27",
+                "pricing_expires_on": None,
+                "input_rate_per_million": 0.0,
+                "output_rate_per_million": 0.0,
+                "unavailable_reason": None,
+            },
         }
         assert "content" not in body
         assert "request_digest" not in body

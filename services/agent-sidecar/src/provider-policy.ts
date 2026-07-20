@@ -2,7 +2,7 @@ const LOCAL_PROVIDERS = new Set(["ollama"]);
 
 export const ANTHROPIC_DEBUG_MODEL_ID = "claude-haiku-4-5-20251001";
 export const ANTHROPIC_DEBUG_PRICING_BASIS =
-  "anthropic/claude-haiku-4-5-20251001/usd-2025-10-01";
+  "anthropic/claude-haiku-4-5-20251001/usd-2026-05-27";
 export const ANTHROPIC_DEBUG_CONTEXT_WINDOW = 200_000;
 export const ANTHROPIC_DEBUG_PRICING = Object.freeze({
   input: 1,
