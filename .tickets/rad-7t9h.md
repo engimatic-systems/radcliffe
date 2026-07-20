@@ -1,6 +1,6 @@
 ---
 id: rad-7t9h
-status: in_progress
+status: closed
 deps: []
 links: [rad-erac, rad-tg8o]
 created: 2026-07-20T04:15:35Z
@@ -22,3 +22,9 @@ Provide a default-deny egress gateway or proxy between each disposable internal 
 
 A deployed sandbox job can use ordinary curl, wget, HTTPS Git, Python/Node package acquisition, and a small public-web research workflow through the bounded egress path, then promote checked workspace artifacts. Direct container egress remains unavailable; private/LAN/Tailscale/host/control-plane/cloud-metadata targets are denied for literal addresses, DNS answers, redirects, alternate address families, and rebinding attempts. Downloads, connections, response sizes, and runtimes are bounded; proxy and container cleanup are deterministic after success, failure, cancellation, and timeout; no protected credential or unrelated host mount enters the job. Deterministic tests cover allow and deny policy, redirect and DNS edge cases, unavailable-proxy behavior, and cleanup; an opt-in live smoke fetches pinned public fixtures and completes an end-to-end background research job without any physical-device or user-testing step.
 
+
+## Notes
+
+**2026-07-20T04:37:05Z**
+
+Implemented bounded HTTP/HTTPS proxy enforcement with validated multi-address DNS resolution, connection and transfer limits, canonical upstream headers, deterministic partial-start cleanup, and bridge-first proxy routing. Added deterministic SSRF/topology tests and a content-free opt-in live smoke covering curl, wget, HTTPS Git, Python, pip, npm, direct-egress denial, RFC1918, tailnet, metadata, and cleanup. Deployed revision a8a39d20a913: background-job preflight ready; all ten egress checks passed; a real local-Ollama job fetched the public fixture and promoted report.md before succeeding. Full Python gate: 304 passed, 1 skipped.
