@@ -90,3 +90,28 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     )
     assert list(job.job_event.entity_ids) == ["paper:one"]
     assert list(job.job_event.artifact_ids) == ["artifact:report"]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_state_keeps_the_cancelled_operation_generation() -> None:
+    transport = FakeTransport()
+    sink = LiveKitEventSink(transport, "s1")  # type: ignore[arg-type]
+    interrupted = Operation(
+        "s1",
+        4,
+        "operation-4",
+        "cancel-4",
+        "trc_" + "b" * 32,
+    )
+
+    await sink.state_changed(
+        ConversationState.SPEAKING,
+        ConversationState.LISTENING,
+        5,
+        "interrupted",
+        interrupted,
+    )
+
+    event = protocol_pb2.ServerEvent.FromString(transport.packets[0])
+    assert event.state_changed.operation.generation == 4
+    assert event.state_changed.operation.operation_id == "operation-4"
