@@ -2,7 +2,7 @@
 id: rad-mz5a
 status: open
 deps: []
-links: [rad-e5na]
+links: [rad-e5na, rad-cnrg]
 created: 2026-07-20T01:53:18Z
 type: bug
 priority: 1

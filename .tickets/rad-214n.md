@@ -2,7 +2,7 @@
 id: rad-214n
 status: closed
 deps: []
-links: [rad-rwfl, rad-lo0t, rad-chaa, rad-ghti, rad-nu8n]
+links: [rad-rwfl, rad-lo0t, rad-chaa, rad-ghti, rad-nu8n, rad-6dal]
 created: 2026-07-14T02:47:05Z
 type: bug
 priority: 0

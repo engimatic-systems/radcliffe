@@ -62,6 +62,7 @@ type ManageJobArguments = Extract<
   ToolExecutionRequest,
   { toolName: "manage_job" }
 >["arguments"];
+export type JobManagementOperation = ManageJobArguments["operation"];
 
 const CONFIGURATION_OPERATIONS = ["inspect", "set", "reset", "undo"] as const;
 const CONFIGURATION_KEYS = ["response_detail", "default_speech_rate"] as const;
@@ -238,6 +239,92 @@ export function prepareManageJobArguments(value: unknown): ManageJobArguments {
   return item as ManageJobArguments;
 }
 
+const JOB_REFERENCE = String.raw`(?:background\s+)?(?:job|task|work|agent)`;
+
+export function explicitJobManagementOperation(text: string): JobManagementOperation | undefined {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return undefined;
+  const asksHowTo =
+    /\b(?:how (?:can|could|do|would) i|can i|could i|tell me how|explain how)\b/.test(normalized);
+  if (
+    !asksHowTo &&
+    (new RegExp(`\\b(?:cancel|abort|stop|terminate)\\b.{0,48}\\b(?:${JOB_REFERENCE})\\b`).test(
+      normalized,
+    ) ||
+      new RegExp(`\\b(?:${JOB_REFERENCE})\\b.{0,48}\\b(?:cancel|abort|stop|terminate)\\b`).test(
+        normalized,
+      ))
+  ) {
+    return "cancel";
+  }
+  if (
+    !asksHowTo &&
+    /\b(?:set|change|make|raise|lower)\b.{0,48}\bpriorit(?:y|ize)\b/.test(normalized)
+  ) {
+    return "set_priority";
+  }
+  if (
+    !asksHowTo &&
+    (/\b(?:add|send|give)\b.{0,48}\bfollow[- ]?up\b/.test(normalized) ||
+      /\btell\b.{0,16}\b(?:job|agent)\b.{0,16}\bto\b/.test(normalized))
+  ) {
+    return "follow_up";
+  }
+  if (
+    /\b(?:report|check|show|give me|what(?:'s| is))\b.{0,48}\b(?:status|progress)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:status|progress)\b.{0,32}\b(?:job|task|work)\b/.test(normalized)
+  ) {
+    return "status";
+  }
+  return undefined;
+}
+
+function requiredManageJobStream(base: StreamFn): StreamFn {
+  let firstRequest = true;
+  return (model, context, options) => {
+    if (!firstRequest) return base(model, context, options);
+    firstRequest = false;
+    const toolChoice =
+      model.api === "anthropic-messages"
+        ? { type: "tool", name: "manage_job" }
+        : model.api === "openai-completions"
+          ? { type: "function", function: { name: "manage_job" } }
+          : undefined;
+    if (!toolChoice) return base(model, context, options);
+    return base(model, context, { ...options, toolChoice } as Parameters<StreamFn>[2]);
+  };
+}
+
+function toolResultDetails(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const details = (value as Record<string, unknown>).details;
+  if (typeof details !== "object" || details === null || Array.isArray(details)) return undefined;
+  return details as Record<string, unknown>;
+}
+
+function groundedJobResponse(
+  operation: JobManagementOperation,
+  succeeded: boolean,
+  modelResponse: string,
+  details?: Record<string, unknown>,
+): string {
+  if (!succeeded) {
+    return operation === "status"
+      ? "I couldn't check that job."
+      : operation === "cancel"
+        ? "I couldn't cancel that job."
+        : "I couldn't update that job.";
+  }
+  if (operation === "cancel") return "I requested cancellation.";
+  if (operation === "follow_up") return "I added that to the job.";
+  if (operation === "set_priority") return "I changed the job priority.";
+  if (modelResponse.trim()) return modelResponse;
+  const status = typeof details?.status === "string" ? details.status : "available";
+  return `The job status is ${status}.`;
+}
+
 const EMPTY_USAGE = {
   input: 0,
   output: 0,
@@ -258,6 +345,8 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
   "continues. Use manage_job to inspect, follow up, reprioritize, or cancel an existing job. Never " +
+  "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
+  "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
   "Markdown filenames with list_sources and read " +
   "one with read_source. If the user identifies a source informally or the exact authorized path " +
@@ -467,9 +556,14 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const packets = request.packets.filter((packet) => packet.include);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
+    const jobOperation =
+      current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
     let modelText = "";
+    let groundedJobCall = false;
+    let groundedJobDetails: Record<string, unknown> | undefined;
+    const matchingJobCalls = new Set<string>();
     let providerError: string | undefined;
     const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
       name: "list_sources",
@@ -716,6 +810,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       role: "radcliffe",
       packet,
     }));
+    const turnStream = this.streamFnForTurn?.(request) ?? this.streamFn;
     const agent = new Agent({
       initialState: {
         systemPrompt: systemPrompt(request),
@@ -726,24 +821,28 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       },
       convertToLlm: convertRadcliffeContext,
       transformContext: async (messages) => messages,
-      streamFn: this.streamFnForTurn?.(request) ?? this.streamFn,
+      streamFn: jobOperation ? requiredManageJobStream(turnStream) : turnStream,
       sessionId: request.sessionId,
       toolExecution: "sequential",
     });
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        modelText += event.assistantMessageEvent.delta;
-        await emit({
-          type: "model_delta",
-          requestId: request.requestId,
-          text: event.assistantMessageEvent.delta,
-        });
+        if (!jobOperation || (jobOperation === "status" && groundedJobCall)) {
+          modelText += event.assistantMessageEvent.delta;
+          await emit({
+            type: "model_delta",
+            requestId: request.requestId,
+            text: event.assistantMessageEvent.delta,
+          });
+        }
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         const complete = event.message.content
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("");
-        if (complete) modelText = complete;
+        if (complete && (!jobOperation || (jobOperation === "status" && groundedJobCall))) {
+          modelText = complete;
+        }
         if (event.message.stopReason === "error") {
           providerError = event.message.errorMessage ?? "model provider failed";
         }
@@ -759,6 +858,15 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           estimatedCostUsd: event.message.usage.cost.total,
         });
       } else if (event.type === "tool_execution_start") {
+        if (
+          jobOperation &&
+          event.toolName === "manage_job" &&
+          typeof event.args === "object" &&
+          event.args !== null &&
+          (event.args as Record<string, unknown>).operation === jobOperation
+        ) {
+          matchingJobCalls.add(event.toolCallId);
+        }
         await emit({
           type: "tool_start",
           requestId: request.requestId,
@@ -775,6 +883,10 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           update: event.partialResult,
         });
       } else if (event.type === "tool_execution_end") {
+        if (matchingJobCalls.has(event.toolCallId) && !event.isError) {
+          groundedJobCall = true;
+          groundedJobDetails = toolResultDetails(event.result);
+        }
         await emit({
           type: "tool_end",
           requestId: request.requestId,
@@ -790,6 +902,17 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     try {
       await agent.prompt({ role: "radcliffe", packet: current });
       if (providerError) throw new Error(providerError);
+      if (jobOperation) {
+        modelText = groundedJobResponse(
+          jobOperation,
+          groundedJobCall,
+          modelText,
+          groundedJobDetails,
+        );
+        if (jobOperation !== "status" || !groundedJobCall) {
+          await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+        }
+      }
       if (modelText) {
         await emit({ type: "model_complete", requestId: request.requestId, text: modelText });
       }

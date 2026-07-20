@@ -1,8 +1,8 @@
 ---
 id: rad-rmfz
-status: in_progress
+status: closed
 deps: []
-links: [rad-i6i7]
+links: [rad-i6i7, rad-f08j, rad-fdtf]
 created: 2026-07-20T01:53:18Z
 type: bug
 priority: 0
@@ -32,3 +32,7 @@ A deterministic test reproduces one response containing a valid file-writing run
 **2026-07-20T02:36:39Z**
 
 2026-07-19 deployed revision b0f090c. The exact batched-call regression is covered deterministically; the live local Qwen executor completed job_09b48ee8d336dea954254a8a0df4d00a on its first attempt with coding and testing progress and a verified Fibonacci artifact. Host-side and deployment gates pass; keep open until the user confirms a phone-initiated job and visible Android completion.
+
+**2026-07-20T03:03:16Z**
+
+2026-07-19 physical Pixel acceptance: session ses_c6959363abb37964404d54db53bd53c2 launched Fibonacci job job_bf198150ad4939fe5afe723d204d55cb from voice. It progressed through coding and testing, succeeded on attempt 1 with a promoted artifact/result, reached Android through visibility events, and its completed event received a durable spoken disposition. This satisfies the remaining phone-initiated verified-result and Android-completion criteria.

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CONFIGURE_PARAMETERS,
   convertRadcliffeContext,
+  explicitJobManagementOperation,
   MANAGE_JOB_PARAMETERS,
   MANAGE_SESSION_PARAMETERS,
   modelContextFromRequest,
@@ -60,7 +61,25 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("run_job");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("matching manage_job call succeeds");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
+  });
+
+  it("recognizes explicit job management while leaving how-to questions non-mutating", () => {
+    expect(
+      explicitJobManagementOperation(
+        "Okay, now go ahead and cancel that job. This tests cancellation.",
+      ),
+    ).toBe("cancel");
+    expect(explicitJobManagementOperation("Report the progress on that job.")).toBe("status");
+    expect(explicitJobManagementOperation("Make the background job high priority.")).toBe(
+      "set_priority",
+    );
+    expect(explicitJobManagementOperation("Add this as a follow-up to the job.")).toBe(
+      "follow_up",
+    );
+    expect(explicitJobManagementOperation("How can I cancel that job?")).toBeUndefined();
+    expect(explicitJobManagementOperation("Stop talking about it.")).toBeUndefined();
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {
@@ -454,6 +473,198 @@ describe("PiAgentOrchestrator", () => {
       expect.anything(),
       expect.any(Function),
     );
+  });
+
+  it("fails closed when the model claims cancellation without manage_job", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-ungrounded-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        "Your job has been cancelled. Job ID: job-private-machine-identifier.",
+      ),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn();
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([
+        packet(
+          "user-1",
+          "Okay, that's great. Now go ahead and cancel that job. This is a test.",
+        ),
+      ]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I couldn't cancel that job.",
+    });
+    expect(JSON.stringify(events)).not.toContain("job-private-machine-identifier");
+  });
+
+  it("forces and grounds a cancellation then replaces verbose output with a brief truth", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-grounded-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("manage_job", { operation: "cancel", jobId: "job-1" }, { id: "cancel-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(
+        "Your job has been cancelled. Job ID: job-1. Status: Cancelled. Operation: Cancel.",
+      ),
+    ]);
+    const events: SidecarEvent[] = [];
+    const stream = vi.fn(faux.streamSimple);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"running","cancelRequested":true}',
+      details: { jobId: "job-1", status: "running", replayed: "false" },
+    }));
+    const model = { ...faux.getModel(), api: "openai-completions" as const };
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+
+    await orchestrator.run(
+      request([packet("user-1", "Please cancel that background job now.")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "function", function: { name: "manage_job" } },
+    });
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "manage_job",
+        arguments: { operation: "cancel", jobId: "job-1" },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I requested cancellation.",
+    });
+    expect(JSON.stringify(events)).not.toContain("Operation: Cancel");
+  });
+
+  it("does not ground cancellation on a mismatched successful status call", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-mismatched-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("manage_job", { operation: "status", jobId: "job-1" }, { id: "status-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The job is cancelled."),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"running"}',
+      details: { jobId: "job-1", status: "running" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([packet("user-1", "Cancel that job.")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I couldn't cancel that job.",
+    });
+  });
+
+  it.each([
+    {
+      requestText: "Add this as a follow-up to the job.",
+      operation: "follow_up" as const,
+      arguments: { operation: "follow_up" as const, jobId: "job-1", instruction: "Use CSV." },
+      response: "I added that to the job.",
+    },
+    {
+      requestText: "Make the background job high priority.",
+      operation: "set_priority" as const,
+      arguments: { operation: "set_priority" as const, jobId: "job-1", priority: 4 },
+      response: "I changed the job priority.",
+    },
+  ])("grounds and bounds an explicit $operation response", async (scenario) => {
+    const faux = createFauxCore({ provider: `radcliffe-${scenario.operation}-test` });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("manage_job", scenario.arguments, { id: `${scenario.operation}-1` }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Verbose untrusted mutation details with job-1."),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"running"}',
+      details: { jobId: "job-1", status: "running" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", scenario.requestText)]), (event) => {
+      events.push(event);
+    });
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "manage_job",
+        arguments: scenario.arguments,
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: scenario.response,
+    });
+    expect(JSON.stringify(events)).not.toContain("Verbose untrusted mutation details");
+  });
+
+  it("fails a status claim closed when manage_job errors", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-status-error-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("manage_job", { operation: "status", jobId: "job-1" }, { id: "status-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("The job is complete."),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn(async () => {
+      throw new Error("private gateway failure");
+    });
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const stream = vi.fn(faux.streamSimple);
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+
+    await orchestrator.run(request([packet("user-1", "Report the progress on that job.")]), (event) => {
+      events.push(event);
+    });
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "manage_job" },
+    });
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I couldn't check that job.",
+    });
+    expect(
+      events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
+    ).not.toContainEqual(expect.objectContaining({ text: "private gateway failure" }));
   });
 
   it("discovers an informally named source before reading its canonical bytes", async () => {

@@ -2,7 +2,7 @@
 id: rad-ghti
 status: in_progress
 deps: [rad-wnwh, rad-58mt, rad-8i08, rad-0ekb, rad-ihso, rad-g7di]
-links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z, rad-fvx9]
+links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z, rad-fvx9, rad-6dal]
 created: 2026-07-13T01:52:53Z
 type: task
 priority: 1

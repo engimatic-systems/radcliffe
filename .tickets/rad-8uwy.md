@@ -1,7 +1,7 @@
 ---
 id: rad-8uwy
 status: open
-deps: []
+deps: [rad-fvx9]
 links: [rad-fvx9]
 created: 2026-07-20T01:53:18Z
 type: bug
