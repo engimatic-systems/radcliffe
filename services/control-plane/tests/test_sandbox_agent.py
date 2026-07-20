@@ -6,6 +6,7 @@ import pytest
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
+    SYSTEM_PROMPT,
     DockerSandbox,
     OllamaAgent,
     PrivateTranscript,
@@ -13,6 +14,14 @@ from radcliffe_control.sandbox_agent import (
     run_agent,
     safe_artifacts,
 )
+
+
+def test_background_prompt_keeps_radcliffe_as_the_harness_not_the_model() -> None:
+    normalized = " ".join(SYSTEM_PROMPT.split())
+    assert normalized.count("harness is called Radcliffe") == 1
+    assert "selected Unix job model" in normalized
+    assert "You are Radcliffe" not in normalized
+    assert "Radcliffe's background Unix job agent" not in normalized
 
 
 def start_frame() -> StartFrame:
