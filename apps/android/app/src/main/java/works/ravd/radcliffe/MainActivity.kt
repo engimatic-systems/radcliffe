@@ -92,7 +92,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        setContent { MaterialTheme { Surface(Modifier.fillMaxSize()) { RadcliffeScreen() } } }
+        setContent { RadcliffeTheme { Surface(Modifier.fillMaxSize()) { RadcliffeScreen() } } }
     }
 
     @Composable
