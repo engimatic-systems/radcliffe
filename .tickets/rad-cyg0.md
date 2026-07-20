@@ -1,6 +1,6 @@
 ---
 id: rad-cyg0
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-07-19T20:46:12Z
@@ -43,3 +43,7 @@ Checked the live Tailscale Serve allocation before sharing the endpoint, moved t
 **2026-07-20T00:13:19Z**
 
 The phone passed control connection and Recent loading but exposed a second un-gated route: room credentials advertised the Mac LAN-only LiveKit URL, so Android signaling timed out. Revision ef59f64 adds a protected network override, tailnet WSS signaling, configurable advertised ICE/TCP+UDP ports, regression coverage, and an operations requirement for a real room/audio checkpoint. Live gates and a fresh managed-room join pass; keep open until the Pixel confirms join/audio over the tailnet.
+
+**2026-07-20T04:43:16Z**
+
+Closed from retained automated and later phone evidence. At revision 88358eb, the enforced preflight reported matching control/sidecar revisions and capabilities, running executor, pinned sandbox image, and successful no-provider synthetic job. The real LiveKit harness then joined with freshly issued WSS credentials, exchanged microphone and heard-output audio, rejoined after worker stop, and passed all checks; report: artifacts/voice-conformance/20260720T044048Z/report.json. The strict STT prerequisite was kept at 100% keyword recall by moving one synthetic noisy corpus sentence away from a changed local Karen voice asset.

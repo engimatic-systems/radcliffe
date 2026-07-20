@@ -127,7 +127,7 @@ CASES = (
     CorpusCase(
         "voice-controls-noise",
         ("Reply with exactly voice controls work.",),
-        "Karen",
+        "Samantha",
         ("reply", "voice controls work"),
         noise_snr_db=8,
         echo_delay_ms=70,
