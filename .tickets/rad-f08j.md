@@ -1,6 +1,6 @@
 ---
 id: rad-f08j
-status: in_progress
+status: closed
 deps: [rad-gf5x, rad-i6i7]
 links: [rad-96c5, rad-cnrg, rad-rmfz, rad-fdtf]
 created: 2026-07-20T03:00:01Z
@@ -28,3 +28,7 @@ Successful run_job acceptance and manage_job mutation describe the tool action i
 **2026-07-20T03:28:10Z**
 
 Implemented and deployed in b1bf61e: run_job tool-result prompting now requires exactly 'I started it.', sidecar output is canonically bounded on success/failure, and exact job IDs persist as deduplicated model-only context hidden from the Android message timeline. make check passed (300 Python, 1 skipped; 54 sidecar; Android unit/lint), operations and background-job preflight are ready, and a bounded live Haiku run_job turn emitted only 'I started it.' Physical phone confirmation remains.
+
+**2026-07-20T03:40:42Z**
+
+Refined in 11ae071 after user review: successful run_job and manage_job mutations now instruct the model to describe the tool action in one short sentence, then deliver all additional requested context normally. Machine-oriented mutation tool results no longer expose IDs or serialized metadata to the response model, while durable internal job references remain available for later exact management. Failures and omitted/mismatched tool calls remain fail-closed. Full make check passed (300 Python, 1 skipped; 54 sidecar; Android unit/lint). Live Haiku mixed-response acceptance emitted: 'Background job launched. The foreground conversation remains available for your next request.'
