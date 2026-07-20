@@ -1,6 +1,6 @@
 ---
 id: rad-xhlm
-status: open
+status: closed
 deps: []
 links: [rad-0eyx, rad-v2mj]
 created: 2026-07-20T01:53:18Z
@@ -27,3 +27,7 @@ The large Conversation behavior box is gone; two compact accessible buttons show
 **2026-07-20T02:12:02Z**
 
 2026-07-19 product clarification: background jobs use an expandable summary; the speech-rate control displays exactly one current value at a time, and each tap advances to the next value in the registered cycle.
+
+**2026-07-20T05:01:03Z**
+
+Implemented on 8b8c7af: removed the fixed Conversation behavior card; added two registry-driven compact cycling buttons that display only server-confirmed pace/detail values (detail +/++/+++), pending/error/live-region feedback, undo, stale-revision reconciliation, and descriptive TalkBack labels. Background jobs now default to a compact one/multi-job summary and expand into a bounded scrollable control list. Unit coverage exercises every cycle, restored/stale/error/pending state, stable control order, one/several jobs, and privacy-safe labels. make check passes: Python 305 passed/1 skipped, Node 55 passed, Android unit/lint successful.
