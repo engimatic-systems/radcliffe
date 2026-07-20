@@ -108,6 +108,92 @@ class ConversationManagementTest {
                 ConversationExport(session, emptyList(), includeSystemMessages = false),
             ).contains("_No durable messages._"),
         )
+        assertEquals(
+            "radcliffe-2026-07-14-ses_export.html",
+            exportFileName(session, ConversationExportFormat.HTML),
+        )
+        assertTrue(
+            renderConversationHtml(
+                ConversationExport(session, emptyList(), includeSystemMessages = false),
+            ).contains("<p class=\"empty\">No durable messages.</p>"),
+        )
+    }
+
+    @Test
+    fun htmlExportIsOfflineChronologicalAccessibleAndInjectionSafe() {
+        val credential = "rdc_dev_" + "b".repeat(43)
+        val export = ConversationExport(
+            session = session(title = "Review </title><script>alert('title')</script>"),
+            messages = listOf(
+                message(
+                    "model",
+                    MessageKind.MODEL,
+                    3,
+                    "Unicode stays: café 日本語 🧪\n" + "long-word-" + "x".repeat(5_000),
+                ),
+                message(
+                    "user",
+                    MessageKind.USER,
+                    1,
+                    "<img src=x onerror=alert(1)> & $credential /Users/owner/private.txt",
+                ),
+                message(
+                    "source",
+                    MessageKind.SOURCE,
+                    2,
+                    "Authorized <b>source</b>",
+                    provenance = "/Users/owner/Documents/<svg onload=alert(2)>.html",
+                ),
+                message("system", MessageKind.SYSTEM, 4, "Bearer abcdefghijklmnopqrstuvwxyz"),
+            ),
+            includeSystemMessages = false,
+        )
+
+        val html = renderConversationHtml(export)
+
+        assertTrue(html.startsWith("<!doctype html>\n<html lang=\"en\">"))
+        assertTrue(html.contains("Content-Security-Policy"))
+        assertTrue(html.contains("default-src 'none'"))
+        assertFalse(html.contains("<script>"))
+        assertFalse(html.contains("<img src=x"))
+        assertFalse(html.contains("<svg onload"))
+        assertTrue(html.contains("&lt;script&gt;alert(&#39;title&#39;)&lt;/script&gt;"))
+        assertTrue(html.contains("&lt;img src=x onerror=alert(1)&gt; &amp;"))
+        assertTrue(html.contains("&lt;svg onload=alert(2)&gt;.html"))
+        assertFalse(html.contains(credential))
+        assertFalse(html.contains("/Users/owner"))
+        assertTrue(html.contains("[redacted device credential]"))
+        assertTrue(html.contains("[redacted host path]"))
+        assertTrue(html.indexOf("aria-label=\"User message\"") < html.indexOf("aria-label=\"Authorized source message\""))
+        assertTrue(html.indexOf("aria-label=\"Authorized source message\"") < html.indexOf("aria-label=\"Model message\""))
+        assertFalse(html.contains("aria-label=\"System message\""))
+        assertTrue(html.contains("Unicode stays: café 日本語 🧪"))
+        assertTrue(html.contains("x".repeat(5_000)))
+        assertFalse(html.contains("http://"))
+        assertFalse(html.contains("https://"))
+    }
+
+    @Test
+    fun htmlExportCanExplicitlyIncludeOnlyRedactedSystemContent() {
+        val html = renderConversationExport(
+            ConversationExportFormat.HTML,
+            ConversationExport(
+                session(),
+                listOf(
+                    message(
+                        "system",
+                        MessageKind.SYSTEM,
+                        1,
+                        "authorization=super-secret-value",
+                    ),
+                ),
+                includeSystemMessages = true,
+            ),
+        )
+
+        assertTrue(html.contains("aria-label=\"System message\""))
+        assertTrue(html.contains("authorization: [redacted]"))
+        assertFalse(html.contains("super-secret-value"))
     }
 
     private fun session(title: String? = null) = SessionSummary(
