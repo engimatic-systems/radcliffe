@@ -2,7 +2,7 @@
 id: rad-n62u
 status: in_progress
 deps: []
-links: []
+links: [rad-16wv]
 created: 2026-07-20T14:32:29Z
 type: bug
 priority: 0

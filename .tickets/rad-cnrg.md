@@ -2,7 +2,7 @@
 id: rad-cnrg
 status: open
 deps: [rad-f08j, rad-mz5a]
-links: [rad-f08j, rad-mz5a]
+links: [rad-f08j, rad-mz5a, rad-20nk, rad-0ch6]
 created: 2026-07-20T03:00:01Z
 type: task
 priority: 3
