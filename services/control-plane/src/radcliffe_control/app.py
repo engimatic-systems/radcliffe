@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import shlex
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -59,7 +60,7 @@ from radcliffe_domain.devices import (
     DeviceRegistry,
     credential_digest,
 )
-from radcliffe_domain.envelope import MessageEnvelope, Sensitivity
+from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity
 from radcliffe_domain.jobs import (
     JobConflictError,
     JobError,
@@ -107,7 +108,12 @@ from radcliffe_control.job_executor import (
     JobLauncher,
     JsonLineJobLauncher,
 )
-from radcliffe_control.job_results import PromotedJobResult, read_promoted_result
+from radcliffe_control.job_results import (
+    PromotedJobResult,
+    PromotedSourceFile,
+    read_promoted_result,
+    read_promoted_source,
+)
 from radcliffe_control.readiness import ReadinessProbe
 from radcliffe_control.resume_cost import ModelPricingRegistry, ResumeCostEstimate
 from radcliffe_control.settings import Settings
@@ -374,6 +380,24 @@ class ManageJobArguments(BaseModel):
         return self
 
 
+class ReadJobSourceArguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    reference: str = Field(min_length=1, max_length=300)
+    rate: str | float | None = None
+
+    @field_validator("rate", mode="before")
+    @classmethod
+    def valid_rate(cls, value: object) -> object:
+        if value is not None:
+            SpeechDelivery.parse(value)
+        return value
+
+
 class ToolCallRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -390,10 +414,17 @@ class ToolCallRequest(BaseModel):
     call_id: str
     idempotency_key: str
     tool_name: Literal[
-        "list_sources", "read_source", "configure", "manage_session", "run_job", "manage_job"
+        "list_sources",
+        "read_source",
+        "read_job_source",
+        "configure",
+        "manage_session",
+        "run_job",
+        "manage_job",
     ]
     arguments: (
         ReadSourceArguments
+        | ReadJobSourceArguments
         | ListSourcesArguments
         | ConfigureArguments
         | SessionActionArguments
@@ -406,6 +437,7 @@ class ToolCallRequest(BaseModel):
         expected = {
             "list_sources": ListSourcesArguments,
             "read_source": ReadSourceArguments,
+            "read_job_source": ReadJobSourceArguments,
             "configure": ConfigureArguments,
             "manage_session": SessionActionArguments,
             "run_job": RunJobArguments,
@@ -707,7 +739,7 @@ def _job_tool_response(
         "replayed": result.replayed,
     }
     if promoted_result is not None:
-        payload["result"] = {
+        promoted_payload: dict[str, object] = {
             "summary": promoted_result.summary,
             "artifacts": [
                 {
@@ -719,6 +751,17 @@ def _job_tool_response(
                 for artifact in promoted_result.artifacts
             ],
         }
+        if promoted_result.sources:
+            promoted_payload["sources"] = [
+                {
+                    "entityId": source.entity_id,
+                    "name": source.name,
+                    "locator": source.locator,
+                    "contentSha256": source.sha256,
+                }
+                for source in promoted_result.sources
+            ]
+        payload["result"] = promoted_payload
     model_content = json.dumps(
         payload,
         sort_keys=True,
@@ -732,8 +775,64 @@ def _job_tool_response(
             "revision": str(summary.revision),
             "replayed": str(result.replayed).lower(),
             "artifactCount": str(len(promoted_result.artifacts) if promoted_result else 0),
+            "sourceCount": str(len(promoted_result.sources) if promoted_result else 0),
         },
     )
+
+
+def _job_source_reference(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+async def _resolve_job_source(
+    active: Runtime,
+    *,
+    session_id: str,
+    reference: str,
+) -> PromotedSourceFile:
+    jobs = await active.jobs.list_for_session(
+        principal_id=active.settings.owner_id,
+        session_id=session_id,
+        limit=100,
+    )
+    exact_id: list[PromotedSourceFile] = []
+    exact_name: list[PromotedSourceFile] = []
+    partial_name: list[PromotedSourceFile] = []
+    normalized = _job_source_reference(reference)
+    for job in jobs:
+        if job.attempt < 1:
+            continue
+        result = read_promoted_result(
+            active.settings.job_workspace_root,
+            job_id=job.job_id,
+            attempt=job.attempt,
+        )
+        if result is None:
+            continue
+        for source in result.sources:
+            promoted = read_promoted_source(
+                active.settings.job_workspace_root,
+                job_id=job.job_id,
+                attempt=job.attempt,
+                entity_id=source.entity_id,
+            )
+            if promoted is None:
+                continue
+            source_name = _job_source_reference(source.name)
+            if reference == source.entity_id:
+                exact_id.append(promoted)
+            elif normalized and normalized == source_name:
+                exact_name.append(promoted)
+            elif normalized and (normalized in source_name or source_name in normalized):
+                partial_name.append(promoted)
+    matches = exact_id or exact_name or partial_name
+    unique = {item.source.entity_id: item for item in matches}
+    if not unique:
+        raise JobNotFoundError("promoted job source not found")
+    if len(unique) > 1:
+        names = sorted({item.source.name for item in unique.values()}, key=str.casefold)[:5]
+        raise JobConflictError("promoted job source reference is ambiguous: " + "; ".join(names))
+    return next(iter(unique.values()))
 
 
 def _configuration_value_response(
@@ -2559,7 +2658,44 @@ def create_app(
                         operation=operation,
                     )
                     return response
-                if request.tool_name == "list_sources":
+                if request.tool_name == "read_job_source":
+                    arguments = cast(ReadJobSourceArguments, request.arguments)
+                    promoted = await _resolve_job_source(
+                        active,
+                        session_id=request.session_id,
+                        reference=arguments.reference,
+                    )
+                    source_grant = CapabilityGrant(
+                        grant_id=(
+                            f"job-source:{request.session_id}:{request.generation}:"
+                            f"{promoted.source.entity_id}"
+                        ),
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        readable_roots=(promoted.root,),
+                        allowed_tools=frozenset({"read_source"}),
+                        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                    )
+                    result = await active.gateway.read_source(
+                        call_id=request.call_id,
+                        idempotency_key=request.idempotency_key,
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        grant=source_grant,
+                        raw_arguments={
+                            "path": promoted.source.path,
+                            **({"rate": arguments.rate} if arguments.rate is not None else {}),
+                        },
+                        provenance=Provenance(
+                            locator=promoted.source.locator,
+                            display_name=promoted.source.name,
+                            extractor="promoted-job-source",
+                            extractor_version="1",
+                            source_sha256=bytes.fromhex(promoted.source.sha256),
+                            permission_basis=source_grant.grant_id,
+                        ),
+                    )
+                elif request.tool_name == "list_sources":
                     catalog = await active.gateway.list_sources(
                         call_id=request.call_id,
                         idempotency_key=request.idempotency_key,
@@ -2589,14 +2725,15 @@ def create_app(
                             "truncated": str(catalog.truncated).lower(),
                         },
                     )
-                result = await active.gateway.read_source(
-                    call_id=request.call_id,
-                    idempotency_key=request.idempotency_key,
-                    session_id=request.session_id,
-                    generation=request.generation,
-                    grant=grant,
-                    raw_arguments=request.arguments.model_dump(exclude_none=True),
-                )
+                else:
+                    result = await active.gateway.read_source(
+                        call_id=request.call_id,
+                        idempotency_key=request.idempotency_key,
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        grant=grant,
+                        raw_arguments=request.arguments.model_dump(exclude_none=True),
+                    )
             except JobNotFoundError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (JobConflictError, JobStateError, JobLeaseError) as exc:

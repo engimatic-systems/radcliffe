@@ -1,9 +1,12 @@
+import hashlib
 import os
 
 from radcliffe_control.job_results import (
     PromotedArtifact,
     PromotedJobResult,
+    PromotedSource,
     read_promoted_result,
+    read_promoted_source,
     write_promoted_result,
 )
 
@@ -54,3 +57,60 @@ def test_promoted_result_reader_fails_closed_on_links_mismatch_and_oversize(tmp_
     oversized.mkdir(parents=True)
     oversized.joinpath("promoted-result.json").write_bytes(b"x" * (64 * 1024 + 1))
     assert read_promoted_result(root, job_id="job-3", attempt=1) is None
+
+
+def test_promoted_source_is_hash_verified_beneath_the_private_attempt(tmp_path) -> None:
+    root = tmp_path / "jobs"
+    workspace = root / "job-source" / "attempt-1"
+    files = workspace / "files"
+    files.mkdir(parents=True)
+    canonical = b"# Exact abstract\n\nThe retained canonical text.\n"
+    path = files / "paper.md"
+    path.write_bytes(canonical)
+    digest = hashlib.sha256(canonical).hexdigest()
+    artifact = PromotedArtifact(
+        artifactId=f"artifact:file:{digest[:16]}",
+        path="paper.md",
+        sha256=digest,
+        byteLength=len(canonical),
+    )
+    source = PromotedSource(
+        entityId=f"source:{digest[:16]}",
+        name="Exact Abstract",
+        locator="https://example.test/paper",
+        artifactId=artifact.artifact_id,
+        path=artifact.path,
+        sha256=digest,
+        byteLength=len(canonical),
+    )
+    write_promoted_result(
+        workspace,
+        PromotedJobResult(
+            schemaVersion=1,
+            jobId="job-source",
+            summary="Promoted one exact source.",
+            artifacts=(artifact,),
+            sources=(source,),
+        ),
+    )
+
+    resolved = read_promoted_source(
+        root,
+        job_id="job-source",
+        attempt=1,
+        entity_id=source.entity_id,
+    )
+
+    assert resolved is not None
+    assert resolved.canonical_bytes == canonical
+    assert resolved.path == path
+    path.write_text("tampered")
+    assert (
+        read_promoted_source(
+            root,
+            job_id="job-source",
+            attempt=1,
+            entity_id=source.entity_id,
+        )
+        is None
+    )

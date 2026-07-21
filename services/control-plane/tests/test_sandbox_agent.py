@@ -132,7 +132,17 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
             ),
             tool_call(
                 "finish_job",
-                {"summary": "Verified the result.", "artifactPaths": ["report.md"]},
+                {
+                    "summary": "Verified the result.",
+                    "artifactPaths": ["report.md"],
+                    "sources": [
+                        {
+                            "name": "A Verified Result",
+                            "locator": "https://example.test/paper",
+                            "path": "report.md",
+                        }
+                    ],
+                },
             ),
         ]
     )
@@ -158,6 +168,9 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
     assert promoted is not None
     assert promoted.summary == "Verified the result."
     assert promoted.artifacts[0].path == "report.md"
+    assert promoted.sources[0].name == "A Verified Result"
+    assert promoted.sources[0].sha256 == promoted.artifacts[0].sha256
+    assert frames[-1]["entityIds"] == [promoted.sources[0].entity_id]
     assert not artifact_workspace.joinpath("agent-transcript.jsonl").exists()
     assert not artifact_workspace.joinpath("promoted-result.json").exists()
     assert sandbox.commands == [("python verify.py", 12)]

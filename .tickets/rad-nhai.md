@@ -60,3 +60,7 @@ Started rad-erac to supply the missing concrete Colima/Docker + local-Ollama Uni
 **2026-07-19T21:28:19Z**
 
 The Unix executor is live behind the new deployed-feature preflight. An isolated live job was accepted immediately, a same-session foreground tool remained responsive, the local-Ollama/Colima agent completed and promoted its result, and the test session/device plus containers/network were cleaned up. Awaiting the physical Android lifecycle checkpoint on rad-erac.
+
+**2026-07-20T05:52:00Z**
+
+Implemented durable promoted job-source entities on commit 6e6b1f0. Background finish_job can bind a human source title and locator to a bounded UTF-8 Markdown artifact and SHA-256; succeeded JobEvents carry entity IDs. New read_job_source resolves an exact ID or unambiguous normalized title within the current session, rejects ambiguity/tampering/links/hash drift, and hands the verified source through direct canonical rendering without exposing private job transcripts. Full checks pass (316 Python passed/1 skipped, 56 sidecar, Android unit/lint). Deployed revision 6e6b1f0 passed the background-job readiness gate. Live local-Qwen + Colima evidence artifacts/background-job-sources/20260720T055123Z/report.json fetched a pinned public source via bounded egress, promoted one source, and rendered byte-identical content with SHA-256 b2580eab7825b9f22f790fb0edb7a6e239616e79907004adf36023c7ec4b9a4c; disposable session archived and test device revoked.

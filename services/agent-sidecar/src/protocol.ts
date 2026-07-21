@@ -114,6 +114,10 @@ export type ToolExecutionRequest =
       arguments: { path: string; rate?: SpeechDeliveryRate };
     })
   | (ToolExecutionRequestBase & {
+      toolName: "read_job_source";
+      arguments: { reference: string; rate?: SpeechDeliveryRate };
+    })
+  | (ToolExecutionRequestBase & {
       toolName: "configure";
       arguments:
         | {
