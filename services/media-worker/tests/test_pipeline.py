@@ -23,6 +23,19 @@ from radcliffe_media.sidecar import SidecarEvent
 
 
 class FakeSynthesizer:
+    supports_speech_rate = True
+
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+        self.rates: list[float] = []
+
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes:
+        self.inputs.append(canonical_text)
+        self.rates.append(rate)
+        return canonical_text.encode()
+
+
+class LegacySynthesizer:
     def __init__(self) -> None:
         self.inputs: list[str] = []
 
@@ -127,6 +140,7 @@ class FakeEvents:
         duration_ms,
         canonical_sha256,
         source,
+        speech_rate_multiplier,
     ) -> None:
         self.playback_segments.append(
             (
@@ -137,6 +151,7 @@ class FakeEvents:
                 duration_ms,
                 canonical_sha256,
                 source,
+                speech_rate_multiplier,
             )
         )
         self.playback_announced.set()
@@ -170,10 +185,12 @@ class SourceOrchestrator:
         grant: CapabilityGrant,
         *,
         postamble: str | None = None,
+        rate: str | float | None = None,
     ) -> None:
         self.gateway = gateway
         self.grant = grant
         self.postamble = postamble
+        self.rate = rate
         self.calls = 0
 
     async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
@@ -185,7 +202,10 @@ class SourceOrchestrator:
             session_id=str(request["sessionId"]),
             generation=int(request["generation"]),
             grant=self.grant,
-            raw_arguments={"path": "demo.md"},
+            raw_arguments={
+                "path": "demo.md",
+                **({"rate": self.rate} if self.rate is not None else {}),
+            },
         )
         yield SidecarEvent(
             "tool_end",
@@ -278,10 +298,13 @@ class RecoveringOrchestrator:
 
 
 class FailSecondSynthesis:
+    supports_speech_rate = True
+
     def __init__(self) -> None:
         self.calls = 0
 
-    async def synthesize(self, canonical_text: str) -> bytes:
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes:
+        del rate
         self.calls += 1
         if self.calls == 2:
             raise RuntimeError("deterministic synthesis failure")
@@ -528,6 +551,7 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
             ToolGateway(gateway_store),
             grant,
             postamble="I'm just a model, so I cannot reproduce that source. 😊",
+            rate="fast",
         ),
         tts,
         publisher,
@@ -538,6 +562,7 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
     await pipeline.handle_transcript("Read demo.md")
 
     assert "".join(tts.inputs).encode() == canonical
+    assert tts.rates == [1.25, 1.25]
     assert b"".join(publisher.audio) == canonical
     worker_history = await worker_store.replay("s1")
     assert SourceKind.TEXT_SOURCE in [item.source for item in worker_history]
@@ -549,6 +574,57 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
         SourceKind.USER,
         SourceKind.TEXT_SOURCE,
     ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_synthesizer_uses_normal_fallback_and_rejects_nondefault_rate(
+    tmp_path,
+) -> None:
+    normal_store = EventStore(tmp_path / "normal.sqlite3")
+    await normal_store.migrate()
+    legacy = LegacySynthesizer()
+    normal = VoicePipeline(
+        "s1",
+        normal_store,
+        AnswerOrchestrator(),
+        legacy,  # type: ignore[arg-type]
+        FakePublisher(),
+    )
+    await normal.start()
+
+    await normal.handle_transcript("Answer normally")
+
+    assert "".join(legacy.inputs) == "First sentence. Second sentence."
+
+    root = tmp_path / "sources"
+    root.mkdir()
+    (root / "demo.md").write_text("Exact source.")
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
+    source = VoicePipeline(
+        "s1",
+        worker_store,
+        SourceOrchestrator(
+            ToolGateway(gateway_store),
+            CapabilityGrant(
+                grant_id="grant-1",
+                session_id="s1",
+                generation=1,
+                readable_roots=(root,),
+                allowed_tools=frozenset({"read_source"}),
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            ),
+            rate="fast",
+        ),
+        LegacySynthesizer(),  # type: ignore[arg-type]
+        FakePublisher(),
+    )
+    await source.start()
+
+    with pytest.raises(RuntimeError, match="does not support"):
+        await source.handle_transcript("Read demo.md quickly")
 
 
 @pytest.mark.asyncio
@@ -591,8 +667,10 @@ async def test_client_audio_sink_is_authoritative_for_source_boundary(tmp_path) 
         duration_ms,
         canonical_sha256,
         source_kind,
+        speech_rate_multiplier,
     ) = events.playback_segments[0]
     assert source_kind is SourceKind.TEXT_SOURCE
+    assert speech_rate_multiplier == 1.0
     assert canonical_sha256 == hashlib.sha256(canonical).digest()
     assert await worker_store.playback_boundary("s1", segment_id) == 0
 
@@ -730,7 +808,7 @@ async def test_paused_source_resumes_from_persisted_sentence_boundary_without_ne
         allowed_tools=frozenset({"read_source"}),
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
     )
-    orchestrator = SourceOrchestrator(ToolGateway(gateway_store), grant)
+    orchestrator = SourceOrchestrator(ToolGateway(gateway_store), grant, rate=1.5)
     publisher = PauseAtSecondBoundaryPublisher()
     tts = FakeSynthesizer()
     events = FakeEvents()
@@ -773,6 +851,7 @@ async def test_paused_source_resumes_from_persisted_sentence_boundary_without_ne
         "Second sentence. ",
         "Third sentence.",
     ]
+    assert tts.rates == [1.5, 1.5, 1.5, 1.5]
     assert await worker_store.playback_boundary("s1", f"{source.message_id}:2") == 3
     dispositions = [
         item.metadata.get(TURN_DISPOSITION_METADATA)

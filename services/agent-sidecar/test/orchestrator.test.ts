@@ -81,9 +81,12 @@ describe("PiAgentOrchestrator", () => {
     const faux = createFauxCore({ provider: "radcliffe-tool-test" });
     const sourceEnvelope = "opaque-canonical-envelope-base64";
     faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("read_source", { path: "demo.md" }, { id: "call-1" }), {
-        stopReason: "toolUse",
-      }),
+      fauxAssistantMessage(
+        fauxToolCall("read_source", { path: "demo.md", rate: "fast" }, { id: "call-1" }),
+        {
+          stopReason: "toolUse",
+        },
+      ),
       (context) => {
         const toolResult = context.messages.find((message) => message.role === "toolResult");
         expect(toolResult?.content).toEqual([{ type: "text", text: "source:demo.md" }]);
@@ -105,7 +108,7 @@ describe("PiAgentOrchestrator", () => {
     const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
 
     await orchestrator.run(
-      request([packet("new-user", "Read demo.md")]),
+      request([packet("new-user", "Read demo.md quickly")]),
       (event) => {
         events.push(event);
       },
@@ -117,7 +120,7 @@ describe("PiAgentOrchestrator", () => {
       generation: 1,
       callId: "call-1",
       toolName: "read_source",
-      arguments: { path: "demo.md" },
+      arguments: { path: "demo.md", rate: "fast" },
     });
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["tool_start", "tool_update", "tool_end", "model_complete"]),

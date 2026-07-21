@@ -164,6 +164,23 @@ public object PlaybackSegmentKt {
     public fun clearPlaybackId() {
       _builder.clearPlaybackId()
     }
+
+    /**
+     * `double speech_rate_multiplier = 8;`
+     */
+    public var speechRateMultiplier: kotlin.Double
+      @kotlin.jvm.JvmName("getSpeechRateMultiplier")
+        get() = _builder.speechRateMultiplier
+      @kotlin.jvm.JvmName("setSpeechRateMultiplier")
+        set(value) {
+        _builder.speechRateMultiplier = value
+      }
+    /**
+     * `double speech_rate_multiplier = 8;`
+     */
+    public fun clearSpeechRateMultiplier() {
+      _builder.clearSpeechRateMultiplier()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.PlaybackSegment.copy(block: `works.ravd.radcliffe.protocol.v2`.PlaybackSegmentKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.PlaybackSegment =

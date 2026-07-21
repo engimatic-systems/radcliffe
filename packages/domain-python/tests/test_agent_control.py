@@ -93,6 +93,7 @@ def delivery_request(
     idempotency_key: str = "idempotency-1",
     request_sequence: int = 1,
     rate: int = protocol_pb2.SPEECH_RATE_NORMAL_1_0X,
+    rate_multiplier: float = 0.0,
     source: int = protocol_pb2.SOURCE_KIND_CALL,
     actor_id: str = "agent-1",
     generation: int = 3,
@@ -112,7 +113,10 @@ def delivery_request(
         request_sequence=request_sequence,
         idempotency_key=idempotency_key,
         confirmation=protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE,
-        speech_delivery=protocol_pb2.SpeechDeliveryAction(rate=rate),
+        speech_delivery=protocol_pb2.SpeechDeliveryAction(
+            rate=rate,
+            rate_multiplier=rate_multiplier,
+        ),
         requested_at=timestamp(),
     )
 
@@ -199,6 +203,36 @@ def test_registered_typed_delivery_is_authorized_and_content_free_auditable() ->
     assert audit["action_id"] == (protocol_pb2.AGENT_CONTROL_ACTION_ID_SPEECH_DELIVERY_SET_RATE)
     assert audit["origin"] == protocol_pb2.SOURCE_KIND_CALL
     assert "rate" not in audit
+
+
+@pytest.mark.parametrize("rate_multiplier", [0.75, 0.9, 1.0, 1.333, 1.5])
+def test_bounded_numeric_delivery_rate_is_authorized(rate_multiplier: float) -> None:
+    action = delivery_request(rate=0, rate_multiplier=rate_multiplier)
+
+    decision = boundary().submit(action, grant=grant(), current_generation=3)
+
+    assert decision.result.disposition == protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED
+
+
+@pytest.mark.parametrize("rate_multiplier", [float("nan"), 0.749, 1.501])
+def test_unbounded_numeric_delivery_rate_is_rejected(rate_multiplier: float) -> None:
+    action = delivery_request(rate=0, rate_multiplier=rate_multiplier)
+
+    decision = boundary().submit(action, grant=grant(), current_generation=3)
+
+    assert decision.result.rejection_code == (
+        protocol_pb2.AGENT_CONTROL_REJECTION_CODE_INVALID_ARGUMENT
+    )
+
+
+def test_named_and_numeric_delivery_rates_are_mutually_exclusive() -> None:
+    action = delivery_request(rate_multiplier=1.25)
+
+    decision = boundary().submit(action, grant=grant(), current_generation=3)
+
+    assert decision.result.rejection_code == (
+        protocol_pb2.AGENT_CONTROL_REJECTION_CODE_INVALID_ARGUMENT
+    )
 
 
 @pytest.mark.parametrize(

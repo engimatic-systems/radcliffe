@@ -80,6 +80,75 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_source_applies_rate_as_metadata_without_changing_source_identity(
+    tmp_path,
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    fixture = source_root / "demo.md"
+    fixture.write_bytes(b"First exact sentence. Second exact sentence.\n")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    result = await ToolGateway(store).read_source(
+        call_id="call-rate",
+        idempotency_key="idem-rate",
+        session_id="s1",
+        generation=1,
+        grant=grant(source_root),
+        raw_arguments={"path": "demo.md", "rate": 1.333},
+    )
+    replay = await ToolGateway(store).read_source(
+        call_id="call-rate",
+        idempotency_key="idem-rate",
+        session_id="s1",
+        generation=1,
+        grant=grant(source_root),
+        raw_arguments={"path": "demo.md", "rate": 1.333},
+    )
+    plan = render_projection(result.source_envelope)
+
+    assert result.canonical_bytes == fixture.read_bytes()
+    assert result.source_envelope.content.canonical_bytes() == fixture.read_bytes()
+    assert result.source_envelope.content_sha256 == result.source_envelope.provenance.source_sha256
+    assert [segment.delivery.multiplier for segment in plan.segments] == [1.333, 1.333]
+    assert "1.333" not in result.source_envelope.content.inline_text
+    assert "rate" not in result.call_envelope.content.inline_text
+    assert replay.replayed
+    assert render_projection(replay.source_envelope) == plan
+    with pytest.raises(ToolDeniedError, match="different parameters"):
+        await ToolGateway(store).read_source(
+            call_id="call-rate",
+            idempotency_key="idem-rate",
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "demo.md", "rate": 0.75},
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_source_rejects_unbounded_rate_before_audit_or_io(tmp_path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    (source_root / "demo.md").write_text("Canonical.")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    with pytest.raises(ValueError, match="speech rate"):
+        await ToolGateway(store).read_source(
+            call_id="call-rate",
+            idempotency_key="idem-rate",
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "demo.md", "rate": 1.51},
+        )
+
+    assert await store.replay("s1") == ()
+
+
+@pytest.mark.asyncio
 async def test_read_source_resolves_narrow_spoken_markdown_filename(tmp_path) -> None:
     source_root = tmp_path / "sources"
     source_root.mkdir()

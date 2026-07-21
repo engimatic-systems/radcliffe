@@ -3,13 +3,17 @@ from datetime import UTC, datetime
 import pytest
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity, SourceKind
 from radcliffe_domain.projection import (
+    DELIVERY_SUMMARY_METADATA,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
     TURN_ID_METADATA,
+    SpeechDelivery,
     context_projection,
     context_replay,
     project_replay,
     render_projection,
+    with_delivery_rate,
+    with_delivery_rate_for_all,
 )
 from radcliffe_domain.store import EventStore, StoreConflictError
 
@@ -104,6 +108,86 @@ def test_projection_is_deterministic_source_aware_and_secret_safe() -> None:
         "include": True,
         "timestamp": 1_767_225_600_000,
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "multiplier", "words_per_minute"),
+    [
+        ("slow", 0.75, 135),
+        ("normal", 1.0, 180),
+        ("fast", 1.25, 225),
+        ("very fast", 1.5, 270),
+        (1.333, 1.333, 240),
+    ],
+)
+def test_speech_delivery_rates_are_bounded_and_map_deterministically(
+    value: object,
+    multiplier: float,
+    words_per_minute: int,
+) -> None:
+    delivery = SpeechDelivery.parse(value)
+
+    assert delivery.multiplier == multiplier
+    assert delivery.local_words_per_minute == words_per_minute
+
+
+@pytest.mark.parametrize("value", [False, float("nan"), 0.749, 1.501, "unbounded"])
+def test_speech_delivery_rejects_invalid_or_unbounded_rates(value: object) -> None:
+    with pytest.raises(ValueError, match="speech rate|unsupported speech rate"):
+        SpeechDelivery.parse(value)
+
+
+def test_delivery_metadata_preserves_canonical_identity_and_stays_out_of_context() -> None:
+    source = MessageEnvelope.text(
+        session_id="s1",
+        sequence=1,
+        source=SourceKind.TEXT_SOURCE,
+        text="First sentence. Second sentence!",
+        message_id="source-rate",
+    )
+
+    delivered = with_delivery_rate_for_all(source, "fast")
+    plan = render_projection(delivered)
+
+    assert delivered.content == source.content
+    assert delivered.content_sha256 == source.content_sha256
+    assert (
+        "".join(segment.canonical_text for segment in plan.segments) == source.content.inline_text
+    )
+    assert [segment.delivery.multiplier for segment in plan.segments] == [1.25, 1.25]
+    assert plan.delivery_summary == "Fast (1.25×)"
+    assert delivered.metadata[DELIVERY_SUMMARY_METADATA] == "Fast (1.25×)"
+    assert all(
+        "radcliffe.delivery" not in key for key, _ in context_projection(delivered).annotations
+    )
+    assert render_projection(delivered) == render_projection(delivered)
+
+
+def test_delivery_rate_is_boundary_scoped_and_does_not_leak() -> None:
+    source = MessageEnvelope.text(
+        session_id="s1",
+        sequence=1,
+        source=SourceKind.TEXT_SOURCE,
+        text="One. Two. Three.",
+    )
+
+    mixed = with_delivery_rate(source, (1,), 1.5)
+    normal = MessageEnvelope.text(
+        session_id="s1",
+        sequence=2,
+        source=SourceKind.TEXT_SOURCE,
+        text="Next source.",
+    )
+
+    assert [item.delivery.multiplier for item in render_projection(mixed).segments] == [
+        1.0,
+        1.5,
+        1.0,
+    ]
+    assert render_projection(mixed).delivery_summary == "Very fast (1.5×)"
+    assert [item.delivery.multiplier for item in render_projection(normal).segments] == [1.0]
+    with pytest.raises(ValueError, match="exceeds"):
+        with_delivery_rate(source, (3,), "fast")
 
 
 def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_content() -> None:

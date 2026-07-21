@@ -20,6 +20,7 @@ from radcliffe_domain.projection import (
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
     TURN_ID_METADATA,
+    SpeechDelivery,
     context_replay,
     render_projection,
 )
@@ -113,7 +114,9 @@ class Orchestrator(Protocol):
 
 
 class Synthesizer(Protocol):
-    async def synthesize(self, canonical_text: str) -> bytes: ...
+    supports_speech_rate: bool
+
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes: ...
 
 
 class AudioPublisher(Protocol):
@@ -151,6 +154,7 @@ class VoiceEventSink(Protocol):
         duration_ms: int,
         canonical_sha256: bytes,
         source: SourceKind,
+        speech_rate_multiplier: float,
     ) -> None: ...
 
 
@@ -556,6 +560,7 @@ class VoicePipeline:
                 operation,
                 turn,
                 source=SourceKind.TEXT_SOURCE,
+                delivery=segment.delivery,
                 wait_for_playback=True,
             )
             turn.next_source_boundary = segment.boundary_index + 1
@@ -605,11 +610,21 @@ class VoicePipeline:
         turn: _ActiveTurn,
         *,
         source: SourceKind,
+        delivery: SpeechDelivery | None = None,
         wait_for_playback: bool = False,
     ) -> None:
         self._assert_owner(turn, operation)
+        delivery = delivery or SpeechDelivery()
         synth_started = monotonic()
-        audio = await self.synthesizer.synthesize(canonical_text)
+        if getattr(self.synthesizer, "supports_speech_rate", False):
+            audio = await self.synthesizer.synthesize(
+                canonical_text,
+                rate=delivery.multiplier,
+            )
+        elif delivery.is_default:
+            audio = await self.synthesizer.synthesize(canonical_text)
+        else:
+            raise RuntimeError("speech provider does not support a non-default delivery rate")
         duration = self.publisher.duration_ms(audio)
         playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)
@@ -635,6 +650,7 @@ class VoicePipeline:
                 duration,
                 hashlib.sha256(canonical_text.encode()).digest(),
                 source,
+                delivery.multiplier,
             )
         else:
             await self.engine.acknowledge(

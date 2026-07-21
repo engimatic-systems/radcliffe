@@ -58,6 +58,32 @@ public  final class SpeechDeliveryAction extends
     rate_ = 0;
   }
 
+  public static final int RATE_MULTIPLIER_FIELD_NUMBER = 2;
+  private double rateMultiplier_;
+  /**
+   * <code>double rate_multiplier = 2;</code>
+   * @return The rateMultiplier.
+   */
+  @java.lang.Override
+  public double getRateMultiplier() {
+    return rateMultiplier_;
+  }
+  /**
+   * <code>double rate_multiplier = 2;</code>
+   * @param value The rateMultiplier to set.
+   */
+  private void setRateMultiplier(double value) {
+
+    rateMultiplier_ = value;
+  }
+  /**
+   * <code>double rate_multiplier = 2;</code>
+   */
+  private void clearRateMultiplier() {
+
+    rateMultiplier_ = 0D;
+  }
+
   public static works.ravd.radcliffe.protocol.v2.SpeechDeliveryAction parseFrom(
       java.nio.ByteBuffer data)
       throws com.google.protobuf.InvalidProtocolBufferException {
@@ -201,6 +227,34 @@ public  final class SpeechDeliveryAction extends
       return this;
     }
 
+    /**
+     * <code>double rate_multiplier = 2;</code>
+     * @return The rateMultiplier.
+     */
+    @java.lang.Override
+    public double getRateMultiplier() {
+      return instance.getRateMultiplier();
+    }
+    /**
+     * <code>double rate_multiplier = 2;</code>
+     * @param value The rateMultiplier to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRateMultiplier(double value) {
+      copyOnWrite();
+      instance.setRateMultiplier(value);
+      return this;
+    }
+    /**
+     * <code>double rate_multiplier = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRateMultiplier() {
+      copyOnWrite();
+      instance.clearRateMultiplier();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.SpeechDeliveryAction)
   }
   @java.lang.Override
@@ -218,9 +272,11 @@ public  final class SpeechDeliveryAction extends
       case BUILD_MESSAGE_INFO: {
           java.lang.Object[] objects = new java.lang.Object[] {
             "rate_",
+            "rateMultiplier_",
           };
           java.lang.String info =
-              "\u0000\u0001\u0000\u0000\u0001\u0001\u0001\u0000\u0000\u0000\u0001\f";
+              "\u0000\u0002\u0000\u0000\u0001\u0002\u0002\u0000\u0000\u0000\u0001\f\u0002\u0000" +
+              "";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

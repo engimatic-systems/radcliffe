@@ -89,7 +89,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "read_source";
-      arguments: { path: string };
+      arguments: { path: string; rate?: SpeechDeliveryRate };
     });
 
 export interface ToolExecutionResult {
@@ -117,6 +117,7 @@ export type AgentControlActionId = keyof typeof AGENT_CONTROL_ACTION_WIRE_IDS;
 export type AgentControlScope = "snippet" | "turn" | "session" | "device" | "operator_default";
 export type AgentControlConfirmation = "none" | "user" | "operator";
 export type SpeechRate = "0.75x" | "1.0x" | "1.25x" | "1.5x";
+export type SpeechDeliveryRate = SpeechRate | "slow" | "normal" | "fast" | "very_fast" | number;
 export type ResponseDetail = "brief" | "standard" | "detailed";
 
 export interface AgentControlOrigin {
@@ -152,7 +153,7 @@ interface AgentControlRequestBase {
 export type AgentControlRequest =
   | (AgentControlRequestBase & {
       actionId: "speech_delivery.set_rate";
-      arguments: { rate: SpeechRate };
+      arguments: { rate: SpeechRate | number };
     })
   | (AgentControlRequestBase & {
       actionId: "configuration.set";
@@ -277,10 +278,11 @@ function validArguments(
   const args = record(value);
   if (!args) return false;
   if (actionId === "speech_delivery.set_rate") {
+    const rate = args.rate;
     return (
       exactKeys(args, ["rate"]) &&
-      typeof args.rate === "string" &&
-      SPEECH_RATES.has(args.rate as SpeechRate)
+      ((typeof rate === "string" && SPEECH_RATES.has(rate as SpeechRate)) ||
+        (typeof rate === "number" && Number.isFinite(rate) && rate >= 0.75 && rate <= 1.5))
     );
   }
   if (actionId === "configuration.set") {

@@ -285,6 +285,32 @@ public  final class PlaybackSegment extends
 
   }
 
+  public static final int SPEECH_RATE_MULTIPLIER_FIELD_NUMBER = 8;
+  private double speechRateMultiplier_;
+  /**
+   * <code>double speech_rate_multiplier = 8;</code>
+   * @return The speechRateMultiplier.
+   */
+  @java.lang.Override
+  public double getSpeechRateMultiplier() {
+    return speechRateMultiplier_;
+  }
+  /**
+   * <code>double speech_rate_multiplier = 8;</code>
+   * @param value The speechRateMultiplier to set.
+   */
+  private void setSpeechRateMultiplier(double value) {
+
+    speechRateMultiplier_ = value;
+  }
+  /**
+   * <code>double speech_rate_multiplier = 8;</code>
+   */
+  private void clearSpeechRateMultiplier() {
+
+    speechRateMultiplier_ = 0D;
+  }
+
   public static works.ravd.radcliffe.protocol.v2.PlaybackSegment parseFrom(
       java.nio.ByteBuffer data)
       throws com.google.protobuf.InvalidProtocolBufferException {
@@ -657,6 +683,34 @@ public  final class PlaybackSegment extends
       return this;
     }
 
+    /**
+     * <code>double speech_rate_multiplier = 8;</code>
+     * @return The speechRateMultiplier.
+     */
+    @java.lang.Override
+    public double getSpeechRateMultiplier() {
+      return instance.getSpeechRateMultiplier();
+    }
+    /**
+     * <code>double speech_rate_multiplier = 8;</code>
+     * @param value The speechRateMultiplier to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSpeechRateMultiplier(double value) {
+      copyOnWrite();
+      instance.setSpeechRateMultiplier(value);
+      return this;
+    }
+    /**
+     * <code>double speech_rate_multiplier = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSpeechRateMultiplier() {
+      copyOnWrite();
+      instance.clearSpeechRateMultiplier();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.PlaybackSegment)
   }
   @java.lang.Override
@@ -681,10 +735,11 @@ public  final class PlaybackSegment extends
             "canonicalSha256_",
             "source_",
             "playbackId_",
+            "speechRateMultiplier_",
           };
           java.lang.String info =
-              "\u0000\u0007\u0000\u0001\u0001\u0007\u0007\u0000\u0000\u0000\u0001\u1009\u0000\u0002" +
-              "\u0208\u0003\u000b\u0004\u0003\u0005\n\u0006\f\u0007\u0208";
+              "\u0000\b\u0000\u0001\u0001\b\b\u0000\u0000\u0000\u0001\u1009\u0000\u0002\u0208\u0003" +
+              "\u000b\u0004\u0003\u0005\n\u0006\f\u0007\u0208\b\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

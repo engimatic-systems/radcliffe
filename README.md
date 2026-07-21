@@ -83,6 +83,11 @@ relative Markdown paths, then passes one returned path to `read_source` for the
 canonical, provenance-preserving render path. Neither tool grants general
 filesystem access.
 
+An explicit per-source delivery request can add `rate` to `read_source` as
+`slow`, `normal`, `fast`, `very_fast`, or a numeric `0.75`–`1.5` multiplier.
+The bounded instruction is render metadata, not spoken or model-visible text;
+canonical source bytes and hashes remain unchanged across playback and resume.
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

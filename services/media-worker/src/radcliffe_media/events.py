@@ -85,6 +85,7 @@ class LiveKitEventSink:
         duration_ms: int,
         canonical_sha256: bytes,
         source: SourceKind,
+        speech_rate_multiplier: float,
     ) -> None:
         event = protocol_pb2.ServerEvent(
             protocol_version=2,
@@ -102,6 +103,7 @@ class LiveKitEventSink:
                 duration_ms=duration_ms,
                 canonical_sha256=canonical_sha256,
                 source=_SOURCE_TO_PROTO[source],
+                speech_rate_multiplier=speech_rate_multiplier,
             ),
         )
         await self._send(event)

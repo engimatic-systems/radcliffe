@@ -6,6 +6,14 @@ import org.junit.Test
 
 class SessionModelTest {
     @Test
+    fun nonDefaultSpeechDeliveryHasAnExplicitAccessibilityDescription() {
+        assertEquals(
+            "Speech delivery: Fast (1.25×)",
+            speechDeliveryDescription("Fast (1.25×)"),
+        )
+    }
+
+    @Test
     fun prepareClearsThePreviousConversationBeforeLoadingOrConnecting() {
         SessionModel.open(
             "old-session",

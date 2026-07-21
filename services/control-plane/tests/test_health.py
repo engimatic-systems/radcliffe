@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from radcliffe_control.app import create_app
 from radcliffe_control.settings import Settings
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_domain.projection import render_projection
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 DEVICE_CREDENTIAL = "rdc_dev_" + "b" * 43
@@ -133,7 +134,7 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
                 "call_id": "call-1",
                 "idempotency_key": "idem-1",
                 "tool_name": "read_source",
-                "arguments": {"path": "demo.md"},
+                "arguments": {"path": "demo.md", "rate": "fast"},
             },
         )
         assert tool.status_code == 200
@@ -149,6 +150,9 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         assert source.content.inline_text == "# Exact\n\nCanonical source text.\n"
         assert source.content_sha256.hex() == body["details"]["contentSha256"]
         assert source.provenance.locator == body["details"]["locator"]
+        assert [segment.delivery.multiplier for segment in render_projection(source).segments] == [
+            1.25
+        ]
 
         camel_case_tool = client.post(
             "/v1/tool-calls",

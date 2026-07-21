@@ -52,6 +52,23 @@ public object SpeechDeliveryActionKt {
     public fun clearRate() {
       _builder.clearRate()
     }
+
+    /**
+     * `double rate_multiplier = 2;`
+     */
+    public var rateMultiplier: kotlin.Double
+      @kotlin.jvm.JvmName("getRateMultiplier")
+        get() = _builder.rateMultiplier
+      @kotlin.jvm.JvmName("setRateMultiplier")
+        set(value) {
+        _builder.rateMultiplier = value
+      }
+    /**
+     * `double rate_multiplier = 2;`
+     */
+    public fun clearRateMultiplier() {
+      _builder.clearRateMultiplier()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.SpeechDeliveryAction.copy(block: `works.ravd.radcliffe.protocol.v2`.SpeechDeliveryActionKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.SpeechDeliveryAction =

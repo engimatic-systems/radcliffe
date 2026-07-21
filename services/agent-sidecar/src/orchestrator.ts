@@ -55,6 +55,7 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
+  "Set read_source rate only when the user explicitly requests a delivery speed. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
@@ -63,9 +64,19 @@ export const LIST_SOURCES_DESCRIPTION =
 export const LIST_SOURCES_PARAMETERS = Type.Object({}, { additionalProperties: false });
 export const READ_SOURCE_DESCRIPTION =
   "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
-  "Normalize spoken filename punctuation before passing the path.";
+  "Normalize spoken filename punctuation before passing the path. An explicitly requested speech " +
+  "rate may be slow, normal, fast, very_fast, or a numeric multiplier from 0.75 through 1.5.";
 export const READ_SOURCE_PARAMETERS = Type.Object({
   path: Type.String({ minLength: 1, maxLength: 4096 }),
+  rate: Type.Optional(
+    Type.Union([
+      Type.Literal("slow"),
+      Type.Literal("normal"),
+      Type.Literal("fast"),
+      Type.Literal("very_fast"),
+      Type.Number({ minimum: 0.75, maximum: 1.5 }),
+    ]),
+  ),
 });
 
 function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextMessage {
@@ -203,7 +214,10 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
-        params: { path: string },
+        params: {
+          path: string;
+          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
+        },
         toolSignal?: AbortSignal,
         onUpdate?: (value: {
           content: Array<{ type: "text"; text: string }>;

@@ -37,6 +37,7 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
         1250,
         b"a" * 32,
         SourceKind.TEXT_SOURCE,
+        1.25,
     )
 
     state = protocol_pb2.ServerEvent.FromString(transport.packets[0])
@@ -52,4 +53,5 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     assert playback.playback_segment.segment_id == "segment-1"
     assert playback.playback_segment.duration_ms == 1250
     assert playback.playback_segment.source == protocol_pb2.SOURCE_KIND_TEXT_SOURCE
+    assert playback.playback_segment.speech_rate_multiplier == 1.25
     assert playback.playback_segment.operation.trace_id == "trc_" + "a" * 32
