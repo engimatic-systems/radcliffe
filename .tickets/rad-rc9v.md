@@ -35,3 +35,7 @@ Implementation and host benchmark 2026-07-21: added pinned parakeet-mlx 0.5.1 wi
 **2026-07-21T18:39:30Z**
 
 Deployment correction 2026-07-21: the first generated-session dispatch smoke exposed that per-session workers intentionally inherit a restricted PATH, while parakeet-mlx transcribe(path) redundantly shells out to ffmpeg. The compatibility worker passed only because its launcher shell had Homebrew on PATH. Changed the provider to feed Radcliffe already-normalized 16 kHz mono samples directly through Parakeet get_logmel/generate, preserving the upstream chunk overlap/stitch algorithm for audio over 120 seconds and eliminating the subprocess/PATH failure. A fresh 20.928-second runtime fixture passed with 1052.43 ms warmup, 424.11 ms inference (RTF 0.0203), retained first and last content, and passed the evidence gate. Repeat dynamic dispatch after redeploy remains required.
+
+**2026-07-21T18:40:55Z**
+
+Dynamic deployment acceptance 2026-07-21: after the in-memory correction, make check-worker-dispatch-local created ses_810b32bef22f3053f6d1117bafaca1e0. Its restricted-environment worker preloaded Parakeet in 1646.81 ms, connected to LiveKit only after preload, reached pipeline ready, and logged no ffmpeg, permission, traceback, or provider error. Control /healthz and /readyz were green on revision 4676f2a with Haiku 4.5. Keep this operator-final-check ticket in progress for the requested target-speaker Pixel Gettysburg/natural-pause A/B.
