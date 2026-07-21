@@ -86,6 +86,23 @@ class BackgroundJobsTest {
     }
 
     @Test
+    fun compactSummaryCoversOneAndSeveralJobsWithoutExposingIdentifiers() {
+        val one = backgroundJobsSummaryModel(listOf(job("private-job-id")))
+        val several = backgroundJobsSummaryModel(
+            listOf(
+                job("running", status = BackgroundJobStatus.RUNNING),
+                job("waiting", status = BackgroundJobStatus.WAITING),
+                job("done", status = BackgroundJobStatus.SUCCEEDED),
+            ),
+        )
+
+        assertEquals("1 active job", one.visibleLabel)
+        assertEquals("2 active jobs · 1 needs attention · 1 completed", several.visibleLabel)
+        assertTrue(several.accessibilityLabel.startsWith("Background jobs"))
+        assertFalse(one.accessibilityLabel.contains("private-job-id"))
+    }
+
+    @Test
     fun olderApiHydrationDoesNotOverwriteNewerLiveEvent() {
         BackgroundJobModel.open("session-1")
         BackgroundJobModel.update(

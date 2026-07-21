@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +41,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -749,18 +752,10 @@ class MainActivity : ComponentActivity() {
                     exportInFlight = exportInFlight,
                     operationNotice = operationNotice,
                     exportNotice = exportNotice,
-                    configurationValues = configurationValues.map { setting ->
-                        val live = liveConfigurationUpdates[setting.key]
-                        if (live == null) {
-                            setting
-                        } else {
-                            setting.copy(
-                                value = live.value,
-                                effectiveScope = live.effectiveScope,
-                                revision = live.revision,
-                            )
-                        }
-                    },
+                    configurationValues = effectiveConfigurations(
+                        configurationValues,
+                        liveConfigurationUpdates,
+                    ),
                     configurationInFlight = configurationInFlight,
                     configurationNotice = configurationNotice,
                     lastConfigurationMutation = lastConfigurationMutation,
@@ -785,9 +780,6 @@ class MainActivity : ComponentActivity() {
                     },
                     onConfigurationSet = { key, value ->
                         mutateBehavior("set", key, value)
-                    },
-                    onConfigurationReset = { key ->
-                        mutateBehavior("reset", key)
                     },
                     onConfigurationUndo = { mutation ->
                         mutateBehavior(
@@ -893,7 +885,6 @@ class MainActivity : ComponentActivity() {
         onExport: () -> Unit,
         onArchive: () -> Unit,
         onConfigurationSet: (String, String) -> Unit,
-        onConfigurationReset: (String) -> Unit,
         onConfigurationUndo: (ConfigurationMutationResult) -> Unit,
         onJobFollowUp: (BackgroundJobSummary, String) -> Unit,
         onJobPriority: (BackgroundJobSummary, Int) -> Unit,
@@ -970,7 +961,6 @@ class MainActivity : ComponentActivity() {
             notice = configurationNotice,
             lastMutation = lastConfigurationMutation,
             onSet = onConfigurationSet,
-            onReset = onConfigurationReset,
             onUndo = onConfigurationUndo,
         )
         operationNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -1020,49 +1010,44 @@ class MainActivity : ComponentActivity() {
         notice: String?,
         lastMutation: ConfigurationMutationResult?,
         onSet: (String, String) -> Unit,
-        onReset: (String) -> Unit,
         onUndo: (ConfigurationMutationResult) -> Unit,
     ) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(
-                Modifier.fillMaxWidth().padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        val controls = configurationCycleControls(values, mutationInFlight)
+        if (controls.isEmpty() && notice == null) {
+            Text("Loading behavior settings…", style = MaterialTheme.typography.bodySmall)
+        } else if (controls.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Conversation behavior", style = MaterialTheme.typography.titleSmall)
-                if (values.isEmpty()) {
-                    Text("Loading registered settings…", style = MaterialTheme.typography.bodySmall)
-                }
-                values.sortedBy { it.key }.forEach { setting ->
-                    val label = when (setting.key) {
-                        "response_detail" -> "Response detail"
-                        "default_speech_rate" -> "Default speech pace"
-                        else -> setting.key
-                    }
-                    Text(
-                        "$label · ${setting.value} · ${setting.effectiveScope}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        setting.allowedValues.forEach { value ->
-                            TextButton(
-                                onClick = { onSet(setting.key, value) },
-                                enabled = !mutationInFlight && value != setting.value,
-                            ) { Text(value) }
-                        }
-                    }
-                    TextButton(
-                        onClick = { onReset(setting.key) },
-                        enabled = !mutationInFlight && setting.effectiveScope == "session",
-                    ) { Text("Reset $label") }
-                }
-                lastMutation?.let { mutation ->
+                controls.forEach { control ->
                     OutlinedButton(
-                        onClick = { onUndo(mutation) },
-                        enabled = !mutationInFlight,
-                    ) { Text("Undo last behavior change") }
+                        onClick = {
+                            control.nextValue?.let { onSet(control.key, it) }
+                        },
+                        enabled = control.enabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = control.accessibilityLabel },
+                    ) {
+                        Text("${control.label} ${control.displayValue}")
+                    }
                 }
-                notice?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
             }
+        }
+        lastMutation?.let { mutation ->
+            TextButton(
+                onClick = { onUndo(mutation) },
+                enabled = !mutationInFlight,
+            ) { Text("Undo behavior change") }
+        }
+        notice?.let {
+            Text(
+                it,
+                Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
     }
 
