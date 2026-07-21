@@ -151,6 +151,22 @@ class DeviceRegistry:
             ).fetchone()
         return _record(row) if row is not None else None
 
+    async def get_by_participant_identity(
+        self,
+        *,
+        owner_id: str,
+        participant_identity: str,
+    ) -> DeviceRecord | None:
+        async with aiosqlite.connect(self.path) as database:
+            database.row_factory = aiosqlite.Row
+            row = await (
+                await database.execute(
+                    "SELECT * FROM devices WHERE owner_id = ? AND participant_identity = ?",
+                    (owner_id, participant_identity),
+                )
+            ).fetchone()
+        return _record(row) if row is not None else None
+
     async def revoke(self, *, owner_id: str, device_id: str) -> DeviceRecord | None:
         now = datetime.now(UTC)
         async with aiosqlite.connect(self.path) as database:

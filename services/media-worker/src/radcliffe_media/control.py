@@ -33,12 +33,18 @@ class VoiceControlTarget(Protocol):
 
     async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> None: ...
 
+    async def agent_control_confirmation(
+        self,
+        confirmation: protocol_pb2.AgentControlConfirmation,
+        participant_identity: str,
+    ) -> None: ...
+
 
 class ClientControlHandler:
     def __init__(self, target: VoiceControlTarget) -> None:
         self.target = target
 
-    async def handle(self, data: bytes) -> bool:
+    async def handle(self, data: bytes, participant_identity: str | None = None) -> bool:
         event = protocol_pb2.ClientEvent()
         try:
             event.ParseFromString(data)
@@ -74,6 +80,17 @@ class ClientControlHandler:
                     detail=acknowledgement.detail,
                     playback_id=acknowledgement.playback_id,
                 )
+            )
+            return True
+        if payload == "agent_control_confirmation":
+            if not participant_identity:
+                return False
+            confirmation = event.agent_control_confirmation
+            if confirmation.origin.actor_id != participant_identity:
+                return False
+            await self.target.agent_control_confirmation(
+                confirmation,
+                participant_identity,
             )
             return True
         if payload != "control_command":

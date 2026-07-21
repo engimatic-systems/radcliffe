@@ -94,6 +94,13 @@ default speech pace (`0.75x`, `1.0x`, `1.25x`, `1.5x`). Turn overrides expire
 with the exact turn; session changes persist for that conversation. Android
 shows the effective value and provides bounded set, reset, and undo controls.
 
+Spoken conversation lifecycle requests use the typed `manage_session` tool.
+Creating a conversation is immediate and receives a server-generated ID;
+switch, restart, and end require enrolled-user confirmation in Android. Named
+switches resolve only against the user's catalog and return bounded choices
+instead of guessing. Handoffs preserve existing history without copying it,
+cancel stale playback and model work, and durably replay exact retries.
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

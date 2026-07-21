@@ -255,6 +255,13 @@ class ConnectionProfileRepository(
         }
     }
 
+    suspend fun clearSessionSelection() {
+        dataStore.edit { preferences ->
+            preferences.remove(SESSION_ID)
+            preferences.remove(PENDING_SESSION_KEY)
+        }
+    }
+
     suspend fun setShowSystemMessages(show: Boolean) {
         dataStore.edit { preferences -> preferences[SHOW_SYSTEM_MESSAGES] = show }
     }

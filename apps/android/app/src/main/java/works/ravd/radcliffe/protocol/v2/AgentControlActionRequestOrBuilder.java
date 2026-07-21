@@ -190,6 +190,17 @@ public interface AgentControlActionRequestOrBuilder extends
   works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction getConfigurationUndo();
 
   /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   * @return Whether the sessionEnd field is set.
+   */
+  boolean hasSessionEnd();
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   * @return The sessionEnd.
+   */
+  works.ravd.radcliffe.protocol.v2.SessionEndAction getSessionEnd();
+
+  /**
    * <code>.google.protobuf.Timestamp requested_at = 15;</code>
    * @return Whether the requestedAt field is set.
    */

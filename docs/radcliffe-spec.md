@@ -399,6 +399,7 @@ The initial registry is closed:
 | `configuration.inspect` (`6`) | one allowlisted configuration key | turn, session, device, or operator default | none |
 | `configuration.reset` (`7`) | one allowlisted configuration key | turn or session / device / operator default | none / authenticated user / authenticated operator |
 | `configuration.undo` (`8`) | one allowlisted key and prior mutation ID | turn or session / device / operator default | none / authenticated user / authenticated operator |
+| `session.end` (`9`) | empty | session | authenticated user |
 
 There is no free-form setting name or generic arguments object in the canonical
 contract. The strict sidecar JSON type rejects extra properties before protobuf
@@ -406,6 +407,26 @@ conversion. The protobuf contract has no filesystem path, web URL, command,
 environment, secret, credential, download, privilege, or process-execution
 field. Such capabilities require separate tools, grants, schemas, and
 confirmation policies; they cannot be smuggled through agent control.
+
+The `manage_session` tool is also a closed union: create, switch with one
+bounded reference, restart, or end. Switch references resolve only against the
+enrolled principal's non-archived catalog. An exact owned session ID wins;
+otherwise exact or partial titles and generic recent-conversation references
+produce at most three choices when they are not unique. The executor never
+guesses a destination.
+
+Create and restart allocate a server-owned session ID and begin with empty
+history. Switch preserves both histories without copying content. A destination
+worker must be ready before one transaction records the transition and ends the
+source generation; startup failure restores the source as active and stops any
+partial destination worker. Exact completed retries replay the durable result,
+including after control-plane restart, while changed retries conflict. After
+commit, the source loses tool authority, the media worker cancels playback and
+model output, persists a content-free transition audit, and closes its turn.
+Android binds confirmation to its enrolled participant identity, persists a
+non-end destination before loading its timeline or credentials, replaces the
+room, and keeps that destination selected as the safe recovery target if the
+live reconnect fails. End clears the selected session.
 
 ### Registered behavior configuration
 

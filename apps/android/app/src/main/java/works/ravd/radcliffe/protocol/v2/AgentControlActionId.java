@@ -47,6 +47,10 @@ public enum AgentControlActionId
    * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;</code>
    */
   AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO(8),
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_SESSION_END = 9;</code>
+   */
+  AGENT_CONTROL_ACTION_ID_SESSION_END(9),
   UNRECOGNIZED(-1),
   ;
 
@@ -86,6 +90,10 @@ public enum AgentControlActionId
    * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;</code>
    */
   public static final int AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO_VALUE = 8;
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_SESSION_END = 9;</code>
+   */
+  public static final int AGENT_CONTROL_ACTION_ID_SESSION_END_VALUE = 9;
 
 
   @java.lang.Override
@@ -118,6 +126,7 @@ public enum AgentControlActionId
       case 6: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT;
       case 7: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET;
       case 8: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO;
+      case 9: return AGENT_CONTROL_ACTION_ID_SESSION_END;
       default: return null;
     }
   }

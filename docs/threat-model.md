@@ -27,6 +27,7 @@ The initial read-only source tools are:
 | `list_sources` | Relative `.md` names only beneath explicit readable roots; lexical order; maximum 200 results, four path levels, and 2,000 scanned entries; hidden paths, symlinks, non-files, case-ambiguous names, contents, and absolute host paths excluded | Read directory metadata | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, bounded relative result, result SHA-256, outcome, and timings |
 | `read_source` | One UTF-8 `.md` path under an explicit readable root; maximum 1 MiB; regular files only; resolved target must remain below the resolved root | Read only | Safe only with the same call and idempotency IDs | Immutable arguments, grant, decision, resolved path, byte count, SHA-256, outcome, timings, and error code |
 | `configure` | Only `response_detail` and `default_speech_rate`; typed inspect/set/reset/undo; agent limited to exact turn or session scope | Bounded behavior state only | Exact retries replay; changed retries and stale revisions conflict | Action ID, key, scope, target, canonical value, prior value, revision, actor, mutation/idempotency IDs, outcome; no conversation content or secret values |
+| `manage_session` | Closed create/switch/restart/end union; switch resolves only the enrolled principal's catalog and returns at most three choices | Ends source ownership; may create or activate one destination and worker; never copies history | Completed retries replay the durable transition across reconnect or control-plane restart; changed retries conflict | Action, source/destination IDs, generation, request/idempotency IDs, confirmation origin, outcome; no conversation content or credentials |
 
 Arguments are copied through canonical JSON before validation. Calls execute
 sequentially in M1. A duplicate `call_id` or idempotency key returns the first
@@ -40,6 +41,8 @@ even if an underlying read finishes concurrently.
 | List names under an allowed source root | Separately granted, bounded metadata only | Add user-selected collections without exposing unrestricted paths |
 | Read allowed Markdown source | Grant is sufficient | Same |
 | Read outside grant or unsupported type | Deny | Require a newly issued grant |
+| Create a fresh conversation | Session-scoped grant; server chooses the ID | Same |
+| Switch, restart, or end a conversation | Enrolled user confirmation bound to the live participant | Same |
 | File write/delete, shell, download, archive extraction | Tool unavailable and deny | Explicit per-action confirmation plus narrow grant |
 | Web request | Tool unavailable and deny | Domain allowlist, SSRF controls, size/type limit, redirect validation |
 | Credential or privilege change | Tool unavailable and deny | Out-of-band user confirmation; never delegated to model text |
@@ -66,6 +69,10 @@ even if an underlying read finishes concurrently.
   logs or envelopes.
 - **Tool replay:** the audit store enforces unique call and idempotency IDs and
   persists a request before authorization or work begins.
+- **Conversation confusion or stale handoff:** switch references are
+  principal-scoped and ambiguous matches are never selected automatically. The
+  atomic transition ends the source generation; its worker cancels playback,
+  rejects later transcripts and tools, and is reconciled after handoff.
 - **Data retention:** audio is not stored by default. Envelopes and tool audit
   remain local until the user deletes the session. Secret envelopes are
   excluded from model context and diagnostic reports. Logs use IDs and hashes,
@@ -80,7 +87,9 @@ M1 tests cover valid reads, absolute and relative traversal, sibling-prefix
 confusion, symlink escape, unsupported extension, invalid UTF-8, oversized
 content, stale/revoked/wrong-session grants, unknown tools, mutated arguments,
 duplicate calls, cancellation races, secret-context redaction, reordered
-envelopes, stale-generation output, malformed Protobuf, and replayed commands.
+envelopes, stale-generation output, malformed Protobuf, replayed commands,
+principal-scoped catalog resolution, create/switch/restart/end transitions,
+confirmation binding, worker failure, and replay after control-plane restart.
 
 Before web or mutating tools ship, gates additionally cover IPv4/IPv6 SSRF,
 DNS rebinding, redirect chains, decompression bombs, archive traversal,

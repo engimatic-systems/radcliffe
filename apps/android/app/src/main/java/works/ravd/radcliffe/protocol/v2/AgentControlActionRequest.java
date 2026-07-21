@@ -31,6 +31,7 @@ public  final class AgentControlActionRequest extends
     CONFIGURATION_INSPECT(16),
     CONFIGURATION_RESET(17),
     CONFIGURATION_UNDO(18),
+    SESSION_END(19),
     ACTION_NOT_SET(0);
     private final int value;
     private ActionCase(int value) {
@@ -54,6 +55,7 @@ public  final class AgentControlActionRequest extends
         case 16: return CONFIGURATION_INSPECT;
         case 17: return CONFIGURATION_RESET;
         case 18: return CONFIGURATION_UNDO;
+        case 19: return SESSION_END;
         case 0: return ACTION_NOT_SET;
         default: return null;
       }
@@ -862,6 +864,58 @@ public  final class AgentControlActionRequest extends
    */
   private void clearConfigurationUndo() {
     if (actionCase_ == 18) {
+      actionCase_ = 0;
+      action_ = null;
+    }
+  }
+
+  public static final int SESSION_END_FIELD_NUMBER = 19;
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   */
+  @java.lang.Override
+  public boolean hasSessionEnd() {
+    return actionCase_ == 19;
+  }
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.SessionEndAction getSessionEnd() {
+    if (actionCase_ == 19) {
+       return (works.ravd.radcliffe.protocol.v2.SessionEndAction) action_;
+    }
+    return works.ravd.radcliffe.protocol.v2.SessionEndAction.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setSessionEnd(works.ravd.radcliffe.protocol.v2.SessionEndAction value) {
+    value.getClass();  // minimal bytecode null check
+    action_ = value;
+    actionCase_ = 19;
+  }
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeSessionEnd(works.ravd.radcliffe.protocol.v2.SessionEndAction value) {
+    value.getClass();  // minimal bytecode null check
+    if (actionCase_ == 19 &&
+        action_ != works.ravd.radcliffe.protocol.v2.SessionEndAction.getDefaultInstance()) {
+      action_ = works.ravd.radcliffe.protocol.v2.SessionEndAction.newBuilder((works.ravd.radcliffe.protocol.v2.SessionEndAction) action_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      action_ = value;
+    }
+    actionCase_ = 19;
+  }
+  /**
+   * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+   */
+  private void clearSessionEnd() {
+    if (actionCase_ == 19) {
       actionCase_ = 0;
       action_ = null;
     }
@@ -1796,6 +1850,54 @@ public  final class AgentControlActionRequest extends
     }
 
     /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    @java.lang.Override
+    public boolean hasSessionEnd() {
+      return instance.hasSessionEnd();
+    }
+    /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.SessionEndAction getSessionEnd() {
+      return instance.getSessionEnd();
+    }
+    /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    public Builder setSessionEnd(works.ravd.radcliffe.protocol.v2.SessionEndAction value) {
+      copyOnWrite();
+      instance.setSessionEnd(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    public Builder setSessionEnd(
+        works.ravd.radcliffe.protocol.v2.SessionEndAction.Builder builderForValue) {
+      copyOnWrite();
+      instance.setSessionEnd(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    public Builder mergeSessionEnd(works.ravd.radcliffe.protocol.v2.SessionEndAction value) {
+      copyOnWrite();
+      instance.mergeSessionEnd(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.SessionEndAction session_end = 19;</code>
+     */
+    public Builder clearSessionEnd() {
+      copyOnWrite();
+      instance.clearSessionEnd();
+      return this;
+    }
+
+    /**
      * <code>.google.protobuf.Timestamp requested_at = 15;</code>
      */
     @java.lang.Override
@@ -1879,12 +1981,13 @@ public  final class AgentControlActionRequest extends
             works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.class,
             works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.class,
             works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.class,
+            works.ravd.radcliffe.protocol.v2.SessionEndAction.class,
           };
           java.lang.String info =
-              "\u0000\u0012\u0001\u0001\u0001\u0012\u0012\u0000\u0000\u0000\u0001\u000b\u0002\u0208" +
+              "\u0000\u0013\u0001\u0001\u0001\u0013\u0013\u0000\u0000\u0000\u0001\u000b\u0002\u0208" +
               "\u0003\u1009\u0000\u0004\u1009\u0001\u0005\u1009\u0002\u0006\f\u0007\u0003\b\u0208" +
               "\t\f\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000\u000f\u1009\u0003\u0010" +
-              "<\u0000\u0011<\u0000\u0012<\u0000";
+              "<\u0000\u0011<\u0000\u0012<\u0000\u0013<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

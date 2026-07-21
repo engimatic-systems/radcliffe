@@ -14,6 +14,7 @@ from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
+from google.protobuf.message import DecodeError
 from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import api
 from pydantic import (
@@ -67,6 +68,15 @@ from radcliffe_domain.projection import (
     render_projection,
 )
 from radcliffe_domain.session import Operation
+from radcliffe_domain.session_actions import (
+    SessionActionConflictError,
+    SessionActionError,
+    SessionActionKind,
+    SessionResolutionStatus,
+    SessionTransitionResult,
+    SessionTransitionStore,
+    resolve_session_reference,
+)
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
@@ -283,6 +293,21 @@ class ConfigureArguments(BaseModel):
         return self
 
 
+class SessionActionArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["create", "switch", "restart", "end"]
+    reference: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def valid_operation_shape(self) -> SessionActionArguments:
+        if self.operation == "switch" and self.reference is None:
+            raise ValueError("switch requires a recent-session reference")
+        if self.operation != "switch" and self.reference is not None:
+            raise ValueError("only switch accepts a recent-session reference")
+        return self
+
+
 class ToolCallRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -298,8 +323,10 @@ class ToolCallRequest(BaseModel):
     turn_id: str | None = Field(default=None, min_length=1, max_length=128)
     call_id: str
     idempotency_key: str
-    tool_name: Literal["list_sources", "read_source", "configure"]
-    arguments: ReadSourceArguments | ListSourcesArguments | ConfigureArguments
+    tool_name: Literal["list_sources", "read_source", "configure", "manage_session"]
+    arguments: (
+        ReadSourceArguments | ListSourcesArguments | ConfigureArguments | SessionActionArguments
+    )
 
     @model_validator(mode="after")
     def arguments_match_tool(self) -> ToolCallRequest:
@@ -307,11 +334,14 @@ class ToolCallRequest(BaseModel):
             "list_sources": ListSourcesArguments,
             "read_source": ReadSourceArguments,
             "configure": ConfigureArguments,
+            "manage_session": SessionActionArguments,
         }[self.tool_name]
         if not isinstance(self.arguments, expected):
             raise ValueError(f"arguments do not match {self.tool_name}")
-        if self.tool_name == "configure" and (self.cancellation_id is None or self.turn_id is None):
-            raise ValueError("configure requires cancellation_id and turn_id")
+        if self.tool_name in {"configure", "manage_session"} and (
+            self.cancellation_id is None or self.turn_id is None
+        ):
+            raise ValueError(f"{self.tool_name} requires cancellation_id and turn_id")
         return self
 
 
@@ -375,6 +405,13 @@ class ConfigurationMutationResponse(BaseModel):
     effective: ConfigurationValueResponse
 
 
+class AgentControlConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_proto_base64: str = Field(min_length=1, max_length=32768)
+    participant_identity: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,96}$")
+
+
 @dataclass(frozen=True, slots=True)
 class ActiveSession:
     latest_operation_generation: int
@@ -399,6 +436,9 @@ class Runtime:
     agent_controls: AgentControlBoundary
     configuration_sequences: dict[str, int]
     configuration_requests: dict[str, protocol_pb2.AgentControlActionRequest]
+    session_transitions: SessionTransitionStore
+    session_action_sequences: dict[str, int]
+    session_action_requests: dict[str, protocol_pb2.AgentControlActionRequest]
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -640,6 +680,443 @@ async def _execute_configuration_tool(
     )
 
 
+_SESSION_ACTION_IDS = {
+    SessionActionKind.CREATE: protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_CREATE,
+    SessionActionKind.SWITCH: protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH,
+    SessionActionKind.RESTART: protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_RESTART,
+    SessionActionKind.END: protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_END,
+}
+
+
+def _session_action_kind_from_request(
+    request: protocol_pb2.AgentControlActionRequest,
+) -> SessionActionKind:
+    mapping = {action_id: kind for kind, action_id in _SESSION_ACTION_IDS.items()}
+    try:
+        return mapping[request.action_id]
+    except KeyError as error:
+        raise SessionActionError("session action is not registered") from error
+
+
+def _session_action_request(
+    request: ToolCallRequest,
+    arguments: SessionActionArguments,
+    sequence: int,
+    *,
+    destination_session_id: str | None = None,
+    requested_at: Timestamp | None = None,
+) -> protocol_pb2.AgentControlActionRequest:
+    kind = SessionActionKind(arguments.operation)
+    timestamp = Timestamp()
+    if requested_at is None:
+        timestamp.GetCurrentTime()
+    else:
+        timestamp.CopyFrom(requested_at)
+    action = protocol_pb2.AgentControlActionRequest(
+        schema_version=1,
+        request_id=f"session:{request.call_id}",
+        operation=protocol_pb2.OperationRef(
+            session_id=request.session_id,
+            generation=request.generation,
+            operation_id=request.operation_id,
+            cancellation_id=request.cancellation_id,
+            trace_id=request.trace_id,
+        ),
+        origin=protocol_pb2.AgentControlOrigin(
+            source=protocol_pb2.SOURCE_KIND_CALL,
+            actor_id="agent-sidecar",
+            source_message_id=f"call:{request.call_id}",
+            tool_call_id=request.call_id,
+        ),
+        target=protocol_pb2.AgentControlTarget(
+            scope=protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+            session_id=request.session_id,
+        ),
+        action_id=_SESSION_ACTION_IDS[kind],
+        request_sequence=sequence,
+        idempotency_key=request.idempotency_key,
+        confirmation=(
+            protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE
+            if kind is SessionActionKind.CREATE
+            else protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER
+        ),
+        requested_at=timestamp,
+    )
+    if kind is SessionActionKind.CREATE:
+        action.session_create.SetInParent()
+    elif kind is SessionActionKind.SWITCH:
+        action.session_switch.destination_session_id = destination_session_id or ""
+    elif kind is SessionActionKind.RESTART:
+        action.session_restart.SetInParent()
+    else:
+        action.session_end.SetInParent()
+    return action
+
+
+def _session_action_grant(
+    request: protocol_pb2.AgentControlActionRequest,
+    *,
+    actor_id: str,
+    origin: int,
+) -> AgentControlGrant:
+    return AgentControlGrant(
+        grant_id=f"session-action:{request.operation.session_id}:{request.operation.generation}",
+        session_id=request.operation.session_id,
+        generation=request.operation.generation,
+        actor_id=actor_id,
+        allowed_origins=frozenset({origin}),
+        allowed_actions=frozenset(_SESSION_ACTION_IDS.values()),
+        allowed_scopes=frozenset({protocol_pb2.AGENT_CONTROL_SCOPE_SESSION}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
+
+def _session_transition_response(result: SessionTransitionResult) -> ToolCallResponse:
+    payload = {
+        "operation": result.action.value,
+        "status": "applied",
+        "request_id": result.request_id,
+        "source_session_id": result.source_session_id,
+        "destination_session_id": result.destination_session_id,
+        "replayed": result.replayed,
+    }
+    return ToolCallResponse(
+        model_content=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        details={
+            "sessionAction": result.action.value,
+            "sessionTransitionStatus": "applied",
+            "requestId": result.request_id,
+            "sourceSessionId": result.source_session_id,
+            "destinationSessionId": result.destination_session_id or "",
+            "replayed": str(result.replayed).lower(),
+        },
+    )
+
+
+async def _apply_session_transition(
+    active: Runtime,
+    request: protocol_pb2.AgentControlActionRequest,
+    request_sha256: bytes,
+) -> SessionTransitionResult:
+    replay = await active.session_transitions.replay(
+        request_id=request.request_id,
+        idempotency_key=request.idempotency_key,
+        request_sha256=request_sha256,
+    )
+    if replay is not None:
+        active.sessions.pop(request.operation.session_id, None)
+        return replay
+
+    kind = _session_action_kind_from_request(request)
+    source = await active.catalog.get(
+        principal_id=active.settings.owner_id,
+        session_id=request.operation.session_id,
+    )
+    if (
+        source is None
+        or source.status != "active"
+        or source.generation != request.operation.generation
+    ):
+        raise SessionActionConflictError("originating session generation is no longer active")
+
+    destination: SessionRecord | None = None
+    previous_destination_status: str | None = None
+    if kind in {SessionActionKind.CREATE, SessionActionKind.RESTART}:
+        destination, _created = await active.catalog.create(
+            principal_id=active.settings.owner_id,
+            idempotency_key=f"agent-transition:{request.idempotency_key}",
+        )
+        previous_destination_status = destination.status
+        if destination.status != "active":
+            reactivated = await active.catalog.update(
+                principal_id=active.settings.owner_id,
+                session_id=destination.session_id,
+                title=destination.title,
+                status="active",
+            )
+            assert reactivated is not None
+            destination = reactivated
+    elif kind is SessionActionKind.SWITCH:
+        destination = await active.catalog.get(
+            principal_id=active.settings.owner_id,
+            session_id=request.session_switch.destination_session_id,
+        )
+        if (
+            destination is None
+            or destination.status == "archived"
+            or destination.session_id == source.session_id
+        ):
+            raise SessionActionError("destination session is unavailable")
+        previous_destination_status = destination.status
+        if destination.status != "active":
+            reactivated = await active.catalog.update(
+                principal_id=active.settings.owner_id,
+                session_id=destination.session_id,
+                title=destination.title,
+                status="active",
+            )
+            assert reactivated is not None
+            destination = reactivated
+
+    if destination is not None:
+        try:
+            if active.workers is not None and destination.worker_mode == "managed":
+                destination = await active.workers.ensure(destination)
+        except WorkerLaunchError as error:
+            restored_status = (
+                previous_destination_status
+                if previous_destination_status in {"ended", "archived"}
+                else "ended"
+            )
+            await active.catalog.update(
+                principal_id=active.settings.owner_id,
+                session_id=destination.session_id,
+                title=destination.title,
+                status=restored_status,
+            )
+            if active.workers is not None:
+                await active.workers.stop(destination.session_id)
+            raise HTTPException(
+                status_code=503,
+                detail="media worker failed to start",
+            ) from error
+
+    result = await active.session_transitions.commit(
+        request_id=request.request_id,
+        idempotency_key=request.idempotency_key,
+        request_sha256=request_sha256,
+        principal_id=active.settings.owner_id,
+        source_session_id=source.session_id,
+        source_generation=source.generation,
+        action=kind,
+        destination_session_id=destination.session_id if destination is not None else None,
+    )
+    active.sessions.pop(source.session_id, None)
+    return result
+
+
+async def _execute_session_action_tool(
+    active: Runtime,
+    request: ToolCallRequest,
+    arguments: SessionActionArguments,
+) -> ToolCallResponse:
+    previous = next(
+        (
+            candidate
+            for candidate in active.session_action_requests.values()
+            if candidate.idempotency_key == request.idempotency_key
+        ),
+        None,
+    )
+    destination_session_id: str | None = None
+    if previous is not None and previous.action_id == (
+        protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH
+    ):
+        destination_session_id = previous.session_switch.destination_session_id
+    elif arguments.operation == "switch":
+        assert arguments.reference is not None
+        resolution = await resolve_session_reference(
+            active.catalog,
+            principal_id=active.settings.owner_id,
+            current_session_id=request.session_id,
+            reference=arguments.reference,
+        )
+        if resolution.status is not SessionResolutionStatus.RESOLVED:
+            choices = [
+                {
+                    "session_id": choice.session_id,
+                    "title": choice.title,
+                    "last_activity_at": choice.last_activity_at.isoformat(),
+                }
+                for choice in resolution.choices
+            ]
+            clarification_payload: dict[str, object] = {
+                "operation": "switch",
+                "status": resolution.status.value,
+                "choices": choices,
+            }
+            return ToolCallResponse(
+                model_content=json.dumps(
+                    clarification_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                details={
+                    "sessionAction": "switch",
+                    "sessionTransitionStatus": resolution.status.value,
+                    "choicesJson": json.dumps(choices, sort_keys=True, separators=(",", ":")),
+                },
+            )
+        assert resolution.destination is not None
+        destination_session_id = resolution.destination.session_id
+
+    if previous is None:
+        sequence = active.session_action_sequences.get(request.session_id, 0) + 1
+        active.session_action_sequences[request.session_id] = sequence
+        requested_at = None
+    else:
+        sequence = previous.request_sequence
+        requested_at = previous.requested_at
+    action = _session_action_request(
+        request,
+        arguments,
+        sequence,
+        destination_session_id=destination_session_id,
+        requested_at=requested_at,
+    )
+    grant = _session_action_grant(
+        action,
+        actor_id="agent-sidecar",
+        origin=protocol_pb2.SOURCE_KIND_CALL,
+    )
+    decision = active.agent_controls.submit(
+        action,
+        grant=grant,
+        current_generation=request.generation,
+    )
+    if decision.result.disposition not in {
+        protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED,
+        protocol_pb2.AGENT_CONTROL_DISPOSITION_AWAITING_CONFIRMATION,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"session action rejected ({decision.result.rejection_code})",
+        )
+    active.session_action_requests[action.request_id] = action
+    if decision.result.disposition == (
+        protocol_pb2.AGENT_CONTROL_DISPOSITION_AWAITING_CONFIRMATION
+    ):
+        encoded = base64.b64encode(action.SerializeToString(deterministic=True)).decode("ascii")
+        kind = _session_action_kind_from_request(action)
+        pending_payload: dict[str, object] = {
+            "operation": kind.value,
+            "status": "awaiting_confirmation",
+            "request_id": action.request_id,
+            "destination_session_id": destination_session_id,
+        }
+        return ToolCallResponse(
+            model_content=json.dumps(pending_payload, sort_keys=True, separators=(",", ":")),
+            details={
+                "sessionAction": kind.value,
+                "sessionTransitionStatus": "awaiting_confirmation",
+                "requestId": action.request_id,
+                "destinationSessionId": destination_session_id or "",
+                "actionRequestProtoBase64": encoded,
+            },
+        )
+    try:
+        result = await _apply_session_transition(active, action, decision.result.request_sha256)
+    except SessionActionConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SessionActionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return _session_transition_response(result)
+
+
+async def _completed_session_action_replay(
+    active: Runtime,
+    request: ToolCallRequest,
+    arguments: SessionActionArguments,
+) -> ToolCallResponse | None:
+    result = await active.session_transitions.find(
+        request_id=f"session:{request.call_id}",
+        idempotency_key=request.idempotency_key,
+    )
+    if result is None:
+        return None
+    if (
+        result.request_id != f"session:{request.call_id}"
+        or result.idempotency_key != request.idempotency_key
+        or result.source_session_id != request.session_id
+        or result.source_generation != request.generation
+        or result.action.value != arguments.operation
+    ):
+        raise HTTPException(status_code=409, detail="session action replay changed parameters")
+    if result.action is SessionActionKind.SWITCH:
+        assert arguments.reference is not None
+        if arguments.reference.strip() != result.destination_session_id:
+            resolution = await resolve_session_reference(
+                active.catalog,
+                principal_id=active.settings.owner_id,
+                current_session_id=request.session_id,
+                reference=arguments.reference,
+            )
+            if (
+                resolution.status is not SessionResolutionStatus.RESOLVED
+                or resolution.destination is None
+                or resolution.destination.session_id != result.destination_session_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="session action replay changed parameters",
+                )
+    return _session_transition_response(result)
+
+
+async def _confirm_session_action(
+    active: Runtime,
+    request: AgentControlConfirmationRequest,
+) -> ToolCallResponse:
+    try:
+        raw = base64.b64decode(request.confirmation_proto_base64, validate=True)
+        confirmation = protocol_pb2.AgentControlConfirmation.FromString(raw)
+    except (ValueError, DecodeError) as error:
+        raise HTTPException(status_code=422, detail="invalid agent-control confirmation") from error
+    pending = active.session_action_requests.get(confirmation.request_id)
+    if pending is None:
+        raise HTTPException(status_code=409, detail="session action confirmation expired")
+    device = await active.devices.get_by_participant_identity(
+        owner_id=active.settings.owner_id,
+        participant_identity=request.participant_identity,
+    )
+    if (
+        device is None
+        or device.revoked_at is not None
+        or confirmation.origin.actor_id != request.participant_identity
+    ):
+        raise HTTPException(status_code=403, detail="session action confirmation is unauthorized")
+    grant = _session_action_grant(
+        pending,
+        actor_id=request.participant_identity,
+        origin=protocol_pb2.SOURCE_KIND_USER,
+    )
+    decision = active.agent_controls.confirm(
+        confirmation,
+        grant=grant,
+        current_generation=pending.operation.generation,
+    )
+    if decision.result.disposition == protocol_pb2.AGENT_CONTROL_DISPOSITION_CANCELLED:
+        kind = _session_action_kind_from_request(pending)
+        return ToolCallResponse(
+            model_content=json.dumps(
+                {"operation": kind.value, "status": "cancelled"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            details={
+                "sessionAction": kind.value,
+                "sessionTransitionStatus": "cancelled",
+                "requestId": pending.request_id,
+            },
+        )
+    if decision.result.disposition != protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"session action confirmation rejected ({decision.result.rejection_code})",
+        )
+    try:
+        result = await _apply_session_transition(
+            active,
+            pending,
+            decision.result.request_sha256,
+        )
+    except SessionActionConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SessionActionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return _session_transition_response(result)
+
+
 def _room_token(
     settings: Settings,
     record: SessionRecord,
@@ -736,6 +1213,9 @@ def create_app(
             TelemetrySink(settings.telemetry_path),
             ConfigurationRegistry(settings.database_path),
             AgentControlBoundary(),
+            {},
+            {},
+            SessionTransitionStore(settings.database_path),
             {},
             {},
         )
@@ -1379,6 +1859,19 @@ def create_app(
             effective=_configuration_value_response(result.key, result.effective),
         )
 
+    @app.post(
+        "/v1/internal/agent-control/confirmations",
+        response_model=ToolCallResponse,
+    )
+    async def confirm_agent_control_action(
+        request: AgentControlConfirmationRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ToolCallResponse:
+        _bearer(authorization, active.settings.internal_token)
+        async with active.lock:
+            return await _confirm_session_action(active, request)
+
     @app.post("/v1/tool-calls", response_model=ToolCallResponse)
     async def execute_tool(
         request: ToolCallRequest,
@@ -1403,6 +1896,14 @@ def create_app(
             operation=operation,
         )
         async with active.lock:
+            if request.tool_name == "manage_session":
+                replay = await _completed_session_action_replay(
+                    active,
+                    request,
+                    cast(SessionActionArguments, request.arguments),
+                )
+                if replay is not None:
+                    return replay
             session = active.sessions.get(request.session_id)
             if session is None:
                 active.telemetry.emit(
@@ -1438,6 +1939,22 @@ def create_app(
                     grant,
                 )
             try:
+                if request.tool_name == "manage_session":
+                    response = await _execute_session_action_tool(
+                        active,
+                        request,
+                        cast(SessionActionArguments, request.arguments),
+                    )
+                    active.telemetry.emit(
+                        component="control",
+                        event="tool",
+                        outcome="completed",
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        phase="execution",
+                        operation=operation,
+                    )
+                    return response
                 if request.tool_name == "configure":
                     response = await _execute_configuration_tool(
                         active,

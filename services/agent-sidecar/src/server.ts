@@ -154,12 +154,40 @@ createServer(async (request, response) => {
   }
   const isTurn = request.method === "POST" && request.url === "/v1/turns";
   const isContextUsage = request.method === "POST" && request.url === "/v1/context-usage";
-  if (!isTurn && !isContextUsage) {
+  const isAgentConfirmation =
+    request.method === "POST" && request.url === "/v1/agent-control-confirmations";
+  if (!isTurn && !isContextUsage && !isAgentConfirmation) {
     response.writeHead(404).end();
     return;
   }
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  if (isAgentConfirmation) {
+    if (!gatewayUrl || !internalToken) {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "agent-control gateway is unavailable" }));
+      return;
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "invalid JSON" }));
+      return;
+    }
+    const gatewayResponse = await fetch(`${gatewayUrl}/v1/internal/agent-control/confirmations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${internalToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    response.writeHead(gatewayResponse.status, { "content-type": "application/json" });
+    response.end(await gatewayResponse.text());
+    return;
+  }
   let turn: TurnRequest;
   try {
     turn = JSON.parse(Buffer.concat(chunks).toString("utf8")) as TurnRequest;

@@ -79,6 +79,7 @@ class AgentControlActionId(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT: _ClassVar[AgentControlActionId]
     AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET: _ClassVar[AgentControlActionId]
     AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO: _ClassVar[AgentControlActionId]
+    AGENT_CONTROL_ACTION_ID_SESSION_END: _ClassVar[AgentControlActionId]
 
 class AgentControlConfirmationRequirement(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -186,6 +187,7 @@ AGENT_CONTROL_ACTION_ID_SESSION_RESTART: AgentControlActionId
 AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT: AgentControlActionId
 AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET: AgentControlActionId
 AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO: AgentControlActionId
+AGENT_CONTROL_ACTION_ID_SESSION_END: AgentControlActionId
 AGENT_CONTROL_CONFIRMATION_REQUIREMENT_UNSPECIFIED: AgentControlConfirmationRequirement
 AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE: AgentControlConfirmationRequirement
 AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER: AgentControlConfirmationRequirement
@@ -518,8 +520,12 @@ class SessionRestartAction(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class SessionEndAction(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class AgentControlActionRequest(_message.Message):
-    __slots__ = ("schema_version", "request_id", "operation", "origin", "target", "action_id", "request_sequence", "idempotency_key", "confirmation", "speech_delivery", "configuration", "session_create", "session_switch", "session_restart", "configuration_inspect", "configuration_reset", "configuration_undo", "requested_at")
+    __slots__ = ("schema_version", "request_id", "operation", "origin", "target", "action_id", "request_sequence", "idempotency_key", "confirmation", "speech_delivery", "configuration", "session_create", "session_switch", "session_restart", "configuration_inspect", "configuration_reset", "configuration_undo", "session_end", "requested_at")
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
@@ -537,6 +543,7 @@ class AgentControlActionRequest(_message.Message):
     CONFIGURATION_INSPECT_FIELD_NUMBER: _ClassVar[int]
     CONFIGURATION_RESET_FIELD_NUMBER: _ClassVar[int]
     CONFIGURATION_UNDO_FIELD_NUMBER: _ClassVar[int]
+    SESSION_END_FIELD_NUMBER: _ClassVar[int]
     REQUESTED_AT_FIELD_NUMBER: _ClassVar[int]
     schema_version: int
     request_id: str
@@ -555,8 +562,9 @@ class AgentControlActionRequest(_message.Message):
     configuration_inspect: ConfigurationInspectAction
     configuration_reset: ConfigurationResetAction
     configuration_undo: ConfigurationUndoAction
+    session_end: SessionEndAction
     requested_at: _timestamp_pb2.Timestamp
-    def __init__(self, schema_version: _Optional[int] = ..., request_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., origin: _Optional[_Union[AgentControlOrigin, _Mapping]] = ..., target: _Optional[_Union[AgentControlTarget, _Mapping]] = ..., action_id: _Optional[_Union[AgentControlActionId, str]] = ..., request_sequence: _Optional[int] = ..., idempotency_key: _Optional[str] = ..., confirmation: _Optional[_Union[AgentControlConfirmationRequirement, str]] = ..., speech_delivery: _Optional[_Union[SpeechDeliveryAction, _Mapping]] = ..., configuration: _Optional[_Union[ConfigurationAction, _Mapping]] = ..., session_create: _Optional[_Union[SessionCreateAction, _Mapping]] = ..., session_switch: _Optional[_Union[SessionSwitchAction, _Mapping]] = ..., session_restart: _Optional[_Union[SessionRestartAction, _Mapping]] = ..., configuration_inspect: _Optional[_Union[ConfigurationInspectAction, _Mapping]] = ..., configuration_reset: _Optional[_Union[ConfigurationResetAction, _Mapping]] = ..., configuration_undo: _Optional[_Union[ConfigurationUndoAction, _Mapping]] = ..., requested_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    def __init__(self, schema_version: _Optional[int] = ..., request_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., origin: _Optional[_Union[AgentControlOrigin, _Mapping]] = ..., target: _Optional[_Union[AgentControlTarget, _Mapping]] = ..., action_id: _Optional[_Union[AgentControlActionId, str]] = ..., request_sequence: _Optional[int] = ..., idempotency_key: _Optional[str] = ..., confirmation: _Optional[_Union[AgentControlConfirmationRequirement, str]] = ..., speech_delivery: _Optional[_Union[SpeechDeliveryAction, _Mapping]] = ..., configuration: _Optional[_Union[ConfigurationAction, _Mapping]] = ..., session_create: _Optional[_Union[SessionCreateAction, _Mapping]] = ..., session_switch: _Optional[_Union[SessionSwitchAction, _Mapping]] = ..., session_restart: _Optional[_Union[SessionRestartAction, _Mapping]] = ..., configuration_inspect: _Optional[_Union[ConfigurationInspectAction, _Mapping]] = ..., configuration_reset: _Optional[_Union[ConfigurationResetAction, _Mapping]] = ..., configuration_undo: _Optional[_Union[ConfigurationUndoAction, _Mapping]] = ..., session_end: _Optional[_Union[SessionEndAction, _Mapping]] = ..., requested_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class AgentControlConfirmation(_message.Message):
     __slots__ = ("schema_version", "confirmation_id", "request_id", "operation", "origin", "approved", "idempotency_key", "occurred_at")

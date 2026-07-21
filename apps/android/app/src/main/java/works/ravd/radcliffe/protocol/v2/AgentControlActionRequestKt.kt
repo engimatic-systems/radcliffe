@@ -419,6 +419,30 @@ public object AgentControlActionRequestKt {
     }
 
     /**
+     * `.radcliffe.v2.SessionEndAction session_end = 19;`
+     */
+    public var sessionEnd: works.ravd.radcliffe.protocol.v2.SessionEndAction
+      @kotlin.jvm.JvmName("getSessionEnd")
+        get() = _builder.sessionEnd
+      @kotlin.jvm.JvmName("setSessionEnd")
+        set(value) {
+        _builder.sessionEnd = value
+      }
+    /**
+     * `.radcliffe.v2.SessionEndAction session_end = 19;`
+     */
+    public fun clearSessionEnd() {
+      _builder.clearSessionEnd()
+    }
+    /**
+     * `.radcliffe.v2.SessionEndAction session_end = 19;`
+     * @return Whether the sessionEnd field is set.
+     */
+    public fun hasSessionEnd(): kotlin.Boolean {
+      return _builder.hasSessionEnd()
+    }
+
+    /**
      * `.google.protobuf.Timestamp requested_at = 15;`
      */
     public var requestedAt: com.google.protobuf.Timestamp
@@ -488,6 +512,9 @@ public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.c
 
 public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.configurationUndoOrNull: works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction?
   get() = if (hasConfigurationUndo()) getConfigurationUndo() else null
+
+public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.sessionEndOrNull: works.ravd.radcliffe.protocol.v2.SessionEndAction?
+  get() = if (hasSessionEnd()) getSessionEnd() else null
 
 public val works.ravd.radcliffe.protocol.v2.AgentControlActionRequestOrBuilder.requestedAtOrNull: com.google.protobuf.Timestamp?
   get() = if (hasRequestedAt()) getRequestedAt() else null

@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from google.protobuf.timestamp_pb2 import Timestamp
 from radcliffe_domain.configuration import (
     ConfigurationContext,
     ConfigurationMutation,
@@ -29,6 +30,7 @@ from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolGateway
 from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.sidecar import SidecarEvent
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 
 class FakeSynthesizer:
@@ -131,6 +133,7 @@ class FakeEvents:
         self.turn_completed = asyncio.Event()
         self.playback_segments = []
         self.playback_announced = asyncio.Event()
+        self.agent_control_requests = []
 
     async def message(self, envelope) -> None:
         self.messages.append(envelope)
@@ -164,6 +167,9 @@ class FakeEvents:
             )
         )
         self.playback_announced.set()
+
+    async def agent_control_request(self, request) -> None:
+        self.agent_control_requests.append(request)
 
 
 class AnswerOrchestrator:
@@ -230,6 +236,89 @@ class ConfigurationEventOrchestrator:
         )
         yield SidecarEvent("model_delta", {"text": "Configuration applied."})
         yield SidecarEvent("model_complete", {"text": "Configuration applied."})
+        yield SidecarEvent("complete", {})
+
+
+class ImmediateSessionHandoffOrchestrator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        self.calls += 1
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "isError": False,
+                "result": {
+                    "details": {
+                        "sessionAction": "create",
+                        "sessionTransitionStatus": "applied",
+                        "requestId": "session:create-1",
+                        "sourceSessionId": request["sessionId"],
+                        "destinationSessionId": "ses_destination",
+                        "replayed": "false",
+                    }
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "This must never be spoken."})
+        yield SidecarEvent("complete", {})
+
+
+class PendingSessionHandoffOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        occurred_at = Timestamp()
+        occurred_at.FromDatetime(datetime.now(UTC))
+        action = protocol_pb2.AgentControlActionRequest(
+            schema_version=1,
+            request_id="session:switch-1",
+            operation=protocol_pb2.OperationRef(
+                session_id=str(request["sessionId"]),
+                generation=int(request["generation"]),
+                operation_id=str(request["operationId"]),
+                cancellation_id=str(request["cancellationId"]),
+                trace_id=str(request["traceId"]),
+            ),
+            origin=protocol_pb2.AgentControlOrigin(
+                source=protocol_pb2.SOURCE_KIND_CALL,
+                actor_id="agent-sidecar",
+                source_message_id="call:switch-1",
+                tool_call_id="switch-1",
+            ),
+            target=protocol_pb2.AgentControlTarget(
+                scope=protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+                session_id=str(request["sessionId"]),
+            ),
+            action_id=protocol_pb2.AGENT_CONTROL_ACTION_ID_SESSION_SWITCH,
+            request_sequence=1,
+            idempotency_key="session-switch-1",
+            confirmation=protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_USER,
+            session_switch=protocol_pb2.SessionSwitchAction(
+                destination_session_id="ses_destination"
+            ),
+            requested_at=occurred_at,
+        )
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "isError": False,
+                "result": {
+                    "details": {
+                        "sessionAction": "switch",
+                        "sessionTransitionStatus": "awaiting_confirmation",
+                        "requestId": action.request_id,
+                        "destinationSessionId": "ses_destination",
+                        "actionRequestProtoBase64": base64.b64encode(
+                            action.SerializeToString(deterministic=True)
+                        ).decode("ascii"),
+                    }
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "Please confirm the switch."})
+        yield SidecarEvent("model_complete", {"text": "Please confirm the switch."})
         yield SidecarEvent("complete", {})
 
 
@@ -672,6 +761,109 @@ async def test_configuration_tool_result_is_live_auditable_and_excluded_from_mod
     audit_packet = context_replay(history)[history.index(audit)]
     assert not audit_packet.include
     assert "Behavior setting updated" not in audit_packet.content
+
+
+@pytest.mark.asyncio
+async def test_immediate_session_handoff_is_durable_and_stops_stale_generation_output(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    orchestrator = ImmediateSessionHandoffOrchestrator()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline("s1", store, orchestrator, tts, publisher, events)
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Start a new conversation")
+    await pipeline.handle_transcript("This stale turn must be ignored")
+
+    history = await store.replay("s1")
+    transition = next(
+        item for item in history if item.metadata.get("radcliffe.event") == "session_transition"
+    )
+    assert transition.metadata["radcliffe.session_transition.destination_session_id"] == (
+        "ses_destination"
+    )
+    assert transition in events.messages
+    assert not context_replay((transition,))[0].include
+    assert tts.inputs == []
+    assert publisher.flushed
+    assert orchestrator.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_session_handoff_is_sent_for_confirmation_before_any_transition(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        PendingSessionHandoffOrchestrator(),
+        tts,
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Switch to my project conversation")
+
+    assert len(events.agent_control_requests) == 1
+    assert events.agent_control_requests[0].session_switch.destination_session_id == (
+        "ses_destination"
+    )
+    assert "Please confirm" in "".join(tts.inputs)
+    assert not any(
+        item.metadata.get("radcliffe.event") == "session_transition"
+        for item in await store.replay("s1")
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmed_handoff_cancels_active_work_and_blocks_followup_actions(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    orchestrator = InterruptibleOrchestrator()
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        tts,
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+    active = asyncio.create_task(pipeline.handle_transcript("Switch after confirming"))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+
+    applied = await pipeline.complete_session_action(
+        {
+            "details": {
+                "sessionAction": "switch",
+                "sessionTransitionStatus": "applied",
+                "requestId": "session:switch-confirmed",
+                "sourceSessionId": "s1",
+                "destinationSessionId": "ses_destination",
+                "replayed": "false",
+            }
+        }
+    )
+    await asyncio.wait_for(active, timeout=1)
+    await pipeline.handle_transcript("Do not start another stale action")
+
+    assert applied
+    assert len(orchestrator.requests) == 1
+    assert any(
+        item.metadata.get("radcliffe.event") == "session_transition"
+        for item in await store.replay("s1")
+    )
 
 
 @pytest.mark.asyncio

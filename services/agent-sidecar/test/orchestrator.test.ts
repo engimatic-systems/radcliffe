@@ -186,6 +186,49 @@ describe("PiAgentOrchestrator", () => {
     );
   });
 
+  it("routes conversation lifecycle actions with the exact turn identity", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-session-action-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "manage_session",
+          { operation: "switch", reference: "Project notes" },
+          { id: "session-switch-1" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Please confirm the conversation switch."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"operation":"switch","status":"awaiting_confirmation"}',
+      details: { sessionTransitionStatus: "awaiting_confirmation" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([
+        packet("user-1", "Switch to Project notes", {
+          annotations: [
+            ["projection", "context-v2"],
+            ["radcliffe.turn_id", "turn-session-action"],
+          ],
+        }),
+      ]),
+      () => undefined,
+    );
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cancellationId: "cancellation-123456",
+        turnId: "turn-session-action",
+        toolName: "manage_session",
+        arguments: { operation: "switch", reference: "Project notes" },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
   it("projects effective response detail into the model system prompt", () => {
     const context = modelContextFromRequest({
       ...request([packet("user-1", "Explain it")]),
@@ -194,6 +237,7 @@ describe("PiAgentOrchestrator", () => {
 
     expect(context.systemPrompt).toContain("Give a detailed response");
     expect(context.tools.map((tool) => tool.name)).toContain("configure");
+    expect(context.tools.map((tool) => tool.name)).toContain("manage_session");
   });
 
   it("discovers an informally named source before reading its canonical bytes", async () => {

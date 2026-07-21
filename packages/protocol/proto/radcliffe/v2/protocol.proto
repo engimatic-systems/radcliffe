@@ -75,6 +75,7 @@ enum AgentControlActionId {
   AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT = 6;
   AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET = 7;
   AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;
+  AGENT_CONTROL_ACTION_ID_SESSION_END = 9;
 }
 
 enum AgentControlConfirmationRequirement {
@@ -302,6 +303,8 @@ message SessionSwitchAction {
 
 message SessionRestartAction {}
 
+message SessionEndAction {}
+
 message AgentControlActionRequest {
   uint32 schema_version = 1;
   string request_id = 2;
@@ -321,6 +324,7 @@ message AgentControlActionRequest {
     ConfigurationInspectAction configuration_inspect = 16;
     ConfigurationResetAction configuration_reset = 17;
     ConfigurationUndoAction configuration_undo = 18;
+    SessionEndAction session_end = 19;
   }
   google.protobuf.Timestamp requested_at = 15;
 }

@@ -26,6 +26,27 @@ data class ConfigurationUpdate(
     val mutationId: String?,
 )
 
+data class PendingAgentControl(
+    val request: works.ravd.radcliffe.protocol.v2.AgentControlActionRequest,
+    val label: String,
+    val detail: String,
+)
+
+object AgentControlModel {
+    private val mutablePending = MutableStateFlow<PendingAgentControl?>(null)
+    val pending = mutablePending.asStateFlow()
+
+    fun request(value: PendingAgentControl) {
+        mutablePending.value = value
+    }
+
+    fun clear(requestId: String? = null) {
+        if (requestId == null || mutablePending.value?.request?.requestId == requestId) {
+            mutablePending.value = null
+        }
+    }
+}
+
 object BehaviorConfigurationModel {
     private val mutableUpdates = MutableStateFlow<Map<String, ConfigurationUpdate>>(emptyMap())
     val updates = mutableUpdates.asStateFlow()
@@ -71,11 +92,13 @@ object SessionModel {
     fun state(value: VoiceState) { mutableState.value = value }
     fun prepare(sessionId: String = "") {
         BehaviorConfigurationModel.clear()
+        AgentControlModel.clear()
         mutableSessionId.value = sessionId
         mutableMessages.value = emptyList()
     }
     fun open(sessionId: String, timeline: List<DisplayMessage>) {
         BehaviorConfigurationModel.clear()
+        AgentControlModel.clear()
         mutableSessionId.value = sessionId
         mutableMessages.value = timeline.distinctBy { it.id }
     }

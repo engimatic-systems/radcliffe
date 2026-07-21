@@ -1,6 +1,6 @@
 ---
 id: rad-rtvi
-status: open
+status: closed
 deps: [rad-7h1e]
 links: []
 created: 2026-07-17T23:28:43Z
@@ -22,3 +22,9 @@ Use explicit idempotent session actions rather than restarting the Android proce
 
 The active agent can request new, switch, end, and restart-into-fresh-session actions only for the enrolled principal; a fresh session receives a server-generated ID and exactly one worker; ambiguous references produce a bounded choice or clarification rather than guessing; history is preserved and no content is copied unless a separately authorized action says so; the originating generation cannot emit speech or actions after handoff; repeated or reconnected requests are idempotent; Android visibly transitions or reports failure and retains a safe selected session across process recreation; no worker, room token, or playback remains orphaned; and local conformance covers create, catalog resolution, switch, end, replay, cancellation race, worker failure, and control-plane restart.
 
+
+## Notes
+
+**2026-07-18T06:15:29Z**
+
+Implemented the closed manage_session lifecycle contract across protocol, policy, durable transition storage, control plane, sidecar, media worker, and Android. Added principal-scoped bounded catalog resolution, user-confirmed switch/restart/end, server-owned create/restart destinations, atomic source handoff, durable replay across control-plane restart, worker failure cleanup, stale output/playback cutoff, safe Android selection, recovery coverage, and documentation. Verification: make check passed (236 Python passed, 1 skipped; 30 sidecar tests passed; Android unit tests and lint passed).

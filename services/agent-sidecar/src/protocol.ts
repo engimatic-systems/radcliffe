@@ -122,6 +122,12 @@ export type ToolExecutionRequest =
             scope?: "turn" | "session";
             undoMutationId: string;
           };
+    })
+  | (ToolExecutionRequestBase & {
+      toolName: "manage_session";
+      arguments:
+        | { operation: "create" | "restart" | "end" }
+        | { operation: "switch"; reference: string };
     });
 
 export interface ToolExecutionResult {
@@ -146,6 +152,7 @@ export const AGENT_CONTROL_ACTION_WIRE_IDS = {
   "configuration.inspect": 6,
   "configuration.reset": 7,
   "configuration.undo": 8,
+  "session.end": 9,
 } as const;
 
 export type AgentControlActionId = keyof typeof AGENT_CONTROL_ACTION_WIRE_IDS;
@@ -221,6 +228,10 @@ export type AgentControlRequest =
     })
   | (AgentControlRequestBase & {
       actionId: "session.restart";
+      arguments: Record<string, never>;
+    })
+  | (AgentControlRequestBase & {
+      actionId: "session.end";
       arguments: Record<string, never>;
     });
 
@@ -323,7 +334,11 @@ function requiredConfirmation(actionId: AgentControlActionId, scope: AgentContro
     return undefined;
   }
   if (actionId === "session.create") return scope === "session" ? "none" : undefined;
-  if (actionId === "session.switch" || actionId === "session.restart") {
+  if (
+    actionId === "session.switch" ||
+    actionId === "session.restart" ||
+    actionId === "session.end"
+  ) {
     return scope === "session" ? "user" : undefined;
   }
   return undefined;
