@@ -552,6 +552,19 @@ restart, allowing the later foreground notification scheduler to apply
 `immediate`, `next_safe_pause`, `silent`, or `user_waiting` policy without
 reconstructing private job context.
 
+Execution is a separate opt-in process protocol. The configured command is a
+user-supplied VM/container/sandbox wrapper and is invoked without a shell in a
+private per-job attempt directory. The adapter removes service/provider
+credentials and host-home paths, writes instructions and follow-ups over stdin,
+and accepts only bounded JSON-line lifecycle frames on combined stdout/stderr.
+The workspace is mode `0700` and its capped raw executor transcript is mode
+`0600`; neither is projected into conversation history. Heartbeats deliver
+new follow-ups once by stable ID, runtime and output ceilings terminate the
+whole process group, and graceful control-plane shutdown leaves a recoverable
+lease rather than fabricating completion. This process hygiene is not itself an
+OS sandbox: arbitrary Unix/network authority exists only when the operator's
+explicit wrapper supplies that containment boundary.
+
 ### Deterministic context-budget accounting
 
 Context usage is measured after `ContextProjection` and Pi's custom-message

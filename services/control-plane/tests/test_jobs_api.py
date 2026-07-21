@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 from fastapi.testclient import TestClient
@@ -7,6 +8,49 @@ from radcliffe_control.settings import Settings
 DEVICE_CREDENTIAL = "rdc_dev_" + "j" * 43
 DEVICE_AUTHORIZATION = {"Authorization": f"Bearer {DEVICE_CREDENTIAL}"}
 INTERNAL_AUTHORIZATION = {"Authorization": "Bearer internal-token-1234"}
+
+
+class HoldingProcess:
+    def __init__(self) -> None:
+        self.frames: list[dict[str, object]] = []
+        self.finished = asyncio.Event()
+        self._returncode: int | None = None
+        self.terminated = False
+
+    @property
+    def returncode(self) -> int | None:
+        return self._returncode
+
+    async def send(self, frame) -> None:
+        self.frames.append(dict(frame))
+
+    async def readline(self) -> bytes:
+        await self.finished.wait()
+        return b""
+
+    async def wait(self) -> int:
+        await self.finished.wait()
+        assert self._returncode is not None
+        return self._returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._returncode = -15
+        self.finished.set()
+
+    def kill(self) -> None:
+        self._returncode = -9
+        self.finished.set()
+
+
+class HoldingLauncher:
+    def __init__(self) -> None:
+        self.processes: list[HoldingProcess] = []
+
+    async def __call__(self, _claim):
+        process = HoldingProcess()
+        self.processes.append(process)
+        return process
 
 
 def settings(tmp_path) -> Settings:
@@ -307,3 +351,54 @@ def test_job_commands_executor_lease_and_restart_are_deterministic(tmp_path) -> 
         assert private_instruction not in detail.text
         assert private_follow_up not in detail.text
         assert private_live_follow_up not in detail.text
+
+
+def test_foreground_api_remains_responsive_while_executor_process_is_running(tmp_path) -> None:
+    launcher = HoldingLauncher()
+    config = settings(tmp_path).model_copy(
+        update={
+            "job_executor_enabled": True,
+            "job_executor_poll_seconds": 0.05,
+            "job_executor_heartbeat_seconds": 0.05,
+            "job_executor_lease_seconds": 2,
+        }
+    )
+    with TestClient(create_app(config, job_launcher=launcher)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-concurrent",
+            arguments={"instruction": "private long-running job"},
+        )
+        assert accepted.status_code == 200
+        job_id = accepted.json()["details"]["jobId"]
+        deadline = time.monotonic() + 2
+        while not launcher.processes and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert launcher.processes
+
+        jobs = client.get("/v1/sessions/session-1/jobs", headers=DEVICE_AUTHORIZATION)
+        configuration = client.get(
+            "/v1/configuration",
+            headers=DEVICE_AUTHORIZATION,
+            params={"session_id": "session-1"},
+        )
+        assert jobs.status_code == 200
+        assert jobs.json()["items"][0]["status"] == "running"
+        assert configuration.status_code == 200
+
+        cancelled = tool(
+            client,
+            tool_name="manage_job",
+            call_id="cancel-concurrent",
+            arguments={"operation": "cancel", "jobId": job_id},
+        )
+        assert cancelled.status_code == 200
+        deadline = time.monotonic() + 2
+        status = "running"
+        while status != "cancelled" and time.monotonic() < deadline:
+            status = client.get(f"/v1/jobs/{job_id}", headers=DEVICE_AUTHORIZATION).json()["status"]
+            time.sleep(0.01)
+        assert status == "cancelled"
+        assert launcher.processes[0].terminated

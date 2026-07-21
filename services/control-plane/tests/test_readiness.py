@@ -55,6 +55,7 @@ async def test_readiness_checks_schema_dependencies_source_and_disabled_workers(
         ("livekit", "ok", "signal_reachable"),
         ("source_root", "ok", "source_root_readable"),
         ("worker_supervisor", "disabled", "managed_workers_disabled"),
+        ("job_executor", "disabled", "job_executor_disabled"),
     ]
     assert report.checks[0].observed == latest_schema_version()
     assert requests == [
@@ -124,4 +125,32 @@ def test_ready_endpoint_reports_dependency_failure_without_exposing_settings(tmp
             "livekit",
             "source_root",
             "worker_supervisor",
+            "job_executor",
         }
+
+
+@pytest.mark.asyncio
+async def test_enabled_job_executor_is_a_required_readiness_component(tmp_path) -> None:
+    config = settings(tmp_path).model_copy(update={"job_executor_enabled": True})
+    await EventStore(config.database_path).migrate()
+
+    async def healthy(_url: str, _require_json_status: bool) -> bool:
+        return True
+
+    stopped = await ReadinessProbe(config, http_probe=healthy).check(
+        worker_supervisor_available=False,
+        worker_maintenance_running=False,
+        job_executor_available=True,
+        job_executor_running=False,
+    )
+    assert stopped.status == "not_ready"
+    assert stopped.checks[-1].code == "job_executor_stopped"
+
+    running = await ReadinessProbe(config, http_probe=healthy).check(
+        worker_supervisor_available=False,
+        worker_maintenance_running=False,
+        job_executor_available=True,
+        job_executor_running=True,
+    )
+    assert running.status == "ready"
+    assert running.checks[-1].code == "job_executor_running"

@@ -29,3 +29,12 @@ class Settings(BaseSettings):
     worker_uv_bin: Path = Path("/opt/homebrew/bin/uv")
     worker_workspace_root: Path = Field(default_factory=_workspace_root)
     worker_log_directory: Path = Path("var/workers")
+    job_executor_enabled: bool = False
+    job_executor_command: str = ""
+    job_workspace_root: Path = Path("var/jobs")
+    job_executor_max_concurrency: int = Field(default=2, ge=1, le=8)
+    job_executor_poll_seconds: float = Field(default=0.25, ge=0.05, le=30)
+    job_executor_heartbeat_seconds: float = Field(default=5, ge=0.05, le=60)
+    job_executor_lease_seconds: int = Field(default=30, ge=1, le=300)
+    job_executor_stop_timeout_seconds: float = Field(default=5, ge=0.05, le=30)
+    job_executor_max_output_bytes: int = Field(default=1_048_576, ge=1024, le=16_777_216)
