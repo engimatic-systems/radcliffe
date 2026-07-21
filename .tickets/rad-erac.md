@@ -1,6 +1,6 @@
 ---
 id: rad-erac
-status: in_progress
+status: closed
 deps: [rad-7t9h]
 links: [rad-7t9h, rad-tg8o]
 created: 2026-07-19T20:51:44Z
@@ -31,3 +31,7 @@ Deployed the revision-tagged Colima image and protected local executor profile. 
 **2026-07-20T00:13:19Z**
 
 Revision ef59f64 fixes the phone voice route discovered at deployment: LiveKit now advertises the verified tailnet address on the selected RTC port and room credentials use the tailnet WSS origin. Operations, background-job, and fresh managed-worker room checks pass; Android lifecycle confirmation remains pending.
+
+**2026-07-20T04:50:03Z**
+
+Acceptance completed across the existing implementation and the autonomous follow-up chain. The revision-pinned protected profile passes capability/executor/image/synthetic readiness. A deployed local-Ollama/Colima job used proxied public HTTPS, verified a fetched document, promoted report.md, surfaced lifecycle through the enrolled-device API, and cleaned every container/network; the content-free egress smoke also passed curl, wget, HTTPS Git, Python, pip, npm, direct-route denial, RFC1918, tailnet, and metadata cases. A second real job was cancelled during a shell step and reached durable cancelled without late success or leftover resources. Deterministic suites cover coding, artifacts, malformed/batched model calls, resource/output/runtime limits, follow-ups, cancellation, host paths, credentials, private networks, and foreground API responsiveness. The handoff records later successful phone evidence, and children rad-7t9h, rad-rmfz, and rad-fdtf are closed.
