@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
+import socket
 import urllib.parse
 from collections.abc import Iterable
 
 HEADER_LIMIT = 16 * 1024
 TRANSFER_LIMIT = 128 * 1024 * 1024
+CONNECTION_LIMIT = 8
+CONNECTION_TIMEOUT_SECONDS = 180
+UPSTREAM_CONNECT_TIMEOUT_SECONDS = 10
 ALLOWED_METHODS = frozenset({"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
+HEADER_NAME = re.compile(rb"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class ProxyRequestError(ValueError):
@@ -16,9 +22,9 @@ class ProxyRequestError(ValueError):
 
 def public_addresses(addresses: Iterable[str]) -> tuple[str, ...]:
     parsed = tuple(ipaddress.ip_address(value) for value in addresses)
-    if not parsed or any(not address.is_global for address in parsed):
+    if not parsed or any(not address.is_global or address.is_multicast for address in parsed):
         raise ProxyRequestError("destination is not public")
-    return tuple(str(address) for address in parsed)
+    return tuple(dict.fromkeys(str(address) for address in parsed))
 
 
 def split_authority(authority: str, default_port: int) -> tuple[str, int]:
@@ -27,18 +33,50 @@ def split_authority(authority: str, default_port: int) -> tuple[str, int]:
         port = parsed.port or default_port
     except ValueError as error:
         raise ProxyRequestError("invalid destination port") from error
-    if not parsed.hostname or port not in {80, 443}:
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or port not in {80, 443}
+    ):
         raise ProxyRequestError("destination port is not allowed")
-    return parsed.hostname.rstrip("."), port
+    try:
+        host = parsed.hostname.rstrip(".").encode("idna").decode("ascii")
+    except UnicodeError as error:
+        raise ProxyRequestError("invalid destination host") from error
+    return host, port
 
 
-async def resolve_public(host: str, port: int) -> tuple[str, int]:
+async def resolve_public(host: str, port: int) -> tuple[str, ...]:
     if host.lower() in {"localhost", "host.docker.internal", "host.lima.internal"}:
         raise ProxyRequestError("destination is not public")
     loop = asyncio.get_running_loop()
-    records = await loop.getaddrinfo(host, port, type=0, proto=0)
-    addresses = public_addresses(str(record[4][0]) for record in records)
-    return addresses[0], port
+    records = await loop.getaddrinfo(
+        host,
+        port,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+    )
+    return public_addresses(str(record[4][0]) for record in records)
+
+
+async def open_public_connection(
+    host: str,
+    port: int,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    last_error: OSError | TimeoutError | None = None
+    for address in await resolve_public(host, port):
+        try:
+            return await asyncio.wait_for(
+                asyncio.open_connection(address, port),
+                timeout=UPSTREAM_CONNECT_TIMEOUT_SECONDS,
+            )
+        except (OSError, TimeoutError) as error:
+            last_error = error
+    raise OSError("public destination is unavailable") from last_error
 
 
 async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -59,13 +97,24 @@ async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         writer.close()
 
 
-def filtered_headers(lines: list[bytes]) -> bytes:
+def filtered_headers(lines: list[bytes], *, host: str | None = None) -> bytes:
     blocked = {b"connection", b"proxy-authorization", b"proxy-connection"}
-    kept = []
+    parsed: list[tuple[bytes, bytes]] = []
     for line in lines:
-        key = line.partition(b":")[0].strip().lower()
-        if key not in blocked:
+        key, separator, value = line.partition(b":")
+        key = key.strip().lower()
+        if not separator or not HEADER_NAME.fullmatch(key):
+            raise ProxyRequestError("invalid request header")
+        parsed.append((key, value))
+        if key == b"connection":
+            blocked.update(token.strip().lower() for token in value.split(b",") if token.strip())
+
+    kept = []
+    for line, (key, _value) in zip(lines, parsed, strict=True):
+        if key not in blocked and (host is None or key != b"host"):
             kept.append(line)
+    if host is not None:
+        kept.append(f"Host: {host}\r\n".encode("ascii"))
     kept.append(b"Connection: close\r\n")
     return b"".join(kept)
 
@@ -78,8 +127,7 @@ async def handle_connect(
     host, port = split_authority(authority, 443)
     if port != 443:
         raise ProxyRequestError("CONNECT is restricted to HTTPS")
-    address, port = await resolve_public(host, port)
-    upstream_reader, upstream_writer = await asyncio.open_connection(address, port)
+    upstream_reader, upstream_writer = await open_public_connection(host, port)
     writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await writer.drain()
     await asyncio.gather(
@@ -104,12 +152,12 @@ async def handle_http(
     host, port = split_authority(parsed.netloc, 80)
     if port != 80:
         raise ProxyRequestError("plain HTTP is restricted to port 80")
-    address, port = await resolve_public(host, port)
-    upstream_reader, upstream_writer = await asyncio.open_connection(address, port)
+    upstream_reader, upstream_writer = await open_public_connection(host, port)
     path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    host_header = f"[{host}]" if ":" in host else host
     upstream_writer.write(
         f"{method} {path} {version}\r\n".encode()
-        + filtered_headers(headers)
+        + filtered_headers(headers, host=host_header)
         + b"\r\n"
         + initial_body
     )
@@ -122,6 +170,8 @@ async def handle_http(
 
 
 async def reject(writer: asyncio.StreamWriter, status: int, detail: str) -> None:
+    if writer.is_closing():
+        return
     body = detail.encode()[:256]
     writer.write(
         (
@@ -171,8 +221,25 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
         await reject(writer, 403, str(error) or "request rejected")
 
 
+async def bounded_handle(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    async with semaphore:
+        try:
+            await asyncio.wait_for(handle(reader, writer), timeout=CONNECTION_TIMEOUT_SECONDS)
+        except TimeoutError:
+            await reject(writer, 408, "proxy connection exceeded its time limit")
+
+
 async def serve() -> None:
-    server = await asyncio.start_server(handle, "0.0.0.0", 8080, limit=HEADER_LIMIT)
+    semaphore = asyncio.Semaphore(CONNECTION_LIMIT)
+
+    async def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await bounded_handle(reader, writer, semaphore)
+
+    server = await asyncio.start_server(accept, "0.0.0.0", 8080, limit=HEADER_LIMIT)
     async with server:
         await server.serve_forever()
 

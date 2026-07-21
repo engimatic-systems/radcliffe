@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
@@ -338,9 +339,53 @@ def test_docker_sandbox_mounts_only_attempt_workspace_and_uses_internal_network(
     sandbox.start()
     sandbox.cleanup()
 
-    job_run = next(call for call in calls if call[:2] == ["run", "--detach"] and "--init" in call)
-    mounts = [job_run[index + 1] for index, value in enumerate(job_run) if value == "--mount"]
+    proxy_create = next(call for call in calls if call[0] == "create" and "--read-only" in call)
+    job_create = next(call for call in calls if call[0] == "create" and "--init" in call)
+    mounts = [job_create[index + 1] for index, value in enumerate(job_create) if value == "--mount"]
     assert mounts == [f"type=bind,src={workspace.resolve()},dst=/workspace"]
     assert ["network", "create", "--internal", sandbox.network_name] in calls
-    assert "--cap-drop" in job_run and "ALL" in job_run
-    assert not any("TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_run)
+    assert proxy_create[proxy_create.index("--network") + 1] == "bridge"
+    assert [
+        "network",
+        "connect",
+        "--alias",
+        "egress",
+        sandbox.network_name,
+        sandbox.proxy_name,
+    ] in calls
+    assert "--cap-drop" in job_create and "ALL" in job_create
+    assert not any(
+        "TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_create
+    )
+
+
+def test_docker_sandbox_cleans_partial_start_when_proxy_is_unavailable(tmp_path) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    calls: list[list[str]] = []
+
+    def fail_proxy_start(arguments, *, timeout=30, check=True):
+        del timeout, check
+        call = list(arguments)
+        calls.append(call)
+        if call == ["start", sandbox.proxy_name]:
+            raise RuntimeError("proxy did not start")
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    sandbox._run = fail_proxy_start  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="proxy did not start"):
+        sandbox.start()
+
+    assert ["rm", "--force", sandbox.proxy_name] in calls
+    assert ["network", "rm", sandbox.network_name] in calls
+    assert not sandbox.created_proxy
+    assert not sandbox.created_network

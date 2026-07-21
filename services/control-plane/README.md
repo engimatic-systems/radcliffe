@@ -132,6 +132,11 @@ The private macOS launcher reads these non-secret machine-specific values from
 ignored, mode-0600 `var/job-executor.env` when present; application and provider
 secrets remain in `var/.env`.
 
+After building or changing the image, run `make check-job-egress-local`. The
+content-free smoke verifies proxied curl, wget, HTTPS Git, Python, pip, and npm
+access; rejection of direct, RFC 1918, tailnet, and cloud-metadata access; and
+removal of both containers and the per-job network.
+
 The broker itself receives no application/provider credentials. Each
 model-selected command runs in a new container with Docker's default seccomp
 boundary, all Linux capabilities dropped, `no-new-privileges`, PID/CPU/memory,

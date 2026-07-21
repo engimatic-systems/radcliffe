@@ -207,19 +207,23 @@ class DockerSandbox:
         return result
 
     def start(self) -> None:
+        try:
+            self._start()
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            self.cleanup()
+            raise
+
+    def _start(self) -> None:
         self._run(["image", "inspect", self.image])
         self._run(["network", "create", "--internal", self.network_name])
         self.created_network = True
         self._run(
             [
-                "run",
-                "--detach",
+                "create",
                 "--name",
                 self.proxy_name,
                 "--network",
-                self.network_name,
-                "--network-alias",
-                "egress",
+                "bridge",
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,noexec,nosuid,size=16m",
@@ -235,18 +239,29 @@ class DockerSandbox:
                 "134217728",
                 "--cpus",
                 "0.25",
+                "--ulimit",
+                "nofile=128:128",
                 self.image,
                 "python",
                 "/opt/radcliffe/job_egress_proxy.py",
             ]
         )
         self.created_proxy = True
-        self._run(["network", "connect", "bridge", self.proxy_name])
+        self._run(
+            [
+                "network",
+                "connect",
+                "--alias",
+                "egress",
+                self.network_name,
+                self.proxy_name,
+            ]
+        )
+        self._run(["start", self.proxy_name])
         user = f"{os.getuid()}:{os.getgid()}"
         self._run(
             [
-                "run",
-                "--detach",
+                "create",
                 "--init",
                 "--name",
                 self.job_name,
@@ -294,6 +309,7 @@ class DockerSandbox:
             ]
         )
         self.created_job = True
+        self._run(["start", self.job_name])
         self.workspace.joinpath("tmp").mkdir(mode=0o700, exist_ok=True)
         self._run(
             [
@@ -335,14 +351,29 @@ class DockerSandbox:
 
     def cleanup(self) -> None:
         if self.created_job:
-            self._run(["rm", "--force", self.job_name], timeout=15, check=False)
-            self.created_job = False
+            try:
+                result = self._run(["rm", "--force", self.job_name], timeout=15, check=False)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            else:
+                if result.returncode == 0:
+                    self.created_job = False
         if self.created_proxy:
-            self._run(["rm", "--force", self.proxy_name], timeout=15, check=False)
-            self.created_proxy = False
+            try:
+                result = self._run(["rm", "--force", self.proxy_name], timeout=15, check=False)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            else:
+                if result.returncode == 0:
+                    self.created_proxy = False
         if self.created_network:
-            self._run(["network", "rm", self.network_name], timeout=15, check=False)
-            self.created_network = False
+            try:
+                result = self._run(["network", "rm", self.network_name], timeout=15, check=False)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            else:
+                if result.returncode == 0:
+                    self.created_network = False
 
 
 class OllamaAgent:

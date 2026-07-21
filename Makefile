@@ -1,7 +1,7 @@
 .PHONY: bootstrap check check-python check-node check-android check-conformance-local \
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
-	check-background-jobs-local build-job-sandbox-local \
+	check-background-jobs-local check-job-egress-local build-job-sandbox-local \
 	services-install-local services-status-local services-restart-local \
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
@@ -66,6 +66,14 @@ build-job-sandbox-local:
 check-background-jobs-local:
 	set -a; . var/.env; . var/job-executor.env; set +a; \
 		uv run python scripts/background_job_preflight.py --wait 30
+
+check-job-egress-local:
+	set -a; . var/job-executor.env; set +a; \
+		uv run python scripts/sandbox_egress_smoke.py \
+			--docker "$$RADCLIFFE_JOB_DOCKER_BIN" \
+			--docker-host "$$RADCLIFFE_JOB_DOCKER_HOST" \
+			--image "$$RADCLIFFE_JOB_SANDBOX_IMAGE" \
+			--workspace-root "$$RADCLIFFE_JOB_WORKSPACE_ROOT"
 
 services-install-local:
 	uv run python scripts/radcliffe_services.py install --include-compat-worker
