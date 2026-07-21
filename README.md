@@ -134,8 +134,9 @@ The LAN launcher defaults are:
 - `RADCLIFFE_MODEL_CONTEXT_LIMIT=40960`
 - `RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS=8192`
 - `RADCLIFFE_SPEECH_PROVIDER=local`
-- `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
-- `RADCLIFFE_WHISPER_INITIAL_PROMPT=Radcliffe vocabulary: ...`
+- `RADCLIFFE_PARAKEET_MODEL=mlx-community/parakeet-tdt-0.6b-v3`
+- `RADCLIFFE_PARAKEET_CHUNK_SECONDS=120`
+- `RADCLIFFE_PARAKEET_OVERLAP_SECONDS=15`
 - `RADCLIFFE_TTS_VOICE=Samantha`
 - `RADCLIFFE_MODEL_CHUNK_CHARS=240`
 
@@ -147,11 +148,13 @@ ollama pull qwen3:8b
 uv sync --all-packages --all-groups
 ```
 
-Audio is endpointed in the media worker, transcribed by MLX Whisper, and spoken
+Audio is endpointed in the media worker, transcribed locally by NVIDIA Parakeet
+TDT 0.6B v3 through MLX, and spoken
 with the offline macOS voice. Conversation context and tool calls go only to
-the loopback Ollama API. Ollama and Whisper each require a one-time model
+the loopback Ollama API. Ollama and Parakeet each require a one-time model
 download; after both models are cached, turns require no model-provider network
-access.
+access. Set `RADCLIFFE_SPEECH_PROVIDER=whisper` to use the deprecated
+`RADCLIFFE_WHISPER_MODEL` rollback path explicitly.
 
 `scripts/run-local-sidecar.sh` forces that local boundary even when cloud
 settings exist in `var/.env`; local overrides use

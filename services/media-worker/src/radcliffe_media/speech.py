@@ -4,6 +4,7 @@ import asyncio
 import io
 import math
 import tempfile
+import threading
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,9 @@ from typing import Protocol, cast, runtime_checkable
 import httpx
 import mlx_whisper  # type: ignore[import-untyped]
 import numpy as np
+from parakeet_mlx import from_pretrained as load_parakeet_model  # type: ignore[import-untyped]
 
+DEFAULT_PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 DEFAULT_WHISPER_INITIAL_PROMPT = (
     "Radcliffe vocabulary: dash, bold, Markdown, Cosmic touch, voice controls work, "
@@ -52,6 +55,13 @@ class DetailedTranscriber(Protocol):
     ) -> Transcription: ...
 
 
+@runtime_checkable
+class PreparableSpeechProvider(Protocol):
+    model_identity: str
+
+    async def prepare(self) -> None: ...
+
+
 class SpeechProvider(Protocol):
     supports_speech_rate: bool
 
@@ -75,6 +85,29 @@ def pcm_to_16khz_mono(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray
         target = np.linspace(0, samples.size - 1, output_size)
         samples = np.interp(target, source, samples).astype(np.float32)
     return samples
+
+
+class _ParakeetToken(Protocol):
+    confidence: float
+
+
+class _ParakeetSentence(Protocol):
+    tokens: list[_ParakeetToken]
+
+
+class _ParakeetResult(Protocol):
+    text: str
+    sentences: list[_ParakeetSentence]
+
+
+class _ParakeetModel(Protocol):
+    def transcribe(
+        self,
+        path: Path | str,
+        *,
+        chunk_duration: float | None = None,
+        overlap_duration: float = 15.0,
+    ) -> _ParakeetResult: ...
 
 
 class LocalAppleSpeechProvider:
@@ -216,6 +249,95 @@ class LocalAppleSpeechProvider:
             if ffmpeg.returncode:
                 raise RuntimeError(f"TTS conversion failed: {ffmpeg_error.decode().strip()}")
             return pcm_path.read_bytes()
+
+
+class ParakeetAppleSpeechProvider(LocalAppleSpeechProvider):
+    """Apple-local Parakeet STT with the existing offline macOS TTS path."""
+
+    def __init__(
+        self,
+        *,
+        parakeet_model: str = DEFAULT_PARAKEET_MODEL,
+        voice: str = "Samantha",
+        chunk_duration: float = 120.0,
+        overlap_duration: float = 15.0,
+    ) -> None:
+        if chunk_duration <= 0:
+            raise ValueError("Parakeet chunk duration must be positive")
+        if not 0 <= overlap_duration < chunk_duration:
+            raise ValueError("Parakeet overlap must be non-negative and shorter than a chunk")
+        super().__init__(voice=voice, initial_prompt=None)
+        self.parakeet_model = parakeet_model
+        self.model_identity = parakeet_model
+        self.chunk_duration = chunk_duration
+        self.overlap_duration = overlap_duration
+        self._parakeet: _ParakeetModel | None = None
+        self._inference_lock = threading.Lock()
+        self._warmed = False
+
+    async def prepare(self) -> None:
+        """Load weights and exercise inference before the worker reports input readiness."""
+
+        await asyncio.to_thread(self._prepare_sync)
+
+    async def transcribe(self, pcm: bytes, sample_rate: int, channels: int) -> str:
+        return (await self.transcribe_with_evidence(pcm, sample_rate, channels)).text
+
+    async def transcribe_with_evidence(
+        self, pcm: bytes, sample_rate: int, channels: int
+    ) -> Transcription:
+        waveform = pcm_to_16khz_mono(pcm, sample_rate, channels)
+        result = await asyncio.to_thread(self._transcribe_sync, waveform)
+        evidence = tuple(self._sentence_evidence(sentence) for sentence in result.sentences)
+        return Transcription(result.text.strip(), evidence)
+
+    def _prepare_sync(self) -> None:
+        with self._inference_lock:
+            if self._warmed:
+                return
+            self._transcribe_locked(np.zeros(16000, dtype=np.float32))
+            self._warmed = True
+
+    def _transcribe_sync(self, waveform: np.ndarray) -> _ParakeetResult:
+        with self._inference_lock:
+            result = self._transcribe_locked(waveform)
+            self._warmed = True
+            return result
+
+    def _transcribe_locked(self, waveform: np.ndarray) -> _ParakeetResult:
+        if self._parakeet is None:
+            self._parakeet = cast(_ParakeetModel, load_parakeet_model(self.parakeet_model))
+        pcm = (np.clip(waveform, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+        with tempfile.TemporaryDirectory(prefix="radcliffe-parakeet-") as directory:
+            audio_path = Path(directory) / "turn.wav"
+            with wave.open(str(audio_path), "wb") as stream:
+                stream.setnchannels(1)
+                stream.setsampwidth(2)
+                stream.setframerate(16000)
+                stream.writeframes(pcm)
+            return self._parakeet.transcribe(
+                audio_path,
+                chunk_duration=self.chunk_duration,
+                overlap_duration=self.overlap_duration,
+            )
+
+    @staticmethod
+    def _sentence_evidence(sentence: _ParakeetSentence) -> TranscriptionSegmentEvidence:
+        log_confidences: list[float] = []
+        for token in sentence.tokens:
+            confidence = float(token.confidence)
+            if not math.isfinite(confidence) or confidence <= 0:
+                log_confidences.append(float("nan"))
+            else:
+                log_confidences.append(math.log(min(confidence, 1.0)))
+        average_log_confidence = (
+            sum(log_confidences) / len(log_confidences) if log_confidences else None
+        )
+        return TranscriptionSegmentEvidence(
+            average_log_probability=average_log_confidence,
+            no_speech_probability=None,
+            compression_ratio=None,
+        )
 
 
 class OpenAISpeechProvider:

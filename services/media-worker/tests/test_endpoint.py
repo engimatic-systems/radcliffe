@@ -5,8 +5,17 @@ import pytest
 from loguru import logger
 from pipecat.frames.frames import UserAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection
-from radcliffe_media.production import EndpointProcessor, EndpointSettings
-from radcliffe_media.speech import Transcription, TranscriptionSegmentEvidence
+from radcliffe_media.production import (
+    EndpointProcessor,
+    EndpointSettings,
+    speech_provider_from_environment,
+)
+from radcliffe_media.speech import (
+    LocalAppleSpeechProvider,
+    ParakeetAppleSpeechProvider,
+    Transcription,
+    TranscriptionSegmentEvidence,
+)
 from radcliffe_media.speech_activity import SpeechActivityEvidence
 
 
@@ -269,6 +278,31 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
             minimum_average_log_probability=-0.5,
             short_minimum_average_log_probability=-0.9,
         )
+
+
+@pytest.mark.parametrize("provider_name", ["local", "parakeet"])
+def test_local_speech_profile_defaults_to_parakeet(monkeypatch, provider_name: str) -> None:
+    monkeypatch.setenv("RADCLIFFE_SPEECH_PROVIDER", provider_name)
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_MODEL", "test-parakeet")
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_CHUNK_SECONDS", "90")
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_OVERLAP_SECONDS", "10")
+
+    provider = speech_provider_from_environment()
+
+    assert isinstance(provider, ParakeetAppleSpeechProvider)
+    assert provider.parakeet_model == "test-parakeet"
+    assert provider.chunk_duration == 90
+    assert provider.overlap_duration == 10
+
+
+def test_whisper_remains_an_explicit_rollback_profile(monkeypatch) -> None:
+    monkeypatch.setenv("RADCLIFFE_SPEECH_PROVIDER", "whisper")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_MODEL", "rollback-whisper")
+
+    provider = speech_provider_from_environment()
+
+    assert type(provider) is LocalAppleSpeechProvider
+    assert provider.whisper_model == "rollback-whisper"
 
 
 @pytest.mark.asyncio

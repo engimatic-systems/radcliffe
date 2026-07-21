@@ -1,6 +1,6 @@
 ---
 id: rad-rc9v
-status: open
+status: in_progress
 deps: []
 links: [rad-fvx9, rad-9e2z, rad-0mws]
 created: 2026-07-21T18:19:39Z
@@ -27,3 +27,7 @@ On the existing owner-consented Pixel corpus plus new difficult natural-speech c
 **2026-07-21T18:19:39Z**
 
 Requested by the operator after the 2026-07-21 phone tests because word-level recognition still frequently whiffs independently of the separately root-caused 30-second endpoint split.
+
+**2026-07-21T18:34:21Z**
+
+Implementation and host benchmark 2026-07-21: added pinned parakeet-mlx 0.5.1 with mlx-community/parakeet-tdt-0.6b-v3, local Apple provider, serialized inference, 16 kHz mono input, sentence/token confidence mapping into DetailedTranscriber evidence, long-audio chunk controls, startup preload/warmup before input readiness, environment allowlisting, and explicit RADCLIFFE_SPEECH_PROVIDER=whisper rollback. local and parakeet now select Parakeet; protected user-test config explicitly selects parakeet. On an identical 35.928-second synthetic Gettysburg fixture, warmup took 1480.88 ms, steady transcription 581.5 ms (RTF 0.0162) versus Whisper 1074.82 ms (RTF 0.0299); both retained first and last content and had the same measured WER 0.03883, while Parakeet passed the confidence gate. This is host/runtime evidence only; keep open for target-speaker Pixel acceptance and diagnosis of the independent pause/cancellation bug.

@@ -34,10 +34,13 @@ from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.session_actions import SessionActionClient
 from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import (
+    DEFAULT_PARAKEET_MODEL,
     DEFAULT_WHISPER_INITIAL_PROMPT,
     DetailedTranscriber,
     LocalAppleSpeechProvider,
     OpenAISpeechProvider,
+    ParakeetAppleSpeechProvider,
+    PreparableSpeechProvider,
     SpeechProvider,
     Transcription,
     assess_transcription,
@@ -701,6 +704,41 @@ class EndpointProcessor(FrameProcessor):
         await self.push_frame(InterruptionFrame())
 
 
+def speech_provider_from_environment() -> SpeechProvider:
+    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
+    if speech_provider in {"local", "parakeet"}:
+        return ParakeetAppleSpeechProvider(
+            parakeet_model=os.environ.get("RADCLIFFE_PARAKEET_MODEL", DEFAULT_PARAKEET_MODEL),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+            chunk_duration=float(os.environ.get("RADCLIFFE_PARAKEET_CHUNK_SECONDS", "120")),
+            overlap_duration=float(os.environ.get("RADCLIFFE_PARAKEET_OVERLAP_SECONDS", "15")),
+        )
+    if speech_provider == "whisper":
+        return LocalAppleSpeechProvider(
+            whisper_model=os.environ.get(
+                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
+            ),
+            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+            initial_prompt=os.environ.get(
+                "RADCLIFFE_WHISPER_INITIAL_PROMPT",
+                DEFAULT_WHISPER_INITIAL_PROMPT,
+            ),
+            verification_model=os.environ.get("RADCLIFFE_WHISPER_VERIFICATION_MODEL"),
+        )
+    if speech_provider == "openai":
+        if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
+            raise RuntimeError(
+                "OpenAI speech is disabled; set RADCLIFFE_ALLOW_CLOUD_MODELS=1 "
+                "only for a user-approved test run"
+            )
+        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
+        return OpenAISpeechProvider(api_key)
+    raise RuntimeError(f"unsupported speech provider: {speech_provider}")
+
+
 async def run() -> None:
     required = {
         key: os.environ.get(key)
@@ -716,32 +754,21 @@ async def run() -> None:
     database_path = Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3"))
     store = EventStore(database_path)
     await store.migrate()
-    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
-    if speech_provider == "local":
-        speech: SpeechProvider = LocalAppleSpeechProvider(
-            whisper_model=os.environ.get(
-                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
-            ),
-            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
-            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
-            initial_prompt=os.environ.get(
-                "RADCLIFFE_WHISPER_INITIAL_PROMPT",
-                DEFAULT_WHISPER_INITIAL_PROMPT,
-            ),
-            verification_model=os.environ.get("RADCLIFFE_WHISPER_VERIFICATION_MODEL"),
+    speech = speech_provider_from_environment()
+    if isinstance(speech, PreparableSpeechProvider):
+        logger.info(
+            "preparing local speech provider provider={} model={} before input readiness",
+            type(speech).__name__,
+            speech.model_identity,
         )
-    elif speech_provider == "openai":
-        if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
-            raise RuntimeError(
-                "OpenAI speech is disabled; set RADCLIFFE_ALLOW_CLOUD_MODELS=1 "
-                "only for a user-approved test run"
-            )
-        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
-        speech = OpenAISpeechProvider(api_key)
-    else:
-        raise RuntimeError(f"unsupported speech provider: {speech_provider}")
+        started_at = monotonic()
+        await speech.prepare()
+        logger.info(
+            "local speech provider ready provider={} model={} duration_ms={}",
+            type(speech).__name__,
+            speech.model_identity,
+            round((monotonic() - started_at) * 1000, 2),
+        )
     endpoint_settings = EndpointSettings.from_environment()
     capture = SpeechCapture.from_environment()
     sidecar_url = os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")
