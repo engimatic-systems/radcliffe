@@ -69,6 +69,14 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
   });
 
+  it("identifies Radcliffe as the harness without assigning the model that identity", () => {
+    expect(RADCLIFFE_SYSTEM_PROMPT.match(/harness is called Radcliffe/g)).toHaveLength(1);
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("selected conversational model");
+    expect(RADCLIFFE_SYSTEM_PROMPT).not.toMatch(/\byou are (?:called )?Radcliffe\b/i);
+    expect(RADCLIFFE_SYSTEM_PROMPT).not.toMatch(/\bact as Radcliffe\b/i);
+    expect(RADCLIFFE_SYSTEM_PROMPT).not.toMatch(/\bimpersonate Radcliffe\b/i);
+  });
+
   it("recognizes explicit job management while leaving how-to questions non-mutating", () => {
     expect(
       explicitJobManagementOperation(
