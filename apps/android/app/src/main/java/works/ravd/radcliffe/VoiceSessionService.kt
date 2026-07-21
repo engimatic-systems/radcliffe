@@ -47,6 +47,8 @@ class VoiceSessionService : MediaSessionService() {
     private val playbackTracker = DevicePlaybackTracker()
     private val playbackSinks = mutableMapOf<RemoteAudioTrack, AudioTrackSink>()
     private val handledTransitions = mutableSetOf<String>()
+    private var playbackPaused = false
+    private var playbackSuppressedForInterruption = false
 
     override fun onCreate() {
         super.onCreate()
@@ -110,27 +112,32 @@ class VoiceSessionService : MediaSessionService() {
 
     private fun interrupt() {
         room?.setSpeakerMute(true)
-        room?.setSpeakerMute(false)
+        playbackSuppressedForInterruption = true
+        val playbackAcknowledgements = playbackTracker.invalidatePending("interrupted on device")
         SessionModel.state(VoiceState.LISTENING)
-        sendControl(ControlCommand.Kind.KIND_INTERRUPT)
+        sendControl(ControlCommand.Kind.KIND_INTERRUPT, playbackAcknowledgements)
     }
 
     private fun setPaused(paused: Boolean) {
+        playbackPaused = paused
+        if (!paused) playbackSuppressedForInterruption = false
         room?.setSpeakerMute(paused)
         if (paused) player.pause() else player.play()
         SessionModel.state(if (paused) VoiceState.PAUSED else VoiceState.LISTENING)
         notify(if (paused) "Paused" else "Listening", paused)
-        sendControl(if (paused) ControlCommand.Kind.KIND_PAUSE else ControlCommand.Kind.KIND_RESUME)
+        val playbackAcknowledgements =
+            if (paused) playbackTracker.flush("paused on device") else emptyList()
+        sendControl(
+            if (paused) ControlCommand.Kind.KIND_PAUSE else ControlCommand.Kind.KIND_RESUME,
+            playbackAcknowledgements,
+        )
     }
 
-    private fun sendControl(kind: ControlCommand.Kind) {
+    private fun sendControl(
+        kind: ControlCommand.Kind,
+        playbackAcknowledgements: List<PlaybackAcknowledgement> = emptyList(),
+    ) {
         val activeRoom = room ?: return
-        val playbackAcknowledgements = when (kind) {
-            ControlCommand.Kind.KIND_INTERRUPT -> playbackTracker.flush("interrupted on device")
-            ControlCommand.Kind.KIND_PAUSE -> playbackTracker.flush("paused on device")
-            ControlCommand.Kind.KIND_STOP -> playbackTracker.flush("stopped on device")
-            else -> emptyList()
-        }
         val operation = OperationRef.newBuilder()
             .setSessionId(sessionId)
             .setGeneration(1)
@@ -204,7 +211,13 @@ class VoiceSessionService : MediaSessionService() {
 
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
-        if (event.hasPlaybackSegment()) playbackTracker.announce(event.playbackSegment)
+        if (event.hasPlaybackSegment()) {
+            val accepted = playbackTracker.announce(event.playbackSegment)
+            if (accepted && playbackSuppressedForInterruption && !playbackPaused) {
+                room?.setSpeakerMute(false)
+                playbackSuppressedForInterruption = false
+            }
+        }
         if (event.hasJobEvent()) {
             backgroundJobFromEvent(event.jobEvent, sessionId)?.let(BackgroundJobModel::update)
         }
@@ -218,6 +231,9 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasStateChanged()) {
+            if (event.stateChanged.reason == "interrupted") {
+                suppressInterruptedPlayback(event.stateChanged.operation)
+            }
             val current = when (event.stateChanged.current) {
                 ConversationState.CONVERSATION_STATE_CONNECTING -> VoiceState.CONNECTING
                 ConversationState.CONVERSATION_STATE_LISTENING -> VoiceState.LISTENING
@@ -308,6 +324,22 @@ class VoiceSessionService : MediaSessionService() {
                     message.metadataMap["radcliffe.delivery.summary"],
                 ),
             )
+        }
+    }
+
+    private fun suppressInterruptedPlayback(operation: OperationRef) {
+        room?.setSpeakerMute(true)
+        playbackPaused = false
+        playbackSuppressedForInterruption = true
+        val activeRoom = room ?: return
+        val acknowledgements = playbackTracker.invalidateThrough(
+            operation,
+            "verified speech interrupted playback",
+        )
+        if (acknowledgements.isNotEmpty()) {
+            scope.launch {
+                acknowledgements.forEach { publishPlaybackAcknowledgement(activeRoom, it) }
+            }
         }
     }
 
@@ -500,6 +532,8 @@ class VoiceSessionService : MediaSessionService() {
         room?.disconnect()
         room?.release()
         room = null
+        playbackPaused = false
+        playbackSuppressedForInterruption = false
         if (resetState) SessionModel.state(VoiceState.IDLE)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

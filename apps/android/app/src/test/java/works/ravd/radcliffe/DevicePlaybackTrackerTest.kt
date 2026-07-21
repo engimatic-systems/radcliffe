@@ -83,16 +83,82 @@ class DevicePlaybackTrackerTest {
         assertTrue(DevicePlaybackTracker.isAudible(audible, 16))
     }
 
-    private fun segment(durationMs: Long) = PlaybackSegment.newBuilder()
-        .setPlaybackId("playback-1")
-        .setOperation(
-            OperationRef.newBuilder()
-                .setSessionId("session-1")
-                .setGeneration(1)
-                .setOperationId("operation-1")
-                .setCancellationId("cancel-1")
-                .setTraceId("trc_${"a".repeat(32)}"),
+    @Test
+    fun verifiedInterruptionFlushesQueuedGenerationAndRejectsLateFrames() {
+        var id = 0
+        val tracker = DevicePlaybackTracker(acknowledgementId = { "interrupt-${++id}" })
+        assertTrue(tracker.announce(segment(durationMs = 1000, playbackId = "current-1")))
+        assertTrue(tracker.announce(segment(durationMs = 1000, playbackId = "current-2")))
+        tracker.onAudioFrame(48_000, 480, audible = true, nowMs = 10)
+
+        val interrupted = operation(generation = 4)
+        val flushed = tracker.invalidateThrough(
+            interrupted,
+            "verified speech interrupted playback",
+            nowMs = 20,
         )
+
+        assertEquals(2, flushed.size)
+        assertEquals(listOf(10L, 0L), flushed.map { it.positionMs })
+        assertTrue(flushed.all { it.status == PlaybackStatus.PLAYBACK_STATUS_FLUSHED })
+        assertEquals(0, tracker.pendingCount())
+        assertFalse(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "late-current", generation = 4),
+            ),
+        )
+        assertTrue(tracker.onAudioFrame(48_000, 480, audible = true, nowMs = 30).isEmpty())
+
+        assertTrue(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "replacement", generation = 5),
+            ),
+        )
+        assertEquals(
+            PlaybackStatus.PLAYBACK_STATUS_STARTED,
+            tracker.onAudioFrame(48_000, 480, audible = true, nowMs = 40).single().status,
+        )
+    }
+
+    @Test
+    fun localInterruptInvalidatesEveryPendingGeneration() {
+        val tracker = DevicePlaybackTracker(acknowledgementId = { "local-interrupt" })
+        tracker.announce(segment(durationMs = 1000, playbackId = "generation-3", generation = 3))
+        tracker.announce(segment(durationMs = 1000, playbackId = "generation-4", generation = 4))
+
+        assertEquals(2, tracker.invalidatePending("interrupted on device").size)
+        assertFalse(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "late-3", generation = 3),
+            ),
+        )
+        assertFalse(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "late-4", generation = 4),
+            ),
+        )
+        assertTrue(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "fresh-5", generation = 5),
+            ),
+        )
+    }
+
+    private fun operation(generation: Long = 1) = OperationRef.newBuilder()
+        .setSessionId("session-1")
+        .setGeneration(generation)
+        .setOperationId("operation-$generation")
+        .setCancellationId("cancel-$generation")
+        .setTraceId("trc_${"a".repeat(32)}")
+        .build()
+
+    private fun segment(
+        durationMs: Long,
+        playbackId: String = "playback-1",
+        generation: Long = 1,
+    ) = PlaybackSegment.newBuilder()
+        .setPlaybackId(playbackId)
+        .setOperation(operation(generation))
         .setSegmentId("source-1:3")
         .setBoundaryIndex(3)
         .setDurationMs(durationMs)
