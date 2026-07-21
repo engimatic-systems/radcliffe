@@ -100,6 +100,34 @@ interface DeliveryPreparation {
   applied: boolean;
 }
 
+export type ExactOutputKind =
+  | "numbers"
+  | "identifier"
+  | "hash"
+  | "url"
+  | "json"
+  | "path"
+  | "timestamp"
+  | "literal"
+  | "characters";
+
+export interface ExactOutputIntent {
+  kind: ExactOutputKind;
+  literal?: string;
+  sequence?: {
+    start: number;
+    end: number;
+  };
+}
+
+export interface ExactOutputValidation {
+  valid: boolean;
+  reasons: string[];
+}
+
+const EXACT_SEQUENCE_ITEM_LIMIT = 200;
+const ABBREVIATED_OUTPUT = /(?:\.{3}|…|\band so (?:on|forth)\b|\betc\.?\b|\bthrough\s+\d+\b)/i;
+
 const SPEECH_RATE_ALIASES = new Map<string, SpeechRate>([
   ["0.75", "0.75x"],
   ["0.75x", "0.75x"],
@@ -142,9 +170,12 @@ export function normalizeSpeechRate(value: unknown): SpeechRate | undefined {
 export function classifyDeliveryIntent(text: string): DeliveryIntent | undefined {
   const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
   const rateMatch = normalized.match(
-    /\b(0\.75x?|1(?:\.0)?x?|1\.25x?|1\.5x?|very[_ ]fast|fastest|faster|fast|quickly|quick|slower|slowly|slow|normally|normal|regular|default)\b/,
+    /\b(0\.75x|1(?:\.0)?x|1\.25x|1\.5x|very[_ ]fast|fastest|faster|fast|quickly|quick|slower|slowly|slow|normally|normal|regular|default)\b/,
   );
-  const rate = normalizeSpeechRate(rateMatch?.[1]);
+  const explicitNumericRate = normalized.match(
+    /\b(?:at|rate(?: of)?|speed(?: of)?)\s+(0\.75|1(?:\.0)?|1\.25|1\.5)\b/,
+  );
+  const rate = normalizeSpeechRate(rateMatch?.[1] ?? explicitNumericRate?.[1]);
   if (!rate) return undefined;
   if (
     !/\b(?:speak|say|talk|answer|respond|reply|count|read|recite|deliver|pace|rate)\b/.test(
@@ -154,15 +185,188 @@ export function classifyDeliveryIntent(text: string): DeliveryIntent | undefined
   ) {
     return undefined;
   }
-  const sourceRead =
-    /\b(?:read|recite)\b/.test(normalized) &&
-    (/\b(?:source|file|document|markdown|path)\b/.test(normalized) ||
-      /(?:\.md\b|\bdot m d\b)/.test(normalized));
+  const sourceRead = hasExplicitSourceReadIntent(normalized);
   const persistent =
     /\b(?:for (?:this|the) session|session default|default (?:speech )?(?:pace|rate)|from now on|going forward|until i change|keep (?:speaking|talking)|always)\b/.test(
       normalized,
     );
   return { rate, scope: persistent ? "session" : "turn", sourceRead };
+}
+
+function quotedLiteral(text: string): string | undefined {
+  const doubleQuoted = text.match(/["“]([^"”]{1,4000})["”]/s)?.[1];
+  if (doubleQuoted) return doubleQuoted;
+  const singleQuoted = text.match(/(?:^|\s)'([^']{1,4000})'(?:\s|[.!?]|$)/s)?.[1];
+  return singleQuoted;
+}
+
+function trimCapturedLiteral(value: string): string {
+  return value.trim().replace(/[.!?]+$/, "");
+}
+
+function numericSequenceFromPacket(packet: ContextPacket): number[] {
+  const sequenceLine = packet.content.split(/\r?\n/, 1)[0] ?? "";
+  return [...sequenceLine.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+}
+
+function continuationIntent(history: readonly ContextPacket[]): ExactOutputIntent | undefined {
+  const lastCountIndex = history.findLastIndex(
+    (packet) =>
+      packet.source === "user" &&
+      /\bcount\b/i.test(packet.content) &&
+      /\b(?:from\s+\d+\s+to|to)\s+\d+\b/i.test(packet.content),
+  );
+  if (lastCountIndex < 0) return undefined;
+  const original = classifyExactOutputIntent(history[lastCountIndex]!.content);
+  if (!original?.sequence) return undefined;
+  const durable = history
+    .slice(lastCountIndex + 1)
+    .filter((packet) => packet.source === "model" && packet.role === "assistant")
+    .at(-1);
+  if (!durable) return undefined;
+  const emitted = numericSequenceFromPacket(durable);
+  const last = emitted.at(-1);
+  if (last === undefined) return undefined;
+  return {
+    kind: "numbers",
+    sequence: { start: last + 1, end: original.sequence.end },
+  };
+}
+
+export function classifyExactOutputIntent(
+  text: string,
+  history: readonly ContextPacket[] = [],
+): ExactOutputIntent | undefined {
+  const normalized = text.trim();
+  if (/\b(?:keep going|continue|resume)\b/i.test(normalized)) {
+    return continuationIntent(history);
+  }
+  const range = normalized.match(/\bcount(?:\s+\w+){0,3}\s+from\s+(\d+)\s+to\s+(\d+)\b/i);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start) {
+      return { kind: "numbers", sequence: { start, end } };
+    }
+  }
+  const countTo = normalized.match(/\bcount(?:\s+\w+){0,3}\s+to\s+(\d+)\b/i);
+  if (countTo) {
+    const end = Number(countTo[1]);
+    if (Number.isSafeInteger(end) && end >= 1) {
+      return { kind: "numbers", sequence: { start: 1, end } };
+    }
+  }
+  const exactLanguage =
+    /\b(?:exactly|verbatim|character[- ]by[- ]character|spell out|exact reading|read exactly|repeat exactly)\b/i.test(
+      normalized,
+    );
+  if (!exactLanguage) return undefined;
+  const characters = /\b(?:character[- ]by[- ]character|spell out)\b/i.test(normalized);
+  const quoted = quotedLiteral(normalized);
+  if (characters && quoted) return { kind: "characters", literal: quoted };
+  if (/\b(?:id|identifier)\b/i.test(normalized) && quoted) {
+    return { kind: "identifier", literal: quoted };
+  }
+  const hash = normalized.match(/\b[a-fA-F0-9]{16,128}\b/)?.[0];
+  if (/\bhash\b/i.test(normalized) && hash) return { kind: "hash", literal: hash };
+  const url = normalized.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.!?]+$/, "");
+  if (url) return { kind: "url", literal: url };
+  const timestamp = normalized.match(
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})\b/,
+  )?.[0];
+  if (timestamp) return { kind: "timestamp", literal: timestamp };
+  if (/\bjson\b/i.test(normalized)) {
+    const fenced = normalized.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
+    const object = normalized.match(/(\{[\s\S]*\}|\[[\s\S]*\])/s)?.[1];
+    const literal = fenced ?? object ?? quoted;
+    if (literal) return { kind: "json", literal: literal.trim() };
+  }
+  const path = normalized.match(
+    /(?:^|\s)((?:\/[A-Za-z0-9._-]+){2,}|(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?=\s|[.!?]|$)/,
+  )?.[1];
+  if (/\bpath\b/i.test(normalized) && path) {
+    return { kind: "path", literal: path };
+  }
+  const identifier = normalized.match(
+    /\b(?:id|identifier)\b[^\n:]*:\s*([A-Za-z0-9][A-Za-z0-9_.:-]{2,})/i,
+  )?.[1];
+  if (identifier) return { kind: "identifier", literal: trimCapturedLiteral(identifier) };
+  if (quoted) return { kind: "literal", literal: quoted };
+  const afterColon = normalized.match(/:\s*([^\n]{1,4000})$/s)?.[1];
+  if (afterColon) return { kind: "literal", literal: trimCapturedLiteral(afterColon) };
+  return { kind: "literal" };
+}
+
+function expectedNumericItems(intent: ExactOutputIntent): number[] {
+  if (!intent.sequence) return [];
+  const last = Math.min(
+    intent.sequence.end,
+    intent.sequence.start + EXACT_SEQUENCE_ITEM_LIMIT - 1,
+  );
+  return Array.from({ length: Math.max(0, last - intent.sequence.start + 1) }, (_, index) =>
+    intent.sequence!.start + index,
+  );
+}
+
+function renderCharacters(value: string): string {
+  return [...value].join(", ");
+}
+
+export function validateExactOutput(
+  intent: ExactOutputIntent,
+  candidate: string,
+): ExactOutputValidation {
+  const reasons: string[] = [];
+  if (ABBREVIATED_OUTPUT.test(candidate)) reasons.push("abbreviated");
+  if (intent.kind === "numbers") {
+    const observed = [...candidate.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+    const expected = expectedNumericItems(intent);
+    if (observed.length < expected.length) reasons.push("missing");
+    if (observed.length > expected.length) reasons.push("duplicated_or_extra");
+    if (
+      observed.length === expected.length &&
+      observed.some((value, index) => value !== expected[index])
+    ) {
+      reasons.push("reordered_or_replaced");
+    }
+  } else if (intent.literal !== undefined) {
+    const expected =
+      intent.kind === "characters" ? renderCharacters(intent.literal) : intent.literal;
+    if (candidate.trim() !== expected) reasons.push("literal_mismatch");
+  } else if (!candidate.trim()) {
+    reasons.push("empty");
+  }
+  return { valid: reasons.length === 0, reasons };
+}
+
+function renderNumericSequence(intent: ExactOutputIntent): string {
+  if (!intent.sequence) return "I could not determine the requested numeric range.";
+  if (intent.sequence.start > intent.sequence.end) {
+    return `The durable sequence already reached ${intent.sequence.end}.`;
+  }
+  const items = expectedNumericItems(intent);
+  const groups: string[] = [];
+  for (let index = 0; index < items.length; index += 10) {
+    groups.push(`${items.slice(index, index + 10).join(", ")}.`);
+  }
+  const reached = items.at(-1);
+  if (reached !== undefined && reached < intent.sequence.end) {
+    groups.push(
+      "The sequence above stops at the last displayed number because this turn reached the " +
+        "exact-output limit. Say keep going to continue from durable output.",
+    );
+  }
+  return groups.join(" ");
+}
+
+export function finalizeExactOutput(intent: ExactOutputIntent, candidate: string): string {
+  const validation = validateExactOutput(intent, candidate);
+  if (validation.valid) return candidate.trim();
+  if (intent.kind === "numbers") return renderNumericSequence(intent);
+  if (intent.literal !== undefined) {
+    return intent.kind === "characters" ? renderCharacters(intent.literal) : intent.literal;
+  }
+  return "I could not complete that exact-output request without risking an inexact result.";
 }
 
 function stringEnum(values: readonly string[]) {
@@ -566,6 +770,9 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "Never use read_source to deliver a generated answer, a count, or other transient response. " +
   "Set a source rate only when the user explicitly requests a delivery speed. A request about this " +
   "answer or this turn is temporary; a request for this session or from now on persists. " +
+  "An explicit exact-output request overrides response-detail brevity. Never abbreviate an exact " +
+  "enumeration, identifier, hash, URL, JSON value, path, timestamp, quotation, verbatim reading, " +
+  "or character sequence with an ellipsis, a summary, or 'and so on'. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
@@ -693,7 +900,25 @@ export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
   });
 }
 
-function systemPrompt(request: TurnRequest, delivery?: DeliveryPreparation): string {
+function exactOutputInstruction(intent: ExactOutputIntent): string {
+  if (intent.kind === "numbers" && intent.sequence) {
+    return (
+      ` Fidelity constraint: emit every integer from ${intent.sequence.start} through ` +
+      `${intent.sequence.end} exactly once and in order. This overrides response-detail brevity; ` +
+      "do not use words in place of digits, ellipses, ranges, summaries, or fabricated progress."
+    );
+  }
+  return (
+    ` Fidelity constraint: this is an exact ${intent.kind} request. Return only the requested ` +
+    "value without a prefix, suffix, explanation, normalization, omission, or abbreviation."
+  );
+}
+
+function systemPrompt(
+  request: TurnRequest,
+  delivery?: DeliveryPreparation,
+  exactOutput?: ExactOutputIntent,
+): string {
   return (
     RADCLIFFE_SYSTEM_PROMPT +
     (request.responseDetail === "brief"
@@ -705,8 +930,28 @@ function systemPrompt(request: TurnRequest, delivery?: DeliveryPreparation): str
       ? delivery.applied
         ? ` The requested ${delivery.intent.rate} speech rate is already applied for this ${delivery.intent.scope}. Answer directly and do not call configure or a source-reading tool for it.`
         : " The requested speech rate could not be applied. Answer directly without claiming the rate changed."
-      : "")
+      : "") +
+    (exactOutput ? exactOutputInstruction(exactOutput) : "")
   );
+}
+
+function hasExplicitSourceReadIntent(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    /\b(?:read|recite)\b/.test(normalized) &&
+    (/\b(?:source|file|document|markdown|path|abstract|paper|article|report|chapter)\b/.test(
+      normalized,
+    ) ||
+      /(?:\.md\b|\bdot m d\b)/.test(normalized))
+  );
+}
+
+function exactOutputFromPackets(packets: readonly ContextPacket[]): ExactOutputIntent | undefined {
+  const current = packets.at(-1);
+  if (!current || current.source !== "user" || hasExplicitSourceReadIntent(current.content)) {
+    return undefined;
+  }
+  return classifyExactOutputIntent(current.content, packets.slice(0, -1));
 }
 
 export function modelContextFromRequest(request: TurnRequest) {
@@ -714,7 +959,7 @@ export function modelContextFromRequest(request: TurnRequest) {
     .filter((packet) => packet.include)
     .map((packet) => ({ role: "radcliffe", packet }));
   return {
-    systemPrompt: systemPrompt(request),
+    systemPrompt: systemPrompt(request, undefined, exactOutputFromPackets(request.packets)),
     messages: convertRadcliffeContext(messages),
     tools: [
       {
@@ -789,6 +1034,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const current = packets.at(-1)!;
     const deliveryIntent =
       current.source === "user" ? classifyDeliveryIntent(current.content) : undefined;
+    const exactOutputIntent = exactOutputFromPackets(packets);
     const jobOperation =
       current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
     const turnId =
@@ -1145,22 +1391,24 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       packet,
     }));
     const turnStream = this.streamFnForTurn?.(request) ?? this.streamFn;
-    const tools = deliveryIntent
-      ? deliveryIntent.sourceRead
-        ? [listSources, readSource, readJobSource, manageSession, runJob, manageJob]
-        : [manageSession, runJob, manageJob]
-      : [
-          listSources,
-          readSource,
-          readJobSource,
-          configure,
-          manageSession,
-          runJob,
-          manageJob,
-        ];
+    const tools = exactOutputIntent
+      ? []
+      : deliveryIntent
+        ? deliveryIntent.sourceRead
+          ? [listSources, readSource, readJobSource, manageSession, runJob, manageJob]
+          : [manageSession, runJob, manageJob]
+        : [
+            listSources,
+            readSource,
+            readJobSource,
+            configure,
+            manageSession,
+            runJob,
+            manageJob,
+          ];
     const agent = new Agent({
       initialState: {
-        systemPrompt: systemPrompt(request, deliveryPreparation),
+        systemPrompt: systemPrompt(request, deliveryPreparation, exactOutputIntent),
         model: this.model,
         thinkingLevel: "off",
         tools,
@@ -1181,11 +1429,13 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           (!jobOperation || groundedJobCall)
         ) {
           modelText += event.assistantMessageEvent.delta;
-          await emit({
-            type: "model_delta",
-            requestId: request.requestId,
-            text: event.assistantMessageEvent.delta,
-          });
+          if (!exactOutputIntent) {
+            await emit({
+              type: "model_delta",
+              requestId: request.requestId,
+              text: event.assistantMessageEvent.delta,
+            });
+          }
         }
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         const complete = event.message.content
@@ -1280,6 +1530,12 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           groundedJobDetails,
         );
         if (!groundedJobCall || !modelSuppliedResponse) {
+          await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+        }
+      }
+      if (exactOutputIntent) {
+        modelText = finalizeExactOutput(exactOutputIntent, modelText);
+        if (modelText) {
           await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
         }
       }

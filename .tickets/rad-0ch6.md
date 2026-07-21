@@ -1,6 +1,6 @@
 ---
 id: rad-0ch6
-status: open
+status: closed
 deps: []
 links: [rad-20nk, rad-cnrg]
 created: 2026-07-20T19:47:56Z
@@ -28,3 +28,7 @@ Treat explicit exact-output requests—enumerations, character-by-character read
 **2026-07-20T19:48:12Z**
 
 Observed 2026-07-20 in ses_eb23d75121af2c72f8c55641adab1136: durable model sequence 5 says 'One, two, three...' and sequence 8 resumes 'Forty-three, forty-four, ... sixty.' Effective response_detail was brief revision 2; all generated playback segments completed. The omission therefore originated in model output before TTS, with the brief-policy injection as a causal prompt conflict.
+
+**2026-07-21T04:00:15Z**
+
+Implemented a pre-TTS exact-output gate. Exact turns are buffered; numeric output is validated for missing, duplicate, reordered, extra, and abbreviated items and deterministically repaired before model_delta/model_complete emission. Count 1-60 passes under brief, standard, and detailed; slow counting retains one turn-scoped 0.75x mutation. Exact literals cover identifiers, hashes, URLs, JSON, paths, timestamps, character sequences, and verbatim requests. Ranges are bounded to 200 items per turn with a truthful stop cue, and continuation derives its next item from the last durable assistant packet. Local tests: 77 sidecar and 34 pipeline tests pass, including durable envelope/TTS equality. Real-profile content-free corpus passed all 12 cases on qwen3:8b (410 input / 779 output tokens) and claude-haiku-4-5-20251001 (9345 input / 595 output tokens, estimated cost USD 0.012320). Reports: artifacts/exact-output/qwen-report.json and artifacts/exact-output/haiku-report.json. Both temporary sessions ended and test devices revoked.

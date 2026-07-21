@@ -210,6 +210,19 @@ class AnswerOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class ExactCountOrchestrator:
+    text = " ".join(
+        f"{', '.join(str(value) for value in range(start, min(start + 10, 61)))}."
+        for start in range(1, 61, 10)
+    )
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent("model_delta", {"text": self.text})
+        yield SidecarEvent("model_complete", {"text": self.text})
+        yield SidecarEvent("complete", {})
+
+
 class BudgetExhaustedOrchestrator:
     async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
         del request, cancelled
@@ -742,6 +755,35 @@ async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None
         ConversationState.SPEAKING,
         ConversationState.LISTENING,
     ]
+
+
+@pytest.mark.asyncio
+async def test_exact_count_is_durable_and_every_item_reaches_tts(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        ExactCountOrchestrator(),
+        tts,
+        publisher,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Count from 1 to 60")
+
+    durable = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert durable.content.inline_text == ExactCountOrchestrator.text
+    assert "".join(tts.inputs) == ExactCountOrchestrator.text
+    assert b"".join(publisher.audio).decode() == ExactCountOrchestrator.text
+    observed = [
+        int(value.rstrip(".,"))
+        for value in ExactCountOrchestrator.text.split()
+        if value.rstrip(".,").isdigit()
+    ]
+    assert observed == list(range(1, 61))
 
 
 @pytest.mark.asyncio

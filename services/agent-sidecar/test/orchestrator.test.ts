@@ -7,9 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   classifyDeliveryIntent,
+  classifyExactOutputIntent,
   CONFIGURE_PARAMETERS,
   convertRadcliffeContext,
   explicitJobManagementOperation,
+  finalizeExactOutput,
   MANAGE_JOB_PARAMETERS,
   MANAGE_SESSION_PARAMETERS,
   modelContextFromRequest,
@@ -23,6 +25,7 @@ import {
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
   RUN_JOB_PARAMETERS,
+  validateExactOutput,
 } from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
 import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
@@ -276,6 +279,178 @@ describe("PiAgentOrchestrator", () => {
 
   it("leaves ordinary mentions of speed out of delivery routing", () => {
     expect(classifyDeliveryIntent("The faster algorithm won the benchmark.")).toBeUndefined();
+    expect(classifyDeliveryIntent("Count from 1 to 60")).toBeUndefined();
+  });
+
+  it("classifies numeric ranges and exact machine-readable values", () => {
+    expect(classifyExactOutputIntent("Count slowly from 1 to 60")).toEqual({
+      kind: "numbers",
+      sequence: { start: 1, end: 60 },
+    });
+    expect(classifyExactOutputIntent('Repeat the ID exactly: "build-A7:42"')).toEqual({
+      kind: "identifier",
+      literal: "build-A7:42",
+    });
+    expect(
+      classifyExactOutputIntent("Say this hash exactly: aabbccddeeff00112233445566778899"),
+    ).toEqual({
+      kind: "hash",
+      literal: "aabbccddeeff00112233445566778899",
+    });
+    expect(classifyExactOutputIntent("Read exactly https://example.test/a?q=1")).toEqual({
+      kind: "url",
+      literal: "https://example.test/a?q=1",
+    });
+    expect(classifyExactOutputIntent('Repeat this JSON exactly: {"ready":true}')).toEqual({
+      kind: "json",
+      literal: '{"ready":true}',
+    });
+    expect(classifyExactOutputIntent("Say this path exactly: /srv/radcliffe/config.json")).toEqual({
+      kind: "path",
+      literal: "/srv/radcliffe/config.json",
+    });
+    expect(classifyExactOutputIntent("Repeat exactly 2026-07-21T04:00:00Z")).toEqual({
+      kind: "timestamp",
+      literal: "2026-07-21T04:00:00Z",
+    });
+    expect(classifyExactOutputIntent('Spell out "Q7-x" character by character')).toEqual({
+      kind: "characters",
+      literal: "Q7-x",
+    });
+    expect(classifyExactOutputIntent('Repeat exactly: "No compression allowed"')).toEqual({
+      kind: "literal",
+      literal: "No compression allowed",
+    });
+  });
+
+  it.each([
+    ["1, 2, 4, 5.", "missing"],
+    ["1, 2, 2, 3, 4, 5.", "duplicated_or_extra"],
+    ["1, 3, 2, 4, 5.", "reordered_or_replaced"],
+    ["1, 2, 3... 5.", "abbreviated"],
+  ])("rejects invalid numeric exact output: %s", (candidate, reason) => {
+    const validation = validateExactOutput(
+      { kind: "numbers", sequence: { start: 1, end: 5 } },
+      candidate,
+    );
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain(reason);
+  });
+
+  it("repairs an abbreviated number range into a complete bounded sequence", () => {
+    const completed = finalizeExactOutput(
+      { kind: "numbers", sequence: { start: 1, end: 60 } },
+      "1, 2, 3... 60.",
+    );
+    expect([...completed.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+      Array.from({ length: 60 }, (_, index) => index + 1),
+    );
+    expect(completed).not.toContain("...");
+  });
+
+  it("derives continuation from the last durable emitted number", () => {
+    const history = [
+      packet("range-request", "Count from 1 to 1000"),
+      packet("durable-output", "1, 2, 3, 4, 200.\nThe sequence stops here.", {
+        role: "assistant",
+        source: "model",
+      }),
+    ];
+    expect(classifyExactOutputIntent("Keep going", history)).toEqual({
+      kind: "numbers",
+      sequence: { start: 201, end: 1000 },
+    });
+  });
+
+  it("stops truthfully at the bounded limit and continues from durable output", () => {
+    const original = { kind: "numbers" as const, sequence: { start: 1, end: 250 } };
+    const first = finalizeExactOutput(original, "1, 2, 3... 250.");
+    const firstNumbers = [...first.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+    expect(firstNumbers).toEqual(Array.from({ length: 200 }, (_, index) => index + 1));
+    expect(first).toContain("stops at the last displayed number");
+
+    const continuation = classifyExactOutputIntent("Keep going", [
+      packet("long-range", "Count from 1 to 250"),
+      packet("durable-first-part", first, { role: "assistant", source: "model" }),
+    ]);
+    expect(continuation).toEqual({
+      kind: "numbers",
+      sequence: { start: 201, end: 250 },
+    });
+    const second = finalizeExactOutput(continuation!, "201, 202... 250.");
+    expect([...second.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+      Array.from({ length: 50 }, (_, index) => index + 201),
+    );
+  });
+
+  it.each(["brief", "standard", "detailed"] as const)(
+    "buffers and repairs exact counting before emission under %s detail",
+    async (responseDetail) => {
+      const faux = createFauxCore({ provider: `radcliffe-exact-${responseDetail}-test` });
+      faux.setResponses([
+        (context) => {
+          expect(context.systemPrompt).toContain("Fidelity constraint");
+          expect(context.systemPrompt).toContain("overrides response-detail brevity");
+          return fauxAssistantMessage("1, 2, 3... 60.");
+        },
+      ]);
+      const events: SidecarEvent[] = [];
+      const tool = vi.fn();
+      const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+      await orchestrator.run(
+        { ...request([packet("exact-count", "Count from 1 to 60")]), responseDetail },
+        (event) => {
+          events.push(event);
+        },
+      );
+
+      expect(tool).not.toHaveBeenCalled();
+      const deltas = events.filter((event) => event.type === "model_delta");
+      expect(deltas).toHaveLength(1);
+      const text = "text" in deltas[0]! ? deltas[0].text : "";
+      expect([...text.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+        Array.from({ length: 60 }, (_, index) => index + 1),
+      );
+      expect(events.find((event) => event.type === "model_complete")).toMatchObject({ text });
+      expect(JSON.stringify(events)).not.toContain("1, 2, 3... 60");
+    },
+  );
+
+  it("combines exact counting with one turn-scoped slow-delivery mutation", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-slow-test" });
+    faux.setResponses([fauxAssistantMessage("One, two, three, and so on.")]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn(async () => ({ modelContent: "configured", details: {} }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([packet("exact-slow", "Count slowly from 1 to 60")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).toHaveBeenCalledOnce();
+    expect(events.find((event) => event.type === "tool_start")).toMatchObject({
+      toolName: "configure",
+      arguments: {
+        operation: "set",
+        key: "default_speech_rate",
+        scope: "turn",
+        value: "0.75x",
+      },
+    });
+    const complete = events.find((event) => event.type === "model_complete");
+    const text = complete && "text" in complete ? complete.text : "";
+    expect([...text.matchAll(/\b\d+\b/g)]).toHaveLength(60);
+  });
+
+  it("keeps named-source exact reading on the canonical source path", () => {
+    const context = modelContextFromRequest(
+      request([packet("source", "Read the file radcliffe-demo.md exactly")]),
+    );
+    expect(context.systemPrompt).not.toContain("Fidelity constraint:");
   });
 
   it("normalizes weak-model speech rate aliases before schema validation", () => {
