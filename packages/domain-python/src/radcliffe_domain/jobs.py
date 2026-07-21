@@ -601,6 +601,22 @@ class JobStore:
             apply=self._apply_cancel,
         )
 
+    async def retry(
+        self,
+        *,
+        principal_id: str,
+        job_id: str,
+        idempotency_key: str,
+    ) -> JobMutationResult:
+        return await self._command(
+            principal_id=principal_id,
+            job_id=job_id,
+            idempotency_key=idempotency_key,
+            kind="retry",
+            payload={},
+            apply=self._apply_retry,
+        )
+
     async def claim_next(self, *, lease_owner: str, lease_seconds: int = 30) -> JobClaim | None:
         if not _REFERENCE.fullmatch(lease_owner):
             raise JobError("invalid job lease owner")
@@ -927,6 +943,29 @@ class JobStore:
             kind=kind,
             status=next_status,
             detail_code=kind.value,
+            occurred_at=now,
+        )
+
+    async def _apply_retry(self, db: aiosqlite.Connection, row: aiosqlite.Row, now: str) -> None:
+        status = JobStatus(str(row["status"]))
+        if status is not JobStatus.FAILED:
+            raise JobStateError("only a failed background job can be retried")
+        if int(row["attempt"]) >= 3:
+            raise JobStateError("background job retry limit reached")
+        revision = int(row["revision"]) + 1
+        await db.execute(
+            """UPDATE background_jobs SET status = 'queued', revision = ?,
+            cancel_requested_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
+            updated_at = ? WHERE job_id = ?""",
+            (revision, now, row["job_id"]),
+        )
+        await self._insert_event_from_row(
+            db,
+            row,
+            revision=revision,
+            kind=JobEventKind.ACCEPTED,
+            status=JobStatus.QUEUED,
+            detail_code="retried",
             occurred_at=now,
         )
 

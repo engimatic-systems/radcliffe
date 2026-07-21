@@ -233,6 +233,49 @@ def test_anthropic_job_model_retries_rate_limits_without_recording_response_body
     assert message["tool_calls"]
 
 
+def test_anthropic_job_model_waits_through_a_longer_transient_outage(monkeypatch) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_recovered",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_request(_request, *, timeout):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts < 5:
+            raise urllib.error.URLError("temporary provider outage")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    monkeypatch.setattr("radcliffe_control.sandbox_agent.time.sleep", delays.append)
+
+    message = AnthropicAgent(api_key="fake-key").chat([{"role": "user", "content": "do work"}])
+
+    assert attempts == 5
+    assert delays == [1.0, 2.0, 4.0, 8.0]
+    assert message["tool_calls"]
+
+
 def test_agent_reports_a_stable_model_provider_failure(tmp_path, capsys) -> None:
     workspace = tmp_path / "job"
     workspace.mkdir()
@@ -335,6 +378,44 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
     assert not artifact_workspace.joinpath("agent-transcript.jsonl").exists()
     assert not artifact_workspace.joinpath("promoted-result.json").exists()
     assert sandbox.commands == [("python verify.py", 12)]
+
+
+def test_agent_automatically_makes_markdown_output_readable(tmp_path, capsys) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+    sandbox = FakeSandbox(artifact_workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call("run_shell", {"command": "create report", "purpose": "coding"}),
+            tool_call(
+                "finish_job",
+                {
+                    "summary": "Created and checked the Markdown report.",
+                    "artifactPaths": ["report.md"],
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=2,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    result = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert result is not None
+    assert [source.name for source in result.sources] == ["report.md"]
+    assert result.sources[0].locator.startswith("radcliffe-job-output:")
+    assert frames[-1]["entityIds"] == [result.sources[0].entity_id]
 
 
 def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) -> None:

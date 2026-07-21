@@ -328,6 +328,11 @@ class FailedToolEventOrchestrator:
                 "result": {
                     "privatePrompt": "must not persist",
                     "arguments": {"jobId": "private-job-id"},
+                    "details": {
+                        "errorCode": "conflict",
+                        "recoverable": False,
+                        "toolName": "manage_job",
+                    },
                 },
             },
         )
@@ -1020,7 +1025,7 @@ async def test_configuration_tool_result_is_live_auditable_and_excluded_from_mod
 
 
 @pytest.mark.asyncio
-async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry(
+async def test_failed_tool_result_persists_content_safe_model_context_and_telemetry(
     tmp_path,
 ) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
@@ -1040,9 +1045,12 @@ async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry
 
     history = await store.replay("s1")
     audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
-    assert audit.content.inline_text == "Tool call failed"
+    assert audit.content.inline_text == (
+        "Tool call failed because the operation conflicts with the current state."
+    )
     assert audit.metadata["radcliffe.tool.name"] == "manage_job"
-    assert not context_replay((audit,))[0].include
+    assert audit.metadata["radcliffe.tool.error_code"] == "conflict"
+    assert context_replay((audit,))[0].include
     persisted = (tmp_path / "events.sqlite3").read_bytes()
     telemetry = telemetry_path.read_text()
     assert b"privatePrompt" not in persisted
@@ -1077,7 +1085,7 @@ async def test_recoverable_tool_rejection_avoids_generic_failure_message(tmp_pat
     assert audit.metadata["radcliffe.tool.outcome"] == "rejected"
     assert audit.metadata["radcliffe.tool.error_code"] == "invalid_arguments"
     assert audit.metadata["radcliffe.tool.invalid_field"] == "value"
-    assert not context_replay((audit,))[0].include
+    assert context_replay((audit,))[0].include
     assert all(message.content.inline_text != "Tool call failed" for message in events.messages)
     assert b"redacted correction hint" not in (tmp_path / "events.sqlite3").read_bytes()
 

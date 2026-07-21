@@ -89,6 +89,32 @@ class PromotedSourceFile:
     canonical_bytes: bytes
 
 
+def generated_artifact_source(
+    job_id: str,
+    artifact: PromotedArtifact,
+) -> PromotedSource | None:
+    if (
+        not artifact.path.casefold().endswith(".md")
+        or artifact.byte_length < 1
+        or artifact.byte_length > 1024 * 1024
+    ):
+        return None
+    name = artifact.path
+    locator = f"radcliffe-job-output:{job_id}:{artifact.path}"
+    digest = hashlib.sha256(
+        (f"{job_id}\0{name}\0{locator}\0{artifact.sha256}").encode()
+    ).hexdigest()[:16]
+    return PromotedSource(
+        entityId=f"source:{digest}",
+        name=name,
+        locator=locator,
+        artifactId=artifact.artifact_id,
+        path=artifact.path,
+        sha256=artifact.sha256,
+        byteLength=artifact.byte_length,
+    )
+
+
 def write_promoted_result(workspace: Path, result: PromotedJobResult) -> Path:
     workspace = workspace.resolve()
     target = workspace / RESULT_FILENAME
@@ -164,21 +190,63 @@ def read_promoted_source(
     attempt: int,
     entity_id: str,
 ) -> PromotedSourceFile | None:
+    matches = tuple(
+        source
+        for source in read_promoted_sources(
+            workspace_root,
+            job_id=job_id,
+            attempt=attempt,
+        )
+        if source.source.entity_id == entity_id
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def read_promoted_sources(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+) -> tuple[PromotedSourceFile, ...]:
     result = read_promoted_result(workspace_root, job_id=job_id, attempt=attempt)
     if result is None:
-        return None
-    matches = tuple(source for source in result.sources if source.entity_id == entity_id)
-    if len(matches) != 1:
-        return None
-    source = matches[0]
-    artifacts = tuple(
-        artifact
-        for artifact in result.artifacts
-        if artifact.artifact_id == source.artifact_id and artifact.path == source.path
-    )
-    if len(artifacts) != 1:
-        return None
-    artifact = artifacts[0]
+        return ()
+    artifacts_by_identity = {
+        (artifact.artifact_id, artifact.path): artifact for artifact in result.artifacts
+    }
+    sources = list(result.sources)
+    declared_paths = {source.path for source in sources}
+    for artifact in result.artifacts:
+        if artifact.path in declared_paths:
+            continue
+        derived = generated_artifact_source(job_id, artifact)
+        if derived is not None:
+            sources.append(derived)
+    promoted: list[PromotedSourceFile] = []
+    for source in sources:
+        selected_artifact = artifacts_by_identity.get((source.artifact_id, source.path))
+        if selected_artifact is None:
+            continue
+        resolved = _read_promoted_source_file(
+            workspace_root,
+            job_id=job_id,
+            attempt=attempt,
+            source=source,
+            artifact=selected_artifact,
+        )
+        if resolved is not None:
+            promoted.append(resolved)
+    return tuple(promoted)
+
+
+def _read_promoted_source_file(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+    source: PromotedSource,
+    artifact: PromotedArtifact,
+) -> PromotedSourceFile | None:
     if (
         artifact.sha256 != source.sha256
         or artifact.byte_length != source.byte_length

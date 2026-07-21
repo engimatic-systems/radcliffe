@@ -19,12 +19,14 @@ import {
   prepareConfigureArguments,
   prepareManageJobArguments,
   prepareManageSessionArguments,
+  prepareReadJobSourceArguments,
   prepareRunJobArguments,
   prepareReadSourceArguments,
   READ_JOB_SOURCE_PARAMETERS,
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
   RUN_JOB_PARAMETERS,
+  sanitizeToolFailure,
   validateExactOutput,
 } from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
@@ -104,6 +106,8 @@ describe("PiAgentOrchestrator", () => {
     expect(explicitJobManagementOperation("Add this as a follow-up to the job.")).toBe(
       "follow_up",
     );
+    expect(explicitJobManagementOperation("Can you just retry it?")).toBe("retry");
+    expect(explicitJobManagementOperation("How can I retry that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("How can I cancel that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("Stop talking about it.")).toBeUndefined();
   });
@@ -653,7 +657,7 @@ describe("PiAgentOrchestrator", () => {
     });
     expect(manageJobSchema.properties.operation).toMatchObject({
       type: "string",
-      enum: ["status", "follow_up", "set_priority", "cancel"],
+      enum: ["status", "follow_up", "set_priority", "cancel", "retry"],
     });
     expect(runJobSchema.properties.notificationPolicy).toMatchObject({
       type: "string",
@@ -684,6 +688,13 @@ describe("PiAgentOrchestrator", () => {
     expect(() =>
       prepareManageJobArguments({ action: "cancel", jobId: "job-1" }),
     ).toThrow(/valid operation/);
+    expect(
+      prepareReadJobSourceArguments({
+        reference: "headlines.md",
+        jobId: "job-1",
+        rate: "fast",
+      }),
+    ).toEqual({ reference: "headlines.md", jobId: "job-1", rate: "1.25x" });
   });
 
   it("applies safe argument preparation before executing a weak-model run_job call", async () => {
@@ -1017,6 +1028,12 @@ describe("PiAgentOrchestrator", () => {
       arguments: { operation: "set_priority" as const, jobId: "job-1", priority: 4 },
       response: "I reprioritized it. The original analysis scope is unchanged.",
     },
+    {
+      requestText: "Can you just retry it?",
+      operation: "retry" as const,
+      arguments: { operation: "retry" as const, jobId: "job-1" },
+      response: "I retried it. The original request is running again.",
+    },
   ])("grounds an explicit $operation response without swallowing useful context", async (scenario) => {
     const faux = createFauxCore({ provider: `radcliffe-${scenario.operation}-test` });
     faux.setResponses([
@@ -1182,7 +1199,7 @@ describe("PiAgentOrchestrator", () => {
       fauxAssistantMessage(
         fauxToolCall(
           "read_job_source",
-          { reference: "Scaling Laws", rate: "fast" },
+          { reference: "Scaling Laws", jobId: "job-1", rate: "fast" },
           { id: "read-job-source-1" },
         ),
         { stopReason: "toolUse" },
@@ -1209,7 +1226,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "read_job_source",
-        arguments: { reference: "Scaling Laws", rate: "1.25x" },
+        arguments: { reference: "Scaling Laws", jobId: "job-1", rate: "1.25x" },
       }),
       expect.anything(),
       expect.any(Function),
@@ -1221,6 +1238,19 @@ describe("PiAgentOrchestrator", () => {
         isError: false,
       }),
     );
+  });
+
+  it("maps tool gateway statuses to content-safe stable failure codes", () => {
+    expect(sanitizeToolFailure("read_job_source", new Error("Tool Gateway returned HTTP 404")))
+      .toMatchObject({
+        details: {
+          errorCode: "not_found",
+          recoverable: false,
+          toolName: "read_job_source",
+        },
+      });
+    expect(sanitizeToolFailure("manage_job", new Error("Tool Gateway returned HTTP 409")))
+      .toMatchObject({ details: { errorCode: "conflict" } });
   });
 
   it("filters excluded packets and labels canonical sources", () => {

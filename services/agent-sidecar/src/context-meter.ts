@@ -9,6 +9,19 @@ import type { ContextUsage, TurnRequest } from "./protocol.js";
 
 type JsonObject = Record<string, unknown>;
 type FetchLike = typeof fetch;
+const TRANSIENT_ANTHROPIC_STATUSES = new Set([429, 500, 502, 503, 529]);
+const MAX_ANTHROPIC_ACCOUNTING_ATTEMPTS = 4;
+
+function retryDelayMs(attempt: number, response?: Response): number {
+  const fallback = 250 * 2 ** attempt;
+  const raw = response?.headers.get("retry-after");
+  const retryAfter = raw === null || raw === undefined ? 0 : Number(raw) * 1_000;
+  return Math.min(5_000, Math.max(fallback, Number.isFinite(retryAfter) ? retryAfter : 0));
+}
+
+async function pause(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 export interface AnthropicPayloadMeasurement {
   requestDigest: string;
@@ -160,19 +173,39 @@ export class AnthropicPayloadMeter implements AnthropicPayloadCounter {
     const cached = this.cache.get(requestDigest);
     if (cached) return cached;
 
-    const response = await this.fetchImpl(
-      new URL("v1/messages/count_tokens", `${this.model.baseUrl.replace(/\/$/, "")}/`),
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
-          "x-api-key": this.apiKey,
-        },
-        body: JSON.stringify(anthropicAccountingPayload(payload)),
-        signal: AbortSignal.timeout(120_000),
-      },
-    );
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < MAX_ANTHROPIC_ACCOUNTING_ATTEMPTS; attempt += 1) {
+      try {
+        response = await this.fetchImpl(
+          new URL("v1/messages/count_tokens", `${this.model.baseUrl.replace(/\/$/, "")}/`),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "anthropic-version": "2023-06-01",
+              "x-api-key": this.apiKey,
+            },
+            body: JSON.stringify(anthropicAccountingPayload(payload)),
+            signal: AbortSignal.timeout(120_000),
+          },
+        );
+      } catch (error) {
+        if (attempt + 1 >= MAX_ANTHROPIC_ACCOUNTING_ATTEMPTS) throw error;
+        await pause(retryDelayMs(attempt));
+        continue;
+      }
+      if (
+        response.ok ||
+        !TRANSIENT_ANTHROPIC_STATUSES.has(response.status) ||
+        attempt + 1 >= MAX_ANTHROPIC_ACCOUNTING_ATTEMPTS
+      ) {
+        break;
+      }
+      await pause(retryDelayMs(attempt, response));
+    }
+    if (response === undefined) {
+      throw new Error("Anthropic context accounting produced no response");
+    }
     if (!response.ok) {
       throw new Error(`Anthropic context accounting returned HTTP ${response.status}`);
     }

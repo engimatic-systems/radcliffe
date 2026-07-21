@@ -2,7 +2,7 @@
 id: rad-uk3f
 status: in_progress
 deps: []
-links: [rad-nhai, rad-l386, rad-8ai7]
+links: [rad-nhai, rad-l386, rad-8ai7, rad-8akg, rad-ig6k]
 created: 2026-07-21T14:35:08Z
 type: bug
 priority: 0
@@ -36,3 +36,7 @@ Failure plumbing now distinguishes background model rate limits, provider outage
 **2026-07-21T15:02:47Z**
 
 Revision 90ab7fd passed the full repository suite (332 Python tests with 1 skipped, 95 sidecar tests, Android unit tests and lint) and the deployed Haiku background-job preflight. Deterministic pipeline coverage proves a successfully spoken SYSTEM announcement and hidden CALL outcome precede the next USER envelope; interrupted speech persists neither. The remaining acceptance gate is the physical phone failure-then-why replay.
+
+**2026-07-21T15:33:18Z**
+
+2026-07-21 third physical trace confirms the durable job plumbing from the prior revision worked: the SYSTEM failure announcement and hidden CALL outcome, including job ID and model_provider_unavailable, preceded the next USER envelope and Haiku correctly explained the provider outage. A remaining context gap was tool failure auditing: those SYSTEM envelopes were durable but projected out. Tool failures now carry a stable content-safe reason such as permission denied, not found, conflict, invalid request, or service unavailable and are included chronologically in the next model context.

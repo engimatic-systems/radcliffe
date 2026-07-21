@@ -26,6 +26,7 @@ from radcliffe_control.job_results import (
     PromotedFinding,
     PromotedJobResult,
     PromotedSource,
+    generated_artifact_source,
     write_promoted_result,
 )
 
@@ -525,7 +526,7 @@ class JobModelRequestError(RuntimeError):
 
 class AnthropicAgent:
     endpoint = "https://api.anthropic.com/v1/messages"
-    max_request_attempts = 4
+    max_request_attempts = 6
 
     def __init__(
         self,
@@ -1228,12 +1229,26 @@ def run_agent(
                     return False
                 continue
             try:
-                sources = promoted_sources(
+                declared_sources = promoted_sources(
                     start.job_id,
                     sandbox.workspace,
                     finish_args.sources,
                     artifacts,
                 )
+                declared_paths = {source.path for source in declared_sources}
+                generated_sources: list[PromotedSource] = []
+                for artifact in artifacts:
+                    if artifact.path in declared_paths:
+                        continue
+                    generated = generated_artifact_source(start.job_id, artifact)
+                    if generated is None:
+                        continue
+                    try:
+                        (sandbox.workspace / generated.path).read_bytes().decode("utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    generated_sources.append(generated)
+                sources = (*declared_sources, *generated_sources)
                 findings = promoted_findings(start.job_id, finish_args.findings, sources)
             except ValueError:
                 if reject_tool_call(

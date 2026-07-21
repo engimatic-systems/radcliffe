@@ -2,7 +2,7 @@
 id: rad-l386
 status: in_progress
 deps: []
-links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7]
+links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i]
 created: 2026-07-21T14:12:34Z
 type: bug
 priority: 0
@@ -44,3 +44,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T15:02:47Z**
 
 2026-07-21 deployed regression pass on revision 90ab7fd: isolated Haiku job job_f627f6ffe8df4fb07bd40bd41e3ff8b7 fetched the official Hacker News Firebase API and succeeded at revision 8. It promoted two artifacts, one UTF-8 Markdown source, and one grounded finding; independent verification confirmed the source names the official API and contains at least ten headline rows. The conformance session was archived. Physical phone fetch/read remains the operator-final-check gate.
+
+**2026-07-21T15:33:18Z**
+
+2026-07-21 third physical trace ses_103f1841319850c7a20dfcff234d84ef: job_1a3258add04b7b942c9e51dedc1322c0 succeeded and wrote a 3,370-byte UTF-8 Markdown artifact, but declared zero sources, so read_job_source returned not found. The result reader now derives a hash-verified source capability from safe Markdown artifacts, including historical results, and new jobs automatically promote such artifacts. Exact hidden jobId scoping prevents collisions; the observed historical artifact now resolves locally as hacker_news_headlines.md.

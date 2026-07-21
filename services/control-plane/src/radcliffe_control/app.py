@@ -112,9 +112,10 @@ from radcliffe_control.job_executor import (
 )
 from radcliffe_control.job_results import (
     PromotedJobResult,
+    PromotedSource,
     PromotedSourceFile,
     read_promoted_result,
-    read_promoted_source,
+    read_promoted_sources,
 )
 from radcliffe_control.readiness import ReadinessProbe
 from radcliffe_control.resume_cost import ModelPricingRegistry, ResumeCostEstimate
@@ -370,7 +371,7 @@ class ManageJobArguments(BaseModel):
         populate_by_name=True,
     )
 
-    operation: Literal["status", "follow_up", "set_priority", "cancel"]
+    operation: Literal["status", "follow_up", "set_priority", "cancel", "retry"]
     job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$")
     instruction: str | None = Field(default=None, min_length=1, max_length=4_000)
     priority: int | None = Field(default=None, ge=0, le=4)
@@ -392,6 +393,10 @@ class ReadJobSourceArguments(BaseModel):
     )
 
     reference: str = Field(min_length=1, max_length=300)
+    job_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+    )
     rate: str | float | None = None
 
     @field_validator("rate", mode="before")
@@ -515,7 +520,7 @@ class JobEventListResponse(BaseModel):
 class JobCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operation: Literal["follow_up", "set_priority", "cancel"]
+    operation: Literal["follow_up", "set_priority", "cancel", "retry"]
     idempotency_key: str = Field(min_length=1, max_length=128)
     instruction: str | None = Field(default=None, min_length=1, max_length=4_000)
     priority: int | None = Field(default=None, ge=0, le=4)
@@ -732,6 +737,7 @@ def _job_tool_response(
     result: JobMutationResult,
     promoted_result: PromotedJobResult | None = None,
     latest_event: JobEventRecord | None = None,
+    readable_sources: tuple[PromotedSource, ...] | None = None,
 ) -> ToolCallResponse:
     summary = _job_summary(result.record)
     payload: dict[str, object] = {
@@ -744,6 +750,7 @@ def _job_tool_response(
         "replayed": result.replayed,
     }
     if promoted_result is not None:
+        sources = readable_sources if readable_sources is not None else promoted_result.sources
         promoted_payload: dict[str, object] = {
             "summary": promoted_result.summary,
             "artifacts": [
@@ -756,7 +763,7 @@ def _job_tool_response(
                 for artifact in promoted_result.artifacts
             ],
         }
-        if promoted_result.sources:
+        if sources:
             promoted_payload["sources"] = [
                 {
                     "entityId": source.entity_id,
@@ -764,7 +771,7 @@ def _job_tool_response(
                     "locator": source.locator,
                     "contentSha256": source.sha256,
                 }
-                for source in promoted_result.sources
+                for source in sources
             ]
         if promoted_result.findings:
             promoted_payload["findings"] = [
@@ -797,7 +804,13 @@ def _job_tool_response(
             "revision": str(summary.revision),
             "replayed": str(result.replayed).lower(),
             "artifactCount": str(len(promoted_result.artifacts) if promoted_result else 0),
-            "sourceCount": str(len(promoted_result.sources) if promoted_result else 0),
+            "sourceCount": str(
+                len(readable_sources)
+                if readable_sources is not None
+                else len(promoted_result.sources)
+                if promoted_result
+                else 0
+            ),
             "findingCount": str(len(promoted_result.findings) if promoted_result else 0),
             "latestEventKind": latest_event.kind.value if latest_event else "",
             "latestDetailCode": latest_event.detail_code if latest_event else "",
@@ -814,6 +827,7 @@ async def _resolve_job_source(
     *,
     session_id: str,
     reference: str,
+    job_id: str | None = None,
 ) -> PromotedSourceFile:
     jobs = await active.jobs.list_for_session(
         principal_id=active.settings.owner_id,
@@ -825,24 +839,16 @@ async def _resolve_job_source(
     partial_name: list[PromotedSourceFile] = []
     normalized = _job_source_reference(reference)
     for job in jobs:
+        if job_id is not None and job.job_id != job_id:
+            continue
         if job.attempt < 1:
             continue
-        result = read_promoted_result(
+        for promoted in read_promoted_sources(
             active.settings.job_workspace_root,
             job_id=job.job_id,
             attempt=job.attempt,
-        )
-        if result is None:
-            continue
-        for source in result.sources:
-            promoted = read_promoted_source(
-                active.settings.job_workspace_root,
-                job_id=job.job_id,
-                attempt=job.attempt,
-                entity_id=source.entity_id,
-            )
-            if promoted is None:
-                continue
+        ):
+            source = promoted.source
             source_name = _job_source_reference(source.name)
             if reference == source.entity_id:
                 exact_id.append(promoted)
@@ -921,10 +927,19 @@ async def _execute_manage_job_tool(
             attempt=record.attempt,
         )
         events = await active.jobs.events(record.job_id)
+        readable_sources = tuple(
+            item.source
+            for item in read_promoted_sources(
+                active.settings.job_workspace_root,
+                job_id=record.job_id,
+                attempt=record.attempt,
+            )
+        )
         return _job_tool_response(
             JobMutationResult(record=record, replayed=False),
             promoted_result,
             events[-1] if events else None,
+            readable_sources,
         )
     if arguments.operation == "follow_up":
         assert arguments.instruction is not None
@@ -942,8 +957,14 @@ async def _execute_manage_job_tool(
             priority=arguments.priority,
             idempotency_key=request.idempotency_key,
         )
-    else:
+    elif arguments.operation == "cancel":
         result = await active.jobs.request_cancel(
+            principal_id=active.settings.owner_id,
+            job_id=record.job_id,
+            idempotency_key=request.idempotency_key,
+        )
+    else:
+        result = await active.jobs.retry(
             principal_id=active.settings.owner_id,
             job_id=record.job_id,
             idempotency_key=request.idempotency_key,
@@ -2480,8 +2501,14 @@ def create_app(
                     priority=request.priority,
                     idempotency_key=request.idempotency_key,
                 )
-            else:
+            elif request.operation == "cancel":
                 result = await active.jobs.request_cancel(
+                    principal_id=active.settings.owner_id,
+                    job_id=job_id,
+                    idempotency_key=request.idempotency_key,
+                )
+            else:
+                result = await active.jobs.retry(
                     principal_id=active.settings.owner_id,
                     job_id=job_id,
                     idempotency_key=request.idempotency_key,
@@ -2726,6 +2753,7 @@ def create_app(
                         active,
                         session_id=request.session_id,
                         reference=arguments.reference,
+                        job_id=arguments.job_id,
                     )
                     source_grant = CapabilityGrant(
                         grant_id=(

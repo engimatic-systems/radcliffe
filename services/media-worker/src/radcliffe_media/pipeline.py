@@ -106,6 +106,15 @@ _JOB_OUTCOME_EXPLANATIONS = {
     "model_response_invalid": "The job model provider returned an invalid or oversized response.",
 }
 
+_TOOL_FAILURE_MESSAGES = {
+    "authorization_denied": "Tool call failed because permission was denied.",
+    "not_found": "Tool call failed because the requested resource was not found.",
+    "conflict": "Tool call failed because the operation conflicts with the current state.",
+    "invalid_request": "Tool call failed because the request was rejected.",
+    "gateway_unavailable": "Tool call failed because its service was unavailable.",
+    "execution_failed": "Tool call failed.",
+}
+
 
 class JobAnnouncement(StrEnum):
     COMPLETE = "Your background job is complete."
@@ -831,6 +840,14 @@ class VoicePipeline:
                     and result_details.get("recoverable") is True
                     and result_details.get("errorCode") == "invalid_arguments"
                 )
+                raw_error_code = (
+                    result_details.get("errorCode") if isinstance(result_details, dict) else None
+                )
+                error_code = (
+                    raw_error_code
+                    if isinstance(raw_error_code, str) and raw_error_code in _TOOL_FAILURE_MESSAGES
+                    else "execution_failed"
+                )
                 raw_field = (
                     result_details.get("field")
                     if recoverable and isinstance(result_details, dict)
@@ -850,9 +867,15 @@ class VoicePipeline:
                 if recoverable:
                     metadata["radcliffe.tool.error_code"] = "invalid_arguments"
                     metadata["radcliffe.tool.invalid_field"] = field
+                else:
+                    metadata["radcliffe.tool.error_code"] = error_code
                 await self._append_text(
                     SourceKind.SYSTEM,
-                    "Tool arguments rejected" if recoverable else "Tool call failed",
+                    (
+                        "Tool arguments rejected"
+                        if recoverable
+                        else _TOOL_FAILURE_MESSAGES[error_code]
+                    ),
                     metadata,
                 )
                 self.telemetry.emit(

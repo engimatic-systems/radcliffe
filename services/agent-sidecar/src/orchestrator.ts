@@ -87,7 +87,7 @@ const JOB_NOTIFICATION_POLICIES = [
   "silent",
   "user_waiting",
 ] as const;
-const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel"] as const;
+const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel", "retry"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
 
 export interface DeliveryIntent {
@@ -477,11 +477,22 @@ export function prepareReadSourceArguments(value: unknown): ReadSourceArguments 
 }
 
 export function prepareReadJobSourceArguments(value: unknown): ReadJobSourceArguments {
-  return prepareSourceRateArguments(
-    value,
+  const item = { ...argumentRecord(value, "read_job_source") };
+  if (!exactKeys(item, ["reference"], ["jobId", "rate"])) {
+    throw invalidToolArgument("read_job_source", "arguments");
+  }
+  const prepared = prepareSourceRateArguments(
+    { reference: item.reference, ...(item.rate === undefined ? {} : { rate: item.rate }) },
     "read_job_source",
     "reference",
-  ) as ReadJobSourceArguments;
+  );
+  if (item.jobId !== undefined) {
+    if (typeof item.jobId !== "string" || !JOB_ID.test(item.jobId)) {
+      throw invalidToolArgument("read_job_source", "jobId");
+    }
+    prepared.jobId = item.jobId;
+  }
+  return prepared as ReadJobSourceArguments;
 }
 
 function toolResultText(value: unknown): string | undefined {
@@ -502,7 +513,7 @@ function toolResultText(value: unknown): string | undefined {
 }
 
 export function sanitizeToolFailure(toolName: string, value: unknown): unknown {
-  const message = toolResultText(value);
+  const message = value instanceof Error ? value.message : toolResultText(value);
   const match = message?.match(/^tool_argument_invalid:([a-z_]+):([a-z_]+)$/);
   if (match?.[1] === toolName) {
     return {
@@ -520,10 +531,23 @@ export function sanitizeToolFailure(toolName: string, value: unknown): unknown {
       },
     };
   }
+  const status = message?.match(/^Tool Gateway returned HTTP (\d{3})$/)?.[1];
+  const errorCode =
+    status === "403"
+      ? "authorization_denied"
+      : status === "404"
+        ? "not_found"
+        : status === "409"
+          ? "conflict"
+          : status === "422"
+            ? "invalid_request"
+            : status === "503"
+              ? "gateway_unavailable"
+              : "execution_failed";
   return {
     content: [{ type: "text", text: "The tool could not be completed." }],
     details: {
-      errorCode: "execution_failed",
+      errorCode,
       recoverable: false,
       toolName,
     },
@@ -626,6 +650,13 @@ export function explicitJobManagementOperation(text: string): JobManagementOpera
     /\b(?:how (?:can|could|do|would) i|can i|could i|tell me how|explain how)\b/.test(normalized);
   if (
     !asksHowTo &&
+    (/\b(?:retry|rerun)(?:\s+(?:(?:the|that)\s+)?(?:job|task|work|it))?\b/.test(normalized) ||
+      /\btry\s+(?:(?:the|that)\s+)?(?:job|task|work|it)\s+again\b/.test(normalized))
+  ) {
+    return "retry";
+  }
+  if (
+    !asksHowTo &&
     (new RegExp(`\\b(?:cancel|abort|stop|terminate)\\b.{0,48}\\b(?:${JOB_REFERENCE})\\b`).test(
       normalized,
     ) ||
@@ -693,12 +724,15 @@ function groundedJobResponse(
       ? "I couldn't check that job."
       : operation === "cancel"
         ? "I couldn't cancel that job."
+        : operation === "retry"
+          ? "I couldn't retry that job."
         : "I couldn't update that job.";
   }
   if (modelResponse.trim()) return modelResponse;
   if (operation === "cancel") return "I requested cancellation.";
   if (operation === "follow_up") return "I added that to the job.";
   if (operation === "set_priority") return "I changed the job priority.";
+  if (operation === "retry") return "I retried the job.";
   const status = typeof details?.status === "string" ? details.status : "available";
   return `The job status is ${status}.`;
 }
@@ -722,6 +756,8 @@ function manageJobModelContent(
       ? "The cancellation request was accepted."
       : parameters.operation === "follow_up"
         ? "The job follow-up was accepted."
+        : parameters.operation === "retry"
+          ? "The failed job was queued for a fresh bounded attempt."
         : "The priority change was accepted.";
   return `${outcome} ${JOB_ACTION_RESPONSE_INSTRUCTION}`;
 }
@@ -755,9 +791,9 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "in one short sentence using only a few words. Then provide any additional useful context the user " +
   "requested; do not omit it. In that tool-action sentence, never speak or reproduce the job ID, " +
   "status, notification policy, priority, budget, runtime, revision, or serialized tool result. " +
-  "Use manage_job to inspect, follow up, reprioritize, or cancel an " +
+  "Use manage_job to inspect, follow up, reprioritize, cancel, or retry a failed " +
   "existing job. Never " +
-  "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
+  "claim a job was inspected, changed, reprioritized, followed up, cancelled, or retried unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
   "Markdown filenames with list_sources and read one with read_source. " +
@@ -769,7 +805,8 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
   "Use read_job_source when the user asks to read a named source promoted by a completed " +
-  "background job. Pass its human title or entity ID; an ambiguous title must be clarified, never " +
+  "background job. Pass its human title, artifact Markdown filename, or entity ID and include the " +
+  "exact hidden job ID when the chronological job outcome identifies it; an ambiguous title must be clarified, never " +
   "guessed. " +
   "Use read_source only when the user explicitly asks for a named source, file, document, or path. " +
   "Never use read_source to deliver a generated answer, a count, or other transient response. " +
@@ -804,12 +841,16 @@ export const READ_SOURCE_PARAMETERS = Type.Unsafe<ReadSourceArguments>(
   ),
 );
 export const READ_JOB_SOURCE_DESCRIPTION =
-  "Read one canonical Markdown source promoted by a completed background job. Resolve it by its " +
-  "human title or exact entity ID within this conversation; ambiguous references fail closed.";
+  "Read one canonical Markdown source promoted or safely derived from a completed background job. " +
+  "Resolve it by human title, Markdown artifact filename, or exact entity ID within this " +
+  "conversation. Include the hidden exact job ID when known; ambiguous references fail closed.";
 export const READ_JOB_SOURCE_PARAMETERS = Type.Unsafe<ReadJobSourceArguments>(
   Type.Object(
     {
       reference: Type.String({ minLength: 1, maxLength: 300 }),
+      jobId: Type.Optional(
+        Type.String({ minLength: 1, maxLength: 128, pattern: JOB_ID.source }),
+      ),
       rate: Type.Optional(stringEnum(SPEECH_RATES)),
     },
     { additionalProperties: false },
@@ -860,8 +901,9 @@ export const RUN_JOB_PARAMETERS = Type.Unsafe<RunJobArguments>(
   ),
 );
 export const MANAGE_JOB_DESCRIPTION =
-  "Inspect, add a private follow-up to, reprioritize, or cancel a durable background job by its " +
-  "exact job ID. Job output remains separate from the foreground conversation.";
+  "Inspect, add a private follow-up to, reprioritize, cancel, or retry a failed durable " +
+  "background job by its exact job ID. Job output remains separate from the foreground " +
+  "conversation.";
 export const MANAGE_JOB_PARAMETERS = Type.Unsafe<ManageJobArguments>(
   Type.Object(
     {

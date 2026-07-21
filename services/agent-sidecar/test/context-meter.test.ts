@@ -285,6 +285,36 @@ describe("Anthropic context accounting", () => {
     expect(capturePayload).toHaveBeenCalledTimes(2);
   });
 
+  it("retries transient count-token failures before rejecting a voice turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const responses = [
+        new Response("temporarily unavailable", { status: 529 }),
+        Response.json({ input_tokens: 50 }),
+      ];
+      const fetchImpl = vi.fn<typeof fetch>(async () => responses.shift()!);
+      const payloadMeter = new AnthropicPayloadMeter({
+        model: anthropicModel(),
+        apiKey: "fake-anthropic-key",
+        fetchImpl,
+        capturePayload: vi.fn(async () => ({
+          model: "claude-haiku-4-5-20251001",
+          messages: [{ role: "user", content: "Retry this turn" }],
+        })),
+      });
+
+      const measurement = payloadMeter.measureContext(
+        modelContextFromRequest(request([packet("1", "Retry this turn")])),
+      );
+      await vi.runAllTimersAsync();
+
+      await expect(measurement).resolves.toMatchObject({ rawInputTokens: 50 });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects missing counts without claiming exact accounting", async () => {
     const payloadMeter = new AnthropicPayloadMeter({
       model: anthropicModel(),

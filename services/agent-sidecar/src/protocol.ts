@@ -121,7 +121,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "read_job_source";
-      arguments: { reference: string; rate?: SpeechDeliveryRate };
+      arguments: { reference: string; jobId?: string; rate?: SpeechDeliveryRate };
     })
   | (ToolExecutionRequestBase & {
       toolName: "configure";
@@ -171,7 +171,7 @@ export type ToolExecutionRequest =
         | { operation: "status"; jobId: string }
         | { operation: "follow_up"; jobId: string; instruction: string }
         | { operation: "set_priority"; jobId: string; priority: number }
-        | { operation: "cancel"; jobId: string };
+        | { operation: "cancel" | "retry"; jobId: string };
     });
 
 export interface ToolExecutionResult {
