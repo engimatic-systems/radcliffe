@@ -108,11 +108,11 @@ Private job instructions and worker transcripts remain in the job context;
 conversation-facing events contain bounded lifecycle metadata and promoted
 entity or artifact references only.
 
-Background execution remains off until an operator supplies an explicit
-VM/container/sandbox wrapper. The control plane runs that command with a
-scrubbed environment and private per-attempt workspace, streams job context on
-stdin, and accepts only bounded JSON-line lifecycle frames. Deployment details
-and limits are documented in
+Background execution remains opt-in. The local deployment uses the repository's
+Colima/Docker sandbox plus a credential-free loopback-Ollama broker; the control
+plane runs it with a scrubbed environment and private per-attempt workspace,
+streams job context on stdin, and accepts only bounded JSON-line lifecycle
+frames. Deployment details, containment, and limits are documented in
 [`services/control-plane/README.md`](services/control-plane/README.md#opt-in-executor-process).
 
 The local simulation is the fast reviewer entry point. The external deployment

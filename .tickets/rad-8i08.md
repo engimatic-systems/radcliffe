@@ -27,3 +27,7 @@ Implementation is committed: pinned host-network LiveKit/TURN profiles, configur
 **2026-07-13T03:54:22Z**
 
 LAN development topology is now deployed locally: pinned LiveKit is reachable at ws://192.168.18.71:7880, scoped tokens are issued by the control plane, and the supervised media worker connects outbound to radcliffe-demo. Trusted TLS, public TURN, forced-relay, and target-Pixel evidence remain intentionally deferred.
+
+**2026-07-20T04:15:22Z**
+
+Correction as of 2026-07-19: ws://192.168.18.71:7880 describes the earlier LAN-only deployment and is not the current phone-facing signaling URL. Current room credentials advertise wss://ravd-64-mbp.tail2aca23.ts.net:8089; Tailscale Serve exposes that endpoint tailnet-only and proxies it to local LiveKit at http://127.0.0.1:7880. Port 7880 is not directly exposed through Tailscale Serve.

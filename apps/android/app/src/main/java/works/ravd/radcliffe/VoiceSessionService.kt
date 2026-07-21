@@ -205,6 +205,9 @@ class VoiceSessionService : MediaSessionService() {
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
         if (event.hasPlaybackSegment()) playbackTracker.announce(event.playbackSegment)
+        if (event.hasJobEvent()) {
+            backgroundJobFromEvent(event.jobEvent, sessionId)?.let(BackgroundJobModel::update)
+        }
         if (event.hasSessionReady()) {
             val current = SessionModel.state.value
             val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)

@@ -74,6 +74,7 @@ from radcliffe_domain.jobs import (
     JobStore,
 )
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     CONTEXT_PROJECTION_VERSION,
     TURN_DISPOSITION_EVENT,
     TURN_EVENT_METADATA,
@@ -106,6 +107,7 @@ from radcliffe_control.job_executor import (
     JobLauncher,
     JsonLineJobLauncher,
 )
+from radcliffe_control.job_results import PromotedJobResult, read_promoted_result
 from radcliffe_control.readiness import ReadinessProbe
 from radcliffe_control.settings import Settings
 from radcliffe_control.workers import (
@@ -217,6 +219,12 @@ class ReadinessCheckResponse(BaseModel):
 class ReadinessResponse(BaseModel):
     status: Literal["ready", "not_ready"]
     checks: tuple[ReadinessCheckResponse, ...]
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok", "starting"]
+    build_revision: str
+    capabilities: tuple[str, ...]
 
 
 class SidecarContextUsageResponse(BaseModel):
@@ -681,18 +689,35 @@ def _job_event(event: JobEventRecord) -> JobEventResponse:
     )
 
 
-def _job_tool_response(result: JobMutationResult) -> ToolCallResponse:
+def _job_tool_response(
+    result: JobMutationResult,
+    promoted_result: PromotedJobResult | None = None,
+) -> ToolCallResponse:
     summary = _job_summary(result.record)
+    payload: dict[str, object] = {
+        "jobId": summary.job_id,
+        "status": summary.status,
+        "notificationPolicy": summary.notification_policy,
+        "priority": summary.priority,
+        "revision": summary.revision,
+        "cancelRequested": summary.cancel_requested,
+        "replayed": result.replayed,
+    }
+    if promoted_result is not None:
+        payload["result"] = {
+            "summary": promoted_result.summary,
+            "artifacts": [
+                {
+                    "artifactId": artifact.artifact_id,
+                    "path": artifact.path,
+                    "sha256": artifact.sha256,
+                    "byteLength": artifact.byte_length,
+                }
+                for artifact in promoted_result.artifacts
+            ],
+        }
     model_content = json.dumps(
-        {
-            "jobId": summary.job_id,
-            "status": summary.status,
-            "notificationPolicy": summary.notification_policy,
-            "priority": summary.priority,
-            "revision": summary.revision,
-            "cancelRequested": summary.cancel_requested,
-            "replayed": result.replayed,
-        },
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -703,6 +728,7 @@ def _job_tool_response(result: JobMutationResult) -> ToolCallResponse:
             "status": summary.status,
             "revision": str(summary.revision),
             "replayed": str(result.replayed).lower(),
+            "artifactCount": str(len(promoted_result.artifacts) if promoted_result else 0),
         },
     )
 
@@ -762,7 +788,15 @@ async def _execute_manage_job_tool(
     if record is None or record.session_id != request.session_id:
         raise JobNotFoundError("background job not found")
     if arguments.operation == "status":
-        return _job_tool_response(JobMutationResult(record=record, replayed=False))
+        promoted_result = read_promoted_result(
+            active.settings.job_workspace_root,
+            job_id=record.job_id,
+            attempt=record.attempt,
+        )
+        return _job_tool_response(
+            JobMutationResult(record=record, replayed=False),
+            promoted_result,
+        )
     if arguments.operation == "follow_up":
         assert arguments.instruction is not None
         result = await active.jobs.add_follow_up(
@@ -1470,11 +1504,11 @@ def create_app(
     readiness_probe: ReadinessProbe | None = None,
 ) -> FastAPI:
     runtime: Runtime | None = None
+    settings = provided_settings or Settings()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal runtime
-        settings = provided_settings or Settings()
         store = EventStore(settings.database_path)
         await store.migrate()
         catalog = SessionCatalog(settings.database_path)
@@ -1621,9 +1655,13 @@ def create_app(
             )
         return device
 
-    @app.get("/healthz")
-    async def health() -> dict[str, str]:
-        return {"status": "ok" if runtime is not None else "starting"}
+    @app.get("/healthz", response_model=HealthResponse)
+    async def health() -> HealthResponse:
+        return HealthResponse(
+            status="ok" if runtime is not None else "starting",
+            build_revision=settings.build_revision,
+            capabilities=("background_jobs_v1", "promoted_job_results_v1"),
+        )
 
     @app.get("/readyz", response_model=ReadinessResponse)
     async def readiness(
@@ -1991,10 +2029,9 @@ def create_app(
                 break
             for envelope in page.items:
                 cursor = envelope.sequence
-                if (
-                    envelope.sensitivity is not Sensitivity.SECRET
-                    and envelope.metadata.get(TURN_EVENT_METADATA) != TURN_DISPOSITION_EVENT
-                ):
+                if envelope.sensitivity is not Sensitivity.SECRET and envelope.metadata.get(
+                    TURN_EVENT_METADATA
+                ) not in {TURN_DISPOSITION_EVENT, BACKGROUND_JOB_REFERENCE_EVENT}:
                     visible.append(envelope)
                 if len(visible) > limit:
                     break

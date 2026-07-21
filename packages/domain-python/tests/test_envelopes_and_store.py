@@ -3,8 +3,10 @@ from datetime import UTC, datetime
 import pytest
 from radcliffe_domain.envelope import MessageEnvelope, Sensitivity, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     CONFIGURATION_EVENT,
     DELIVERY_SUMMARY_METADATA,
+    TOOL_FAILURE_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
     TURN_ID_METADATA,
@@ -255,3 +257,39 @@ def test_configuration_audit_is_durable_but_not_model_visible() -> None:
     assert not packet.include
     assert "Behavior setting updated" not in packet.content
     assert packet.content == "[excluded: configuration audit]"
+
+
+def test_tool_failure_audit_is_durable_but_not_model_visible() -> None:
+    audit = MessageEnvelope.text(
+        session_id="s1",
+        sequence=1,
+        source=SourceKind.SYSTEM,
+        text="Tool call failed",
+        metadata={
+            TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+            "radcliffe.tool.name": "manage_job",
+            "radcliffe.tool.outcome": "failed",
+        },
+    )
+
+    packet = context_projection(audit)
+
+    assert not packet.include
+    assert "Tool call failed" not in packet.content
+    assert packet.content == "[excluded: tool failure audit]"
+
+
+def test_background_job_reference_is_model_visible_tool_state() -> None:
+    reference = MessageEnvelope.text(
+        session_id="s1",
+        sequence=1,
+        source=SourceKind.CALL,
+        text="Internal background job reference: job-1",
+        metadata={TURN_EVENT_METADATA: BACKGROUND_JOB_REFERENCE_EVENT},
+    )
+
+    packet = context_projection(reference)
+
+    assert packet.include
+    assert packet.role == "tool"
+    assert packet.content == "Internal background job reference: job-1"

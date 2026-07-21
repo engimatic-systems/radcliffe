@@ -266,7 +266,7 @@ def default_startup_probe(database_path: Path) -> None:
         try:
             with TestClient(create_app(settings)) as client:
                 response = client.get("/healthz")
-                if response.status_code != 200 or response.json() != {"status": "ok"}:
+                if response.status_code != 200 or response.json().get("status") != "ok":
                     raise RecoveryError(
                         "current control plane did not start from restored database"
                     )

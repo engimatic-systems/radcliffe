@@ -93,12 +93,14 @@ object SessionModel {
     fun prepare(sessionId: String = "") {
         BehaviorConfigurationModel.clear()
         AgentControlModel.clear()
+        BackgroundJobModel.open(sessionId)
         mutableSessionId.value = sessionId
         mutableMessages.value = emptyList()
     }
     fun open(sessionId: String, timeline: List<DisplayMessage>) {
         BehaviorConfigurationModel.clear()
         AgentControlModel.clear()
+        BackgroundJobModel.open(sessionId, reset = false)
         mutableSessionId.value = sessionId
         mutableMessages.value = timeline.distinctBy { it.id }
     }

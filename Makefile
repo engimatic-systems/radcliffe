@@ -1,6 +1,7 @@
 .PHONY: bootstrap check check-python check-node check-android check-conformance-local \
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
+	check-background-jobs-local build-job-sandbox-local \
 	services-install-local services-status-local services-restart-local \
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
@@ -58,6 +59,13 @@ check-device-auth-local:
 check-operations-local:
 	mkdir -p artifacts/operations
 	scripts/run-local-ops.sh --wait 30 --output artifacts/operations/status.json
+
+build-job-sandbox-local:
+	scripts/build-job-sandbox.sh
+
+check-background-jobs-local:
+	set -a; . var/.env; . var/job-executor.env; set +a; \
+		uv run python scripts/background_job_preflight.py --wait 30
 
 services-install-local:
 	uv run python scripts/radcliffe_services.py install --include-compat-worker

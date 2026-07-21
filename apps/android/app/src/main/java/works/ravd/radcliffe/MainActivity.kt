@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
         val state by SessionModel.state.collectAsState()
         val messages by SessionModel.messages.collectAsState()
         val activeSessionId by SessionModel.sessionId.collectAsState()
+        val backgroundJobs by BackgroundJobModel.jobs.collectAsState()
         val storedProfile by profiles.profile.collectAsState(initial = null)
         val showSystemMessages by profiles.showSystemMessages.collectAsState(initial = false)
         val liveConfigurationUpdates by BehaviorConfigurationModel.updates.collectAsState()
@@ -127,6 +128,13 @@ class MainActivity : ComponentActivity() {
         var configurationNotice by remember { mutableStateOf<String?>(null) }
         var lastConfigurationMutation by remember {
             mutableStateOf<ConfigurationMutationResult?>(null)
+        }
+        var jobCommandInFlight by remember { mutableStateOf<String?>(null) }
+        var jobNotice by remember { mutableStateOf<String?>(null) }
+
+        LaunchedEffect(activeSessionId) {
+            jobCommandInFlight = null
+            jobNotice = null
         }
 
         LaunchedEffect(storedProfile) {
@@ -197,6 +205,30 @@ class MainActivity : ComponentActivity() {
             }.onFailure { error ->
                 configurationNotice =
                     "Behavior settings unavailable: ${error.message ?: "unknown error"}"
+            }
+        }
+
+        LaunchedEffect(
+            activeSessionId,
+            storedProfile?.controlUrl,
+            storedProfile?.deviceCredential,
+        ) {
+            val profile = storedProfile ?: return@LaunchedEffect
+            if (activeSessionId.isBlank() || !profile.isEnrolled) return@LaunchedEffect
+            val requestedSessionId = activeSessionId
+            suspendRunCatching {
+                withContext(Dispatchers.IO) {
+                    SessionApi.jobs(
+                        profile.controlUrl,
+                        profile.deviceCredential,
+                        requestedSessionId,
+                    )
+                }
+            }.onSuccess { jobs ->
+                BackgroundJobModel.hydrate(requestedSessionId, jobs)
+                jobNotice = null
+            }.onFailure { error ->
+                jobNotice = "Background jobs unavailable: ${error.message ?: "unknown error"}"
             }
         }
 
@@ -334,6 +366,66 @@ class MainActivity : ComponentActivity() {
                         "Behavior change failed: ${error.message ?: "unknown error"}"
                 }
                 configurationInFlight = false
+            }
+        }
+
+        fun commandJob(
+            job: BackgroundJobSummary,
+            operation: String,
+            instruction: String? = null,
+            priority: Int? = null,
+        ) {
+            if (
+                jobCommandInFlight != null ||
+                job.sessionId != activeSessionId ||
+                job.status.terminal ||
+                job.cancelRequested
+            ) {
+                return
+            }
+            val profile = storedProfile
+            if (profile == null || !profile.isEnrolled) {
+                jobNotice = "Connection settings are unavailable"
+                return
+            }
+            jobCommandInFlight = job.jobId
+            val requestedSessionId = job.sessionId
+            jobNotice = when (operation) {
+                "follow_up" -> "Sending job follow-up…"
+                "set_priority" -> "Updating job priority…"
+                else -> "Cancelling background job…"
+            }
+            scope.launch {
+                suspendRunCatching {
+                    withContext(Dispatchers.IO) {
+                        SessionApi.commandJob(
+                            baseUrl = profile.controlUrl,
+                            deviceCredential = profile.deviceCredential,
+                            jobId = job.jobId,
+                            operation = operation,
+                            instruction = instruction,
+                            priority = priority,
+                            idempotencyKey = UUID.randomUUID().toString(),
+                        )
+                    }
+                }.onSuccess { result ->
+                    if (SessionModel.sessionId.value != requestedSessionId) return@onSuccess
+                    BackgroundJobModel.update(result.job)
+                    jobNotice = when (operation) {
+                        "follow_up" -> "Follow-up queued"
+                        "set_priority" -> "Job priority updated"
+                        else -> "Cancellation requested"
+                    }
+                }.onFailure { error ->
+                    if (SessionModel.sessionId.value != requestedSessionId) return@onFailure
+                    jobNotice = "Job command failed: ${error.message ?: "unknown error"}"
+                }
+                if (
+                    SessionModel.sessionId.value == requestedSessionId &&
+                    jobCommandInFlight == job.jobId
+                ) {
+                    jobCommandInFlight = null
+                }
             }
         }
 
@@ -649,6 +741,7 @@ class MainActivity : ComponentActivity() {
                 else -> ConversationScreen(
                     state = state,
                     messages = messages,
+                    backgroundJobs = backgroundJobs,
                     sessionId = activeSessionId,
                     showSystemMessages = showSystemMessages,
                     diagnosticsVisible = diagnosticsVisible,
@@ -671,6 +764,8 @@ class MainActivity : ComponentActivity() {
                     configurationInFlight = configurationInFlight,
                     configurationNotice = configurationNotice,
                     lastConfigurationMutation = lastConfigurationMutation,
+                    jobCommandInFlight = jobCommandInFlight,
+                    jobNotice = jobNotice,
                     onDiagnostics = { diagnosticsVisible = !diagnosticsVisible },
                     onShowSystemMessages = { show ->
                         scope.launch {
@@ -701,6 +796,13 @@ class MainActivity : ComponentActivity() {
                             undoMutationId = mutation.mutationId,
                         )
                     },
+                    onJobFollowUp = { job, instruction ->
+                        commandJob(job, "follow_up", instruction = instruction)
+                    },
+                    onJobPriority = { job, priority ->
+                        commandJob(job, "set_priority", priority = priority)
+                    },
+                    onJobCancel = { job -> commandJob(job, "cancel") },
                     onCommand = ::command,
                 )
             }
@@ -772,6 +874,7 @@ class MainActivity : ComponentActivity() {
     private fun ColumnScope.ConversationScreen(
         state: VoiceState,
         messages: List<DisplayMessage>,
+        backgroundJobs: List<BackgroundJobSummary>,
         sessionId: String,
         showSystemMessages: Boolean,
         diagnosticsVisible: Boolean,
@@ -783,6 +886,8 @@ class MainActivity : ComponentActivity() {
         configurationInFlight: Boolean,
         configurationNotice: String?,
         lastConfigurationMutation: ConfigurationMutationResult?,
+        jobCommandInFlight: String?,
+        jobNotice: String?,
         onDiagnostics: () -> Unit,
         onShowSystemMessages: (Boolean) -> Unit,
         onExport: () -> Unit,
@@ -790,6 +895,9 @@ class MainActivity : ComponentActivity() {
         onConfigurationSet: (String, String) -> Unit,
         onConfigurationReset: (String) -> Unit,
         onConfigurationUndo: (ConfigurationMutationResult) -> Unit,
+        onJobFollowUp: (BackgroundJobSummary, String) -> Unit,
+        onJobPriority: (BackgroundJobSummary, Int) -> Unit,
+        onJobCancel: (BackgroundJobSummary) -> Unit,
         onCommand: (String) -> Unit,
     ) {
         var confirmArchive by remember(sessionId) { mutableStateOf(false) }
@@ -848,6 +956,14 @@ class MainActivity : ComponentActivity() {
                 Text(if (diagnosticsVisible) "Hide diagnostics" else "Diagnostics")
             }
         }
+        BackgroundJobsCard(
+            jobs = backgroundJobs,
+            commandInFlightJobId = jobCommandInFlight,
+            notice = jobNotice,
+            onFollowUp = onJobFollowUp,
+            onPriority = onJobPriority,
+            onCancel = onJobCancel,
+        )
         ConfigurationCard(
             values = configurationValues,
             mutationInFlight = configurationInFlight,

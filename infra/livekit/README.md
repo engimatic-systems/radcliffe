@@ -35,6 +35,14 @@ at `ws://localhost:7880` with the documented `devkey/secret` credentials. It is
 for automated and LAN tests only: it has no trusted TLS or production TURN
 coverage.
 
+For a tailnet phone checkpoint, first inspect the live Tailscale Serve and local
+listener allocations. Configure ignored `infra/livekit/.env` with the current
+tailnet node IP and an allowed free RTC port, expose signaling on a separate
+allowed free Tailscale HTTPS port, and override `RADCLIFFE_LIVEKIT_URL` in
+ignored mode-0600 `var/network.env` with that `wss://` origin. The local server
+then advertises its tailnet node IP for both ICE/TCP and ICE/UDP on the selected
+RTC port; proxying signaling alone is insufficient for working audio.
+
 ## Diagnostics
 
 `diagnose.sh` verifies DNS, signal TLS/health, TURN TLS, and exposed TCP ports.

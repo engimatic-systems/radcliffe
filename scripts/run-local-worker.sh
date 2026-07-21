@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 set -a
 source var/.env
+source scripts/load-local-network-env.sh
 set +a
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 

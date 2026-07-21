@@ -2,7 +2,7 @@
 id: rad-tg8o
 status: open
 deps: []
-links: []
+links: [rad-erac, rad-7t9h]
 created: 2026-07-17T23:54:20Z
 type: epic
 priority: 1

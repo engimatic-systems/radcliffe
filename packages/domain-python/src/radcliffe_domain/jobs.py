@@ -87,6 +87,7 @@ _EXECUTOR_DETAIL_CODES = {
             "runtime_exhausted",
             "resource_exhausted",
             "policy_denied",
+            "tool_arguments_invalid",
         }
     ),
     JobEventKind.CANCELLED: frozenset(

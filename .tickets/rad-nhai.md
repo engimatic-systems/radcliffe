@@ -40,3 +40,23 @@ Started rad-96c5 for the safe-pause notification slice: durable session-ordered 
 **2026-07-19T03:22:17Z**
 
 Completed rad-96c5: background JobEvent visibility is session-ordered and reconnectable, while fixed-phrase speech uses durable at-most-once dispositions and the existing foreground owner. Candidate user speech, transcription, active/paused turns, and unacknowledged current-generation playback all defer announcements; barge-in interrupts without restart duplication.
+
+**2026-07-19T03:24:17Z**
+
+Started rad-0eyx for the Android checkpoint: session-scoped JobEvent replay/deduplication, device-API hydration, accessible lifecycle cards, and idempotent follow-up/priority/cancel controls.
+
+**2026-07-19T03:36:40Z**
+
+Completed rad-0eyx: Android now hydrates and replay-deduplicates privacy-minimized background job status for the active session, shows accessible bounded job cards, and issues enrolled-device follow-up, priority, and cancellation commands without exposing private instructions or executor output. Full repository checks pass; physical-phone validation remains the checkpoint.
+
+**2026-07-19T20:46:18Z**
+
+Phone checkpoint failed before any job call: the live sidecar and control plane were still Friday processes predating run_job/manage_job, while the checkout and managed media worker were current; var/.env also has no opt-in job executor configuration. Filed P0 rad-cyg0 to make deployed capability/revision and executor readiness an enforced, content-free preflight before future APK handoffs.
+
+**2026-07-19T20:52:08Z**
+
+Started rad-erac to supply the missing concrete Colima/Docker + local-Ollama Unix job wrapper and deploy it to the protected local profile; rad-cyg0 separately enforces the preflight that would have caught the stale processes and disabled executor.
+
+**2026-07-19T21:28:19Z**
+
+The Unix executor is live behind the new deployed-feature preflight. An isolated live job was accepted immediately, a same-session foreground tool remained responsive, the local-Ollama/Colima agent completed and promoted its result, and the test session/device plus containers/network were cleaned up. Awaiting the physical Android lifecycle checkpoint on rad-erac.

@@ -1,5 +1,9 @@
 # Radcliffe agent instructions
 
+Copy every Android APK produced for testing to `/Users/ravd/agent-share/radcliffe/`.
+
+Before sharing any network service with the user, run the Tailscale CLI to inspect the current Serve configuration and choose an available permitted port.
+
 ## Conversation data
 
 - Treat Radcliffe conversation text and stored conversation envelopes as available for agent

@@ -214,4 +214,57 @@ class SessionApiTest {
         assertEquals("ses_abc123", credentials.roomName)
         assertEquals("header.payload.signature", credentials.participantToken)
     }
+
+    @Test
+    fun backgroundJobParsersRetainOnlyBoundedLifecycleMetadata() {
+        val jobs = SessionApi.parseBackgroundJobs(
+            JSONObject(
+                """{
+                    "items": [{
+                        "job_id": "job-1",
+                        "session_id": "session-1",
+                        "generation": 2,
+                        "status": "waiting",
+                        "notification_policy": "next_safe_pause",
+                        "priority": 1,
+                        "budget_usd": 0.5,
+                        "max_runtime_seconds": 3600,
+                        "revision": 4,
+                        "cancel_requested": false,
+                        "attempt": 1,
+                        "created_at": "2026-07-18T12:00:00Z",
+                        "updated_at": "2026-07-18T12:03:00Z"
+                    }]
+                }""".trimIndent(),
+            ),
+        )
+        val mutation = SessionApi.parseBackgroundJobMutation(
+            JSONObject(
+                """{
+                    "job": {
+                        "job_id": "job-1",
+                        "session_id": "session-1",
+                        "generation": 2,
+                        "status": "cancelled",
+                        "notification_policy": "next_safe_pause",
+                        "priority": 1,
+                        "budget_usd": null,
+                        "max_runtime_seconds": 3600,
+                        "revision": 5,
+                        "cancel_requested": true,
+                        "attempt": 1,
+                        "created_at": "2026-07-18T12:00:00Z",
+                        "updated_at": "2026-07-18T12:04:00Z"
+                    },
+                    "replayed": false
+                }""".trimIndent(),
+            ),
+        )
+
+        assertEquals(BackgroundJobStatus.WAITING, jobs.single().status)
+        assertEquals(4L, jobs.single().revision)
+        assertFalse(jobs.single().toString().contains("instruction", ignoreCase = true))
+        assertEquals(BackgroundJobStatus.CANCELLED, mutation.job.status)
+        assertFalse(mutation.replayed)
+    }
 }

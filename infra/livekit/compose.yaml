@@ -11,9 +11,21 @@ services:
 
   livekit-local:
     image: livekit/livekit-server:v1.13.3
-    command: ["--dev", "--bind", "0.0.0.0"]
+    command:
+      - "--config-body"
+      - |
+        port: 7880
+        log_level: debug
+        rtc:
+          tcp_port: ${RADCLIFFE_LIVEKIT_RTC_PORT:-7881}
+        keys:
+          devkey: secret
+      - "--node-ip"
+      - "${RADCLIFFE_LIVEKIT_NODE_IP:-127.0.0.1}"
+      - "--udp-port"
+      - "${RADCLIFFE_LIVEKIT_RTC_PORT:-7882}"
     ports:
       - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+      - "${RADCLIFFE_LIVEKIT_RTC_PORT:-7881}:${RADCLIFFE_LIVEKIT_RTC_PORT:-7881}/tcp"
+      - "${RADCLIFFE_LIVEKIT_RTC_PORT:-7882}:${RADCLIFFE_LIVEKIT_RTC_PORT:-7882}/udp"
     profiles: ["local"]

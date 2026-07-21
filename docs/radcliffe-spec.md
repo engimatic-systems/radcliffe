@@ -551,6 +551,15 @@ output, worker transcript, or generic text field. Event revisions replay after
 restart, while a database-wide delivery sequence orders interleaved events
 across every job in a session.
 
+The enrolled Android client hydrates privacy-minimized job summaries through
+the device API and folds replayed `JobEvent` messages into an active-session
+model by revision and delivery sequence. Accessible lifecycle cards show only
+fixed status labels and promoted-reference counts. Non-terminal cards expose
+bounded follow-up, priority, and cancellation commands; terminal or
+cancellation-pending cards cannot issue further commands. A session handoff
+clears the model, and an in-flight command from the old session cannot update
+the new session's UI.
+
 The media worker sends typed event visibility as soon as it observes that
 ordered feed and replays it by stable event ID on reconnect. Speech is a
 separate durable disposition. Only registered lifecycle kind/detail pairs map

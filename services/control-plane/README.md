@@ -113,6 +113,37 @@ process group; committed user cancellation wins over a late success. A
 control-plane restart terminates owned processes and lets their durable leases
 expire for an explicit recovered attempt.
 
+The repository's local implementation uses the pinned
+`infra/job-sandbox/Containerfile` image on Colima/Docker and a credential-free
+host broker backed by loopback Ollama. Build the image with
+`make build-job-sandbox-local`, then set the protected local profile to the
+resulting image and full wrapper argv:
+
+```sh
+RADCLIFFE_JOB_EXECUTOR_ENABLED=1
+RADCLIFFE_JOB_DOCKER_BIN=/absolute/path/to/docker
+RADCLIFFE_JOB_DOCKER_HOST=unix:///absolute/path/to/colima/docker.sock
+RADCLIFFE_JOB_SANDBOX_IMAGE=radcliffe-job-sandbox:<revision>
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sandbox_agent --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --ollama-url http://127.0.0.1:11434 --model qwen3:8b'
+RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/radcliffe/var/jobs
+```
+
+The private macOS launcher reads these non-secret machine-specific values from
+ignored, mode-0600 `var/job-executor.env` when present; application and provider
+secrets remain in `var/.env`.
+
+The broker itself receives no application/provider credentials. Each
+model-selected command runs in a new container with Docker's default seccomp
+boundary, all Linux capabilities dropped, `no-new-privileges`, PID/CPU/memory,
+file-size and descriptor limits, and only that attempt's private workspace bind
+mounted. Executor and agent transcripts stay in the outer attempt directory,
+outside that mount; only the inner artifact workspace is visible to commands.
+Its internal-only Docker network reaches a separate least-privilege
+HTTP CONNECT proxy; that proxy is the sole bridge-network member and rejects
+loopback, link-local, private/LAN, metadata, non-global DNS answers, and ports
+other than public HTTP/HTTPS. Cancellation or exit removes both containers and
+the per-job network.
+
 ## Managed workers
 
 Server-generated sessions use a control-plane-owned local worker supervisor;

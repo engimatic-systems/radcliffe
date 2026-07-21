@@ -67,6 +67,11 @@ data class ConfigurationMutationResult(
     val effective: RegisteredConfiguration,
 )
 
+data class BackgroundJobMutationResult(
+    val job: BackgroundJobSummary,
+    val replayed: Boolean,
+)
+
 class ControlApiException(
     val statusCode: Int,
     detail: String,
@@ -234,6 +239,49 @@ object SessionApi {
         )
     }
 
+    fun jobs(
+        baseUrl: String,
+        deviceCredential: String,
+        sessionId: String,
+    ): List<BackgroundJobSummary> = parseBackgroundJobs(
+        request(
+            baseUrl,
+            deviceCredential,
+            "GET",
+            "/v1/sessions/${encodePath(sessionId)}/jobs?limit=100",
+        ),
+    )
+
+    fun commandJob(
+        baseUrl: String,
+        deviceCredential: String,
+        jobId: String,
+        operation: String,
+        idempotencyKey: String,
+        instruction: String? = null,
+        priority: Int? = null,
+    ): BackgroundJobMutationResult {
+        require(operation in setOf("follow_up", "set_priority", "cancel"))
+        require((operation == "follow_up") == (instruction != null))
+        require((operation == "set_priority") == (priority != null))
+        require(instruction == null || instruction.isNotBlank() && instruction.length <= 4_000)
+        require(priority == null || priority in 0..4)
+        val body = JSONObject()
+            .put("operation", operation)
+            .put("idempotency_key", idempotencyKey)
+        instruction?.let { body.put("instruction", it) }
+        priority?.let { body.put("priority", it) }
+        return parseBackgroundJobMutation(
+            request(
+                baseUrl,
+                deviceCredential,
+                "POST",
+                "/v1/jobs/${encodePath(jobId)}/commands",
+                body,
+            ),
+        )
+    }
+
     fun mutateConfiguration(
         baseUrl: String,
         deviceCredential: String,
@@ -289,6 +337,38 @@ object SessionApi {
             }
         }
     }
+
+    internal fun parseBackgroundJobs(json: JSONObject): List<BackgroundJobSummary> {
+        val values = json.getJSONArray("items")
+        return buildList {
+            for (index in 0 until values.length()) {
+                add(parseBackgroundJob(values.getJSONObject(index)))
+            }
+        }
+    }
+
+    internal fun parseBackgroundJobMutation(json: JSONObject): BackgroundJobMutationResult =
+        BackgroundJobMutationResult(
+            job = parseBackgroundJob(json.getJSONObject("job")),
+            replayed = json.getBoolean("replayed"),
+        )
+
+    internal fun parseBackgroundJob(json: JSONObject): BackgroundJobSummary =
+        BackgroundJobSummary(
+            jobId = json.getString("job_id"),
+            sessionId = json.getString("session_id"),
+            generation = json.getLong("generation"),
+            status = BackgroundJobStatus.parse(json.getString("status")),
+            notificationPolicy = json.getString("notification_policy"),
+            priority = json.getInt("priority"),
+            budgetUsd = if (json.isNull("budget_usd")) null else json.getDouble("budget_usd"),
+            maxRuntimeSeconds = json.getInt("max_runtime_seconds"),
+            revision = json.getLong("revision"),
+            cancelRequested = json.getBoolean("cancel_requested"),
+            attempt = json.getInt("attempt"),
+            createdAt = Instant.parse(json.getString("created_at")),
+            updatedAt = Instant.parse(json.getString("updated_at")),
+        )
 
     internal fun parseConfigurationMutation(json: JSONObject): ConfigurationMutationResult =
         ConfigurationMutationResult(

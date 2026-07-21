@@ -16,6 +16,7 @@ from radcliffe_domain.configuration import (
 )
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_REFERENCE_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_ID_METADATA,
     context_replay,
@@ -272,6 +273,57 @@ class ConfigurationEventOrchestrator:
         )
         yield SidecarEvent("model_delta", {"text": "Configuration applied."})
         yield SidecarEvent("model_complete", {"text": "Configuration applied."})
+        yield SidecarEvent("complete", {})
+
+
+class FailedToolEventOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "toolName": "manage_job",
+                "isError": True,
+                "result": {
+                    "privatePrompt": "must not persist",
+                    "arguments": {"jobId": "private-job-id"},
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "I corrected the tool call."})
+        yield SidecarEvent("model_complete", {"text": "I corrected the tool call."})
+        yield SidecarEvent("complete", {})
+
+
+class BackgroundJobReferenceOrchestrator:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            event = SidecarEvent(
+                "tool_end",
+                {
+                    "toolName": "run_job",
+                    "isError": False,
+                    "result": {
+                        "details": {
+                            "jobId": "job-accepted-1",
+                            "status": "queued",
+                            "replayed": "false",
+                        }
+                    },
+                },
+            )
+            yield event
+            yield event
+            yield SidecarEvent("model_delta", {"text": "I started it."})
+            yield SidecarEvent("model_complete", {"text": "I started it."})
+        else:
+            yield SidecarEvent("model_delta", {"text": "It is still running."})
+            yield SidecarEvent("model_complete", {"text": "It is still running."})
         yield SidecarEvent("complete", {})
 
 
@@ -837,6 +889,80 @@ async def test_configuration_tool_result_is_live_auditable_and_excluded_from_mod
     audit_packet = context_replay(history)[history.index(audit)]
     assert not audit_packet.include
     assert "Behavior setting updated" not in audit_packet.content
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        FailedToolEventOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        telemetry=TelemetrySink(telemetry_path, strict=True),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Check a background job")
+
+    history = await store.replay("s1")
+    audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
+    assert audit.content.inline_text == "Tool call failed"
+    assert audit.metadata["radcliffe.tool.name"] == "manage_job"
+    assert not context_replay((audit,))[0].include
+    persisted = (tmp_path / "events.sqlite3").read_bytes()
+    telemetry = telemetry_path.read_text()
+    assert b"privatePrompt" not in persisted
+    assert b"private-job-id" not in persisted
+    assert "privatePrompt" not in telemetry
+    assert "private-job-id" not in telemetry
+    assert '"event":"tool_call"' in telemetry
+    assert '"outcome":"failed"' in telemetry
+
+
+@pytest.mark.asyncio
+async def test_background_job_reference_is_durable_model_context_but_not_a_live_message(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    orchestrator = BackgroundJobReferenceOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Start a background job")
+    await pipeline.handle_transcript("What is it doing?")
+
+    history = await store.replay("s1")
+    references = [
+        item
+        for item in history
+        if item.metadata.get("radcliffe.event") == BACKGROUND_JOB_REFERENCE_EVENT
+    ]
+    assert len(references) == 1
+    reference = references[0]
+    assert reference.source is SourceKind.CALL
+    assert "job-accepted-1" in (reference.content.inline_text or "")
+    assert reference not in events.messages
+    packets = orchestrator.requests[1]["packets"]
+    assert isinstance(packets, list)
+    projected = next(packet for packet in packets if packet["messageId"] == reference.message_id)
+    assert projected["include"] is True
+    assert projected["source"] == "call"
+    assert "job-accepted-1" in projected["content"]
 
 
 @pytest.mark.asyncio

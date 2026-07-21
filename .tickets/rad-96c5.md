@@ -2,7 +2,7 @@
 id: rad-96c5
 status: closed
 deps: []
-links: []
+links: [rad-f08j]
 created: 2026-07-19T03:01:42Z
 type: feature
 priority: 1
