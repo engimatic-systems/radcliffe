@@ -379,6 +379,9 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
+  "When a completed job status returns findings, cite their promoted source titles or locators and " +
+  "explicitly label every finding whose inference flag is true. Never detach a finding from its " +
+  "source entity IDs. " +
   "Markdown filenames with list_sources and read " +
   "one with read_source. If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +

@@ -3,6 +3,7 @@ import os
 
 from radcliffe_control.job_results import (
     PromotedArtifact,
+    PromotedFinding,
     PromotedJobResult,
     PromotedSource,
     read_promoted_result,
@@ -83,6 +84,12 @@ def test_promoted_source_is_hash_verified_beneath_the_private_attempt(tmp_path) 
         sha256=digest,
         byteLength=len(canonical),
     )
+    finding = PromotedFinding(
+        entityId=f"finding:{digest[:16]}",
+        text="The retained text is the exact abstract.",
+        sourceEntityIds=(source.entity_id,),
+        inference=False,
+    )
     write_promoted_result(
         workspace,
         PromotedJobResult(
@@ -91,6 +98,7 @@ def test_promoted_source_is_hash_verified_beneath_the_private_attempt(tmp_path) 
             summary="Promoted one exact source.",
             artifacts=(artifact,),
             sources=(source,),
+            findings=(finding,),
         ),
     )
 
@@ -104,6 +112,9 @@ def test_promoted_source_is_hash_verified_beneath_the_private_attempt(tmp_path) 
     assert resolved is not None
     assert resolved.canonical_bytes == canonical
     assert resolved.path == path
+    promoted = read_promoted_result(root, job_id="job-source", attempt=1)
+    assert promoted is not None
+    assert promoted.findings == (finding,)
     path.write_text("tampered")
     assert (
         read_promoted_source(

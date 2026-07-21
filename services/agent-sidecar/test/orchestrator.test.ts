@@ -70,6 +70,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("read_job_source");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("ambiguous title must be clarified");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("inference flag is true");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("source entity IDs");
   });
 
   it("identifies Radcliffe as the harness without assigning the model that identity", () => {

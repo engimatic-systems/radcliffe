@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from radcliffe_control.job_results import (
     PromotedArtifact,
+    PromotedFinding,
     PromotedJobResult,
     PromotedSource,
     write_promoted_result,
@@ -138,12 +139,41 @@ class FinishJobSource(BaseModel):
         return normalized
 
 
+class FinishJobFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    text: str = Field(min_length=1, max_length=1_000)
+    source_paths: tuple[str, ...] = Field(
+        alias="sourcePaths",
+        min_length=1,
+        max_length=10,
+    )
+    inference: bool = False
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("promoted finding text must not be blank")
+        return value
+
+    @field_validator("source_paths")
+    @classmethod
+    def normalize_source_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(workspace_relative_artifact(value) for value in values)
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("finding source paths must be unique")
+        return normalized
+
+
 class FinishJobArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     summary: str = Field(min_length=1, max_length=4_000)
     artifact_paths: tuple[str, ...] = Field(default=(), alias="artifactPaths", max_length=20)
     sources: tuple[FinishJobSource, ...] = Field(default=(), max_length=20)
+    findings: tuple[FinishJobFinding, ...] = Field(default=(), max_length=20)
 
     @field_validator("artifact_paths")
     @classmethod
@@ -509,6 +539,29 @@ AGENT_TOOLS: list[dict[str, object]] = [
                             },
                         },
                     },
+                    "findings": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["text", "sourcePaths", "inference"],
+                            "properties": {
+                                "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+                                "sourcePaths": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 10,
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256,
+                                    },
+                                },
+                                "inference": {"type": "boolean"},
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -528,7 +581,9 @@ finish_job with a concise factual result plus every useful relative artifact pat
 sources, save the exact canonical text that may be read aloud as a UTF-8 Markdown file and promote
 it with its human title and locator; never label a paraphrase as canonical source text. Prefer
 clear script files over fragile one-line programs, use efficient algorithms, and keep each command
-within its declared timeout. Do not merely describe commands you could run."""
+within its declared timeout. Promote useful bounded findings with the paths of every source that
+supports them, and set inference true whenever a finding goes beyond an explicit source passage.
+Do not merely describe commands you could run."""
 
 
 def emit_event(
@@ -646,6 +701,42 @@ def promoted_sources(
                 path=artifact.path,
                 sha256=artifact.sha256,
                 byteLength=artifact.byte_length,
+            )
+        )
+    return tuple(promoted)
+
+
+def promoted_findings(
+    job_id: str,
+    specifications: Sequence[FinishJobFinding],
+    sources: Sequence[PromotedSource],
+) -> tuple[PromotedFinding, ...]:
+    source_by_path = {source.path: source for source in sources}
+    promoted: list[PromotedFinding] = []
+    entity_ids: set[str] = set()
+    for specification in specifications:
+        try:
+            source_ids = tuple(
+                source_by_path[path].entity_id for path in specification.source_paths
+            )
+        except KeyError as error:
+            raise ValueError("promoted finding cites an unpromoted source") from error
+        digest = hashlib.sha256(
+            (
+                f"{job_id}\0{specification.text}\0{','.join(source_ids)}\0"
+                f"{str(specification.inference).lower()}"
+            ).encode()
+        ).hexdigest()[:16]
+        entity_id = f"finding:{digest}"
+        if entity_id in entity_ids:
+            raise ValueError("promoted findings must be unique")
+        entity_ids.add(entity_id)
+        promoted.append(
+            PromotedFinding(
+                entityId=entity_id,
+                text=specification.text,
+                sourceEntityIds=source_ids,
+                inference=specification.inference,
             )
         )
     return tuple(promoted)
@@ -819,10 +910,12 @@ def run_agent(
                     finish_args.sources,
                     artifacts,
                 )
+                findings = promoted_findings(start.job_id, finish_args.findings, sources)
             except ValueError:
                 if reject_tool_call(
                     name,
-                    "Each source must name a unique, bounded UTF-8 Markdown workspace file.",
+                    "Each source must name a unique, bounded UTF-8 Markdown workspace file; each "
+                    "finding must cite one or more of those source paths.",
                 ):
                     return False
                 continue
@@ -833,6 +926,7 @@ def run_agent(
                 summary=finish_args.summary.strip(),
                 artifacts=artifacts,
                 sources=sources,
+                findings=findings,
             )
             write_promoted_result(result_workspace or sandbox.workspace, result)
             result_id = hashlib.sha256(
@@ -844,7 +938,10 @@ def run_agent(
                 "succeeded",
                 "completed",
                 artifact_ids=artifact_ids,
-                entity_ids=[source.entity_id for source in sources],
+                entity_ids=[
+                    *(source.entity_id for source in sources),
+                    *(finding.entity_id for finding in findings),
+                ],
             )
             return True
         if reject_tool_call(name, "Use exactly one run_shell or finish_job call."):

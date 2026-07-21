@@ -761,6 +761,16 @@ def _job_tool_response(
                 }
                 for source in promoted_result.sources
             ]
+        if promoted_result.findings:
+            promoted_payload["findings"] = [
+                {
+                    "entityId": finding.entity_id,
+                    "text": finding.text,
+                    "sourceEntityIds": list(finding.source_entity_ids),
+                    "inference": finding.inference,
+                }
+                for finding in promoted_result.findings
+            ]
         payload["result"] = promoted_payload
     model_content = json.dumps(
         payload,
@@ -776,6 +786,7 @@ def _job_tool_response(
             "replayed": str(result.replayed).lower(),
             "artifactCount": str(len(promoted_result.artifacts) if promoted_result else 0),
             "sourceCount": str(len(promoted_result.sources) if promoted_result else 0),
+            "findingCount": str(len(promoted_result.findings) if promoted_result else 0),
         },
     )
 
