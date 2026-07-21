@@ -7,7 +7,7 @@ created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1
 assignee: coopwilliams
-tags: [radcliffe, post-m1, testing, reliability, security]
+tags: [radcliffe, post-m1, testing, reliability, security, operator-autonomous]
 ---
 # Expand conformance with security, chaos, and soak release gates
 

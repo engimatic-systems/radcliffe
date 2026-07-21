@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-3se2
-tags: [voice, interruption, vad, silero, p0]
+tags: [voice, interruption, vad, silero, p0, operator-autonomous]
 ---
 # Handle near-field barge-in when Silero reports zero speech windows
 
@@ -21,4 +21,3 @@ Preserve echo, room-tone, and silence rejection while making the high-energy/zer
 ## Acceptance Criteria
 
 1. The retained high-energy/zero-window candidates from ses_5fb0ac5ab311fbda54bb9652cb9b68b0 have a deterministic regression. 2. Genuine near-field overlap reaches a confirmed interruption or an explicit recoverable disposition instead of silently becoming a queued normal turn. 3. Echo, room tone, background babble, and silence retain their current false-interruption protections. 4. Telemetry correlates candidate, acoustic features, verifier result, turn, generation, flush request, and device acknowledgement. 5. External voice conformance covers both accepted near-field speech and rejected non-speech.
-

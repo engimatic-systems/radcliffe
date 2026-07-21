@@ -8,7 +8,7 @@ type: feature
 priority: 2
 assignee: coopwilliams
 parent: rad-3se2
-tags: [radcliffe, milestone-2, android, context, ui]
+tags: [radcliffe, milestone-2, android, context, ui, operator-final-check]
 ---
 # Render accessible context-usage donuts in the Android session list
 

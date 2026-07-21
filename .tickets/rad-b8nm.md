@@ -7,7 +7,7 @@ created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1
 assignee: coopwilliams
-tags: [radcliffe, post-m1, operations, observability]
+tags: [radcliffe, post-m1, operations, observability, operator-autonomous]
 ---
 # Operationalize Radcliffe services and end-to-end observability
 

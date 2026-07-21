@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-1wji
-tags: [voice, configuration, tools, speech-rate, p0]
+tags: [voice, configuration, tools, speech-rate, p0, operator-autonomous]
 ---
 # Route spoken delivery-speed requests without malformed or unrelated tool calls
 

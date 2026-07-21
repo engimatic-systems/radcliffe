@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-1wji
-tags: [radcliffe, android, ui, configuration, phone-review]
+tags: [radcliffe, android, ui, configuration, phone-review, operator-final-check]
 ---
 # Simplify Android behavior controls after phone review
 

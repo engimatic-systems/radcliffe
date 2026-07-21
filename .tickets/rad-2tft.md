@@ -7,7 +7,7 @@ created: 2026-07-13T01:36:39Z
 type: epic
 priority: 1
 assignee: coopwilliams
-tags: [radcliffe, foundation, epic, milestone-1]
+tags: [radcliffe, foundation, epic, milestone-1, operator-interactive]
 ---
 # Radcliffe foundation: reliable voice, provenance, and safe agent tools
 

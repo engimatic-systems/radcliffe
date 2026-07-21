@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-cnrg
-tags: [voice, exact-output, response-detail, enumeration, p0]
+tags: [voice, exact-output, response-detail, enumeration, p0, operator-autonomous]
 ---
 # Preserve exact requested enumerations despite brief-response policy
 

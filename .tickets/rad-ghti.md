@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, milestone-1, voice]
+tags: [radcliffe, foundation, milestone-1, voice, operator-final-check]
 ---
 # Implement the streaming VAD, STT, Pi, and TTS voice pipeline
 

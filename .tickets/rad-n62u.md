@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-3se2
-tags: [radcliffe, android, voice, playback, barge-in, regression]
+tags: [radcliffe, android, voice, playback, barge-in, regression, operator-final-check]
 ---
 # Restore future Android playback after interruption
 

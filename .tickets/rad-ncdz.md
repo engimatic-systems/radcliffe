@@ -8,7 +8,7 @@ type: feature
 priority: 0
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, milestone-1, demo]
+tags: [radcliffe, foundation, milestone-1, demo, operator-final-check]
 ---
 # Milestone 1: demo Android voice and deterministic source reading
 

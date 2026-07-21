@@ -8,7 +8,7 @@ type: task
 priority: 3
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, voice, prompt, tts, ux, research]
+tags: [radcliffe, voice, prompt, tts, ux, research, operator-autonomous]
 ---
 # Explore and prevent speech-hostile generated output
 
@@ -21,4 +21,3 @@ Build a representative spoken-output corpus covering hashes, UUIDs, job and mess
 ## Acceptance Criteria
 
 The ticket documents failure categories and intended spoken alternatives; local and cloud prompt evaluations measure recurrence across representative turns; ordinary generated speech avoids unrequested hashes, IDs, raw URLs, paths, serialized objects, and other machine-oriented strings while the timeline retains useful visual detail; explicit read-it-exactly requests and canonical read_source rendering remain unchanged; accessibility review covers cases where visual-only substitution is inappropriate; and follow-up implementation tickets are created for any remedy too broad for one change.
-
