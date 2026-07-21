@@ -133,6 +133,37 @@ the loopback Ollama API. Ollama and Whisper each require a one-time model
 download; after both models are cached, turns require no model-provider network
 access.
 
+`scripts/run-local-sidecar.sh` forces that local boundary even when cloud
+settings exist in `var/.env`; local overrides use
+`RADCLIFFE_LOCAL_MODEL_ID`, `RADCLIFFE_LOCAL_MODEL_CONTEXT_LIMIT`, and
+`RADCLIFFE_LOCAL_MODEL_RESERVED_OUTPUT_TOKENS`. It never silently falls back to
+a cloud model.
+
+### Cloud-backed live-debug profile
+
+The separate `scripts/run-live-sidecar.sh` profile pins Anthropic
+`claude-haiku-4-5-20251001`. It starts only when the owner-only `var/.env`
+contains both `RADCLIFFE_ALLOW_CLOUD_MODELS=1` and the protected
+`RADCLIFFE_ANTHROPIC_API_KEY`. The launcher bridges that value into the one
+provider variable, removes the Radcliffe key name before starting Node, and
+prints a disclosure that conversation context will leave the Mac. There is no
+automatic Ollama fallback.
+
+`RADCLIFFE_CLOUD_MAX_OUTPUT_TOKENS` defaults to 1,024 per foreground turn and
+`RADCLIFFE_CLOUD_SESSION_BUDGET_USD` defaults to $0.25. Before every sampling
+call, the sidecar uses Anthropic's free token-count endpoint, adds a labeled 2%
+plus 32-token safety margin, and reserves the maximum affordable input/output
+cost. A mode-`0600` pseudonymous ledger survives restarts; an interrupted
+reservation is charged conservatively rather than reopening the ceiling.
+Provider, pinned model, accounting basis, and aggregate budget usage appear in
+`/healthz`, never prompts, responses, credentials, or raw session IDs.
+
+After a user separately authorizes one paid acceptance request, the doubly
+gated `make smoke-haiku-paid` records only provider, model, token usage, and
+estimated cost under `artifacts/cloud-haiku-smoke/`. It will not run without
+both the normal cloud opt-in and the one-run approval phrase documented in the
+script. Ordinary tests use fakes and make no Anthropic calls.
+
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and

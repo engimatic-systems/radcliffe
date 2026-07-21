@@ -255,6 +255,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     private readonly streamFn: StreamFn,
     private readonly executeTool: ToolExecutor,
     private readonly contextMeter?: ContextMeter,
+    private readonly streamFnForTurn?: (request: TurnRequest) => StreamFn,
   ) {}
 
   async measure(request: TurnRequest): Promise<ContextUsage> {
@@ -282,6 +283,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
     let modelText = "";
+    let providerError: string | undefined;
     const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
       name: "list_sources",
       label: "List sources",
@@ -463,7 +465,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       },
       convertToLlm: convertRadcliffeContext,
       transformContext: async (messages) => messages,
-      streamFn: this.streamFn,
+      streamFn: this.streamFnForTurn?.(request) ?? this.streamFn,
       sessionId: request.sessionId,
       toolExecution: "sequential",
     });
@@ -481,6 +483,20 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           .map((block) => block.text)
           .join("");
         if (complete) modelText = complete;
+        if (event.message.stopReason === "error") {
+          providerError = event.message.errorMessage ?? "model provider failed";
+        }
+        await emit({
+          type: "usage",
+          requestId: request.requestId,
+          provider: event.message.provider,
+          modelId: event.message.responseModel ?? event.message.model,
+          inputTokens: event.message.usage.input,
+          outputTokens: event.message.usage.output,
+          cacheReadTokens: event.message.usage.cacheRead,
+          cacheWriteTokens: event.message.usage.cacheWrite,
+          estimatedCostUsd: event.message.usage.cost.total,
+        });
       } else if (event.type === "tool_execution_start") {
         await emit({
           type: "tool_start",
@@ -512,15 +528,20 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     signal?.addEventListener("abort", abort, { once: true });
     try {
       await agent.prompt({ role: "radcliffe", packet: current });
+      if (providerError) throw new Error(providerError);
       if (modelText) {
         await emit({ type: "model_complete", requestId: request.requestId, text: modelText });
       }
       await emit({ type: "complete", requestId: request.requestId });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown Pi failure";
       await emit({
         type: "error",
         requestId: request.requestId,
-        message: error instanceof Error ? error.message : "unknown Pi failure",
+        message,
+        ...(message.startsWith("cloud session budget exhausted")
+          ? { code: "cloud_budget_exhausted" as const }
+          : {}),
       });
       throw error;
     } finally {

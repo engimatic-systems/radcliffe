@@ -5,7 +5,7 @@
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
 	benchmark-stt-local benchmark-private-stt-local demo build-voice-dashboard \
-	generate-protocol test-python test-node
+	generate-protocol smoke-haiku-paid test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
@@ -34,6 +34,9 @@ check-node:
 
 test-node:
 	npm test
+
+smoke-haiku-paid:
+	uv run python scripts/haiku_paid_smoke.py
 
 check-android:
 	JAVA_HOME="$${JAVA_HOME:-$$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home}" ANDROID_HOME="$${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}" ./apps/android/gradlew -p apps/android testDebugUnitTest lint

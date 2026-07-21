@@ -94,7 +94,21 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
         if require_json:
             return OPS.HttpObservation(
                 200,
-                {"status": "ok", "active_turns": 0, "cancelled_turns": 2},
+                {
+                    "status": "ok",
+                    "active_turns": 0,
+                    "cancelled_turns": 2,
+                    "provider": "anthropic",
+                    "model_id": "claude-haiku-4-5-20251001",
+                    "data_boundary": "cloud_anthropic",
+                    "context_accounting": "anthropic_count_tokens_conservative_estimate",
+                    "cloud_budget": {
+                        "basis": "anthropic/claude-haiku-4-5-20251001/usd-2025-10-01",
+                        "limit_usd": 0.25,
+                        "spent_usd": 0.01,
+                        "session_count": 1,
+                    },
+                },
             )
         return OPS.HttpObservation(200, None)
 
@@ -122,6 +136,8 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
     assert str(root) not in encoded
     assert "schema_current" in encoded
     assert "active_turns" in encoded
+    assert "claude-haiku-4-5-20251001" in encoded
+    assert "cloud_budget" in encoded
     assert "SERVICE_COMPAT" not in encoded
 
 

@@ -181,6 +181,18 @@ class AnswerOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class BudgetExhaustedOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "error",
+            {
+                "code": "cloud_budget_exhausted",
+                "message": "cloud session budget exhausted; private provider detail",
+            },
+        )
+
+
 class TurnRateOverrideOrchestrator:
     def __init__(self, registry: ConfigurationRegistry) -> None:
         self.registry = registry
@@ -656,6 +668,46 @@ async def test_turn_emits_content_free_correlated_phase_telemetry(tmp_path) -> N
     encoded = path.read_text()
     assert "private-session-name" not in encoded
     assert "private transcript content" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_cloud_budget_exhaustion_is_visible_but_excluded_from_model_context(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    tts = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        BudgetExhaustedOrchestrator(),
+        tts,
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    with pytest.raises(RuntimeError, match="cloud session budget exhausted"):
+        await pipeline.handle_transcript("Try another paid turn")
+
+    history = await store.replay("s1")
+    budget = next(
+        item
+        for item in history
+        if item.source is SourceKind.SYSTEM
+        and item.content.inline_text == "Cloud session budget exhausted"
+    )
+    projected = dict(
+        zip((item.message_id for item in history), context_replay(history), strict=True)
+    )
+    assert projected[budget.message_id].include is False
+    assert projected[budget.message_id].content == "[excluded: provider budget audit]"
+    assert any(item.message_id == budget.message_id for item in events.messages)
+    assert tts.inputs == []
+    assert all(
+        "private provider detail" not in (item.content.inline_text or "") for item in history
+    )
 
 
 @pytest.mark.asyncio

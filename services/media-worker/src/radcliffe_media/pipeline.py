@@ -23,6 +23,7 @@ from radcliffe_domain.configuration import (
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
     CONFIGURATION_EVENT,
+    PROVIDER_BUDGET_EVENT,
     SESSION_TRANSITION_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
@@ -490,6 +491,13 @@ class VoicePipeline:
                     str(event.payload.get("text", turn.model_text))
                 )
             elif event.type == "error":
+                if event.payload.get("code") == "cloud_budget_exhausted":
+                    await self._append_text(
+                        SourceKind.SYSTEM,
+                        "Cloud session budget exhausted",
+                        {TURN_EVENT_METADATA: PROVIDER_BUDGET_EVENT},
+                        notify=True,
+                    )
                 raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
 
         self._assert_owner(turn, operation)

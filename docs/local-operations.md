@@ -5,6 +5,13 @@ cloud providers. The local Ollama, Whisper, and TTS configuration remains the
 default; having funded provider keys in `var/.env` does not authorize a paid
 request.
 
+The installed LaunchAgent calls `scripts/run-local-sidecar.sh`, which forces
+Ollama and removes cloud credentials even if live-debug settings are present.
+Cloud testing uses the separate, manually started
+`scripts/run-live-sidecar.sh` path, never an operations fallback. Its explicit
+opt-in, disclosure, budgets, and paid-smoke gate are documented in the root
+README and sidecar README.
+
 ## Install and manage services
 
 Keep `var/.env` mode `0600`, then install the versioned LaunchAgents:

@@ -74,8 +74,24 @@ export type SidecarEvent =
       isError: boolean;
       result: unknown;
     }
+  | {
+      type: "usage";
+      requestId: string;
+      provider: string;
+      modelId: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      estimatedCostUsd: number;
+    }
   | { type: "complete"; requestId: string }
-  | { type: "error"; requestId: string; message: string };
+  | {
+      type: "error";
+      requestId: string;
+      message: string;
+      code?: "cloud_budget_exhausted";
+    };
 
 interface ToolExecutionRequestBase {
   sessionId: string;

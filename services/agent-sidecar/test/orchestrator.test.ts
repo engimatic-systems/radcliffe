@@ -75,8 +75,39 @@ describe("PiAgentOrchestrator", () => {
       requestId: "request-1",
       text: "A concise answer.",
     });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "usage",
+        requestId: "request-1",
+        provider: "radcliffe-test",
+      }),
+    );
     expect(events.at(-1)).toEqual({ type: "complete", requestId: "request-1" });
     expect(tool).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a provider budget failure as a visible sidecar error", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-budget-test" });
+    faux.setResponses([
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "cloud session budget exhausted",
+      }),
+    ]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await expect(
+      orchestrator.run(request([packet("current", "Hello")]), (event) => {
+        events.push(event);
+      }),
+    ).rejects.toThrow("cloud session budget exhausted");
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      requestId: "request-1",
+      message: "cloud session budget exhausted",
+      code: "cloud_budget_exhausted",
+    });
   });
 
   it("executes read_source sequentially and emits its lifecycle", async () => {
