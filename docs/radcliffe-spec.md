@@ -614,6 +614,16 @@ as an estimate: Radcliffe adds 2% plus 32 tokens, reports `exact=false`, and
 includes the provider/model in the accounting basis. No count is reused across
 a model or projection change.
 
+The control plane attaches a non-billable cold-cache resume estimate to that
+measured context response. A versioned, server-side pricing registry pins the
+provider/model, currency, effective and expiration dates, uncached/cache-write/
+cache-read rates, output rate, and explicit long-context tiers. The default
+range charges measured input at the provider's cold 5-minute cache-write or
+uncached-input rule and spans zero through the configured representative output
+allowance. Inexact token accounting remains labeled; expired promotions,
+unknown models, overflow, and missing tiers fail closed. Local models say that
+there is no API-token charge rather than presenting a fabricated dollar value.
+
 Before every cloud sampling call, the sidecar reserves conservative input cost
 at the highest enabled cache-write rate plus the maximum affordable output.
 The configurable output cap applies across all sampling calls in one foreground

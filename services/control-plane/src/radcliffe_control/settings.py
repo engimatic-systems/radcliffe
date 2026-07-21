@@ -8,6 +8,10 @@ def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _model_pricing_path() -> Path:
+    return _workspace_root() / "services/control-plane/config/model-pricing-v1.json"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RADCLIFFE_", env_file=".env", extra="ignore")
 
@@ -21,6 +25,8 @@ class Settings(BaseSettings):
     source_root: Path = Path("fixtures/sources")
     telemetry_path: Path = Path("var/telemetry/events.jsonl")
     sidecar_url: str = "http://127.0.0.1:8787"
+    model_pricing_path: Path = Field(default_factory=_model_pricing_path)
+    resume_representative_output_tokens: int = Field(default=512, ge=0, le=32_768)
     build_revision: str = Field(default="development", pattern=r"^(development|[a-f0-9]{7,64})$")
     room_token_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     managed_workers_enabled: bool = True

@@ -119,7 +119,7 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
                     "data_boundary": "cloud_anthropic",
                     "context_accounting": "anthropic_count_tokens_conservative_estimate",
                     "cloud_budget": {
-                        "basis": "anthropic/claude-haiku-4-5-20251001/usd-2025-10-01",
+                        "basis": "anthropic/claude-haiku-4-5-20251001/usd-2026-05-27",
                         "limit_usd": 0.25,
                         "spent_usd": 0.01,
                         "session_count": 1,
