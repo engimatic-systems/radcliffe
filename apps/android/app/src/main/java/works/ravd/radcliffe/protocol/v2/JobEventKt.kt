@@ -344,6 +344,23 @@ public object JobEventKt {
 
     public val JobEventKt.Dsl.occurredAtOrNull: com.google.protobuf.Timestamp?
       get() = _builder.occurredAtOrNull
+
+    /**
+     * `uint64 delivery_sequence = 11;`
+     */
+    public var deliverySequence: kotlin.Long
+      @kotlin.jvm.JvmName("getDeliverySequence")
+        get() = _builder.deliverySequence
+      @kotlin.jvm.JvmName("setDeliverySequence")
+        set(value) {
+        _builder.deliverySequence = value
+      }
+    /**
+     * `uint64 delivery_sequence = 11;`
+     */
+    public fun clearDeliverySequence() {
+      _builder.clearDeliverySequence()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.JobEvent.copy(block: `works.ravd.radcliffe.protocol.v2`.JobEventKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.JobEvent =

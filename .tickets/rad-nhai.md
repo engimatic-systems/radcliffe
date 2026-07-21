@@ -32,3 +32,11 @@ Implementation is staged as bounded vertical slices. rad-gf5x owns the typed dur
 **2026-07-19T02:44:02Z**
 
 Started rad-kp6y for the opt-in separate executor context: scrubbed process boundary, private workspaces/transcripts, stdin job/follow-up frames, durable heartbeats, cancellation, and runtime/output limits.
+
+**2026-07-19T03:01:46Z**
+
+Started rad-96c5 for the safe-pause notification slice: durable session-ordered metadata events, restart-safe delivery dispositions, fixed allowlisted speech, and conservative foreground ownership gates.
+
+**2026-07-19T03:22:17Z**
+
+Completed rad-96c5: background JobEvent visibility is session-ordered and reconnectable, while fixed-phrase speech uses durable at-most-once dispositions and the existing foreground owner. Candidate user speech, transcription, active/paused turns, and unacknowledged current-generation playback all defer announcements; barge-in interrupts without restart duplication.

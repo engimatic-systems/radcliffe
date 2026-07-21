@@ -41,9 +41,12 @@ or Protocol v3.
 `JobCommand` carries a bounded client lifecycle command, while `JobEvent` is the
 privacy-minimized server projection. The event includes job/session IDs,
 revision, status, notification policy, priority, a stable detail code, and
-promoted entity/artifact IDs. It deliberately has no job instruction,
+promoted entity/artifact IDs. A database-wide `delivery_sequence` gives every
+session a stable ordered cursor even when multiple jobs interleave. It
+deliberately has no job instruction,
 follow-up text, raw output, worker transcript, or generic message-content
-field. Exact revisions allow deterministic replay after reconnect or restart.
+field. Event IDs and delivery sequences let clients replay and deduplicate
+visibility after reconnect or restart.
 
 ## Compatibility policy
 

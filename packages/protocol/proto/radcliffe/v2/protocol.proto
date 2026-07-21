@@ -437,6 +437,7 @@ message JobEvent {
   repeated string entity_ids = 8;
   repeated string artifact_ids = 9;
   google.protobuf.Timestamp occurred_at = 10;
+  uint64 delivery_sequence = 11;
 }
 
 message Reconnect {

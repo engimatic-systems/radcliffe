@@ -545,6 +545,32 @@ public  final class JobEvent extends
     bitField0_ = (bitField0_ & ~0x00000002);
   }
 
+  public static final int DELIVERY_SEQUENCE_FIELD_NUMBER = 11;
+  private long deliverySequence_;
+  /**
+   * <code>uint64 delivery_sequence = 11;</code>
+   * @return The deliverySequence.
+   */
+  @java.lang.Override
+  public long getDeliverySequence() {
+    return deliverySequence_;
+  }
+  /**
+   * <code>uint64 delivery_sequence = 11;</code>
+   * @param value The deliverySequence to set.
+   */
+  private void setDeliverySequence(long value) {
+
+    deliverySequence_ = value;
+  }
+  /**
+   * <code>uint64 delivery_sequence = 11;</code>
+   */
+  private void clearDeliverySequence() {
+
+    deliverySequence_ = 0L;
+  }
+
   public static works.ravd.radcliffe.protocol.v2.JobEvent parseFrom(
       java.nio.ByteBuffer data)
       throws com.google.protobuf.InvalidProtocolBufferException {
@@ -1172,6 +1198,34 @@ public  final class JobEvent extends
       return this;
     }
 
+    /**
+     * <code>uint64 delivery_sequence = 11;</code>
+     * @return The deliverySequence.
+     */
+    @java.lang.Override
+    public long getDeliverySequence() {
+      return instance.getDeliverySequence();
+    }
+    /**
+     * <code>uint64 delivery_sequence = 11;</code>
+     * @param value The deliverySequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDeliverySequence(long value) {
+      copyOnWrite();
+      instance.setDeliverySequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 delivery_sequence = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearDeliverySequence() {
+      copyOnWrite();
+      instance.clearDeliverySequence();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.JobEvent)
   }
   @java.lang.Override
@@ -1199,10 +1253,12 @@ public  final class JobEvent extends
             "entityIds_",
             "artifactIds_",
             "occurredAt_",
+            "deliverySequence_",
           };
           java.lang.String info =
-              "\u0000\n\u0000\u0001\u0001\n\n\u0000\u0002\u0000\u0001\u000b\u0002\u0208\u0003\u1009" +
-              "\u0000\u0004\f\u0005\f\u0006\u000b\u0007\u0208\b\u021a\t\u021a\n\u1009\u0001";
+              "\u0000\u000b\u0000\u0001\u0001\u000b\u000b\u0000\u0002\u0000\u0001\u000b\u0002\u0208" +
+              "\u0003\u1009\u0000\u0004\f\u0005\f\u0006\u000b\u0007\u0208\b\u021a\t\u021a\n\u1009" +
+              "\u0001\u000b\u0003";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

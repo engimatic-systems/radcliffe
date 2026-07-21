@@ -76,6 +76,9 @@ class FakeVoice:
     async def barge_in(self) -> None:
         self.barge_ins += 1
 
+    def foreground_turn_active(self) -> bool:
+        return self.active > 0
+
     async def participant_connected(self) -> None:
         self.participant_connections += 1
 
@@ -508,3 +511,31 @@ async def test_uncertain_transcript_requests_clarification_without_persisting_us
 
     assert voice.transcripts == []
     assert voice.clarifications == [reason]
+
+
+def test_notification_gate_rejects_candidate_user_speech_and_pause() -> None:
+    endpoint = EndpointProcessor(FakeSpeech())
+
+    assert endpoint.foreground_quiet()
+
+    endpoint.speaking = True
+    endpoint.buffer.extend(b"candidate user audio")
+    assert not endpoint.foreground_quiet()
+
+    endpoint.speaking = False
+    endpoint.buffer.clear()
+    endpoint.paused = True
+    assert not endpoint.foreground_quiet()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_speech_barges_into_voice_owned_out_of_band_audio() -> None:
+    voice = FakeVoice()
+    voice.active = 1
+    endpoint = EndpointProcessor(FakeSpeech())
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=7)
+
+    assert voice.barge_ins == 1
+    assert endpoint.barge_in_confirmed

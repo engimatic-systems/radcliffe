@@ -63,6 +63,15 @@ class JobEventKind(StrEnum):
     FAILED = "failed"
 
 
+class JobNotificationDisposition(StrEnum):
+    ANNOUNCING = "announcing"
+    SPOKEN = "spoken"
+    INTERRUPTED = "interrupted"
+    FAILED = "failed"
+    SILENT = "silent"
+    VISIBILITY_ONLY = "visibility_only"
+
+
 TERMINAL_JOB_STATUSES = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED})
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _EXECUTOR_DETAIL_CODES = {
@@ -109,6 +118,7 @@ class JobRecord:
 @dataclass(frozen=True, slots=True)
 class JobEventRecord:
     event_id: str
+    delivery_sequence: int
     job_id: str
     revision: int
     kind: JobEventKind
@@ -188,6 +198,7 @@ def _record(row: aiosqlite.Row) -> JobRecord:
 def _event(row: aiosqlite.Row) -> JobEventRecord:
     return JobEventRecord(
         event_id=str(row["event_id"]),
+        delivery_sequence=int(row["delivery_sequence"]),
         job_id=str(row["job_id"]),
         revision=int(row["revision"]),
         kind=JobEventKind(str(row["kind"])),
@@ -353,6 +364,176 @@ class JobStore:
                 )
             ).fetchall()
         return tuple(_event(row) for row in rows)
+
+    async def session_events(
+        self,
+        session_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> tuple[JobEventRecord, ...]:
+        if after_sequence < 0:
+            raise JobError("job event delivery sequence cannot be negative")
+        if not 1 <= limit <= 500:
+            raise JobError("job event delivery limit must be between 1 and 500")
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (
+                await db.execute(
+                    """SELECT events.* FROM background_job_events AS events
+                    INNER JOIN background_jobs AS jobs ON jobs.job_id = events.job_id
+                    WHERE jobs.session_id = ? AND events.delivery_sequence > ?
+                    ORDER BY events.delivery_sequence LIMIT ?""",
+                    (session_id, after_sequence, limit),
+                )
+            ).fetchall()
+        return tuple(_event(row) for row in rows)
+
+    async def notification_disposition(
+        self,
+        *,
+        session_id: str,
+        event_id: str,
+    ) -> JobNotificationDisposition | None:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    """SELECT disposition FROM background_job_notification_deliveries
+                    WHERE session_id = ? AND event_id = ?""",
+                    (session_id, event_id),
+                )
+            ).fetchone()
+        return JobNotificationDisposition(str(row[0])) if row is not None else None
+
+    async def claim_notification(
+        self,
+        *,
+        session_id: str,
+        event_id: str,
+        claim_owner: str,
+    ) -> bool:
+        if not _REFERENCE.fullmatch(claim_owner):
+            raise JobError("invalid notification claim owner")
+        now = self.clock().astimezone(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            event = await (
+                await db.execute(
+                    """SELECT 1 FROM background_job_events AS events
+                    INNER JOIN background_jobs AS jobs ON jobs.job_id = events.job_id
+                    WHERE events.event_id = ? AND jobs.session_id = ?""",
+                    (event_id, session_id),
+                )
+            ).fetchone()
+            if event is None:
+                await db.rollback()
+                raise JobNotFoundError("background job event not found")
+            existing = await (
+                await db.execute(
+                    """SELECT disposition FROM background_job_notification_deliveries
+                    WHERE event_id = ?""",
+                    (event_id,),
+                )
+            ).fetchone()
+            if existing is not None:
+                await db.rollback()
+                return False
+            await db.execute(
+                """INSERT INTO background_job_notification_deliveries(
+                    event_id, session_id, claim_owner, disposition, updated_at
+                ) VALUES (?, ?, ?, 'announcing', ?)""",
+                (event_id, session_id, claim_owner, now),
+            )
+            await db.commit()
+            return True
+
+    async def release_notification(
+        self,
+        *,
+        session_id: str,
+        event_id: str,
+        claim_owner: str,
+    ) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """DELETE FROM background_job_notification_deliveries
+                WHERE session_id = ? AND event_id = ? AND claim_owner = ?
+                AND disposition = 'announcing'""",
+                (session_id, event_id, claim_owner),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def complete_notification(
+        self,
+        *,
+        session_id: str,
+        event_id: str,
+        claim_owner: str,
+        disposition: JobNotificationDisposition,
+    ) -> bool:
+        if disposition not in {
+            JobNotificationDisposition.SPOKEN,
+            JobNotificationDisposition.INTERRUPTED,
+            JobNotificationDisposition.FAILED,
+        }:
+            raise JobError("invalid claimed notification disposition")
+        now = self.clock().astimezone(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """UPDATE background_job_notification_deliveries
+                SET disposition = ?, updated_at = ?
+                WHERE session_id = ? AND event_id = ? AND claim_owner = ?
+                AND disposition = 'announcing'""",
+                (disposition.value, now, session_id, event_id, claim_owner),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def suppress_notification(
+        self,
+        *,
+        session_id: str,
+        event_id: str,
+        disposition: JobNotificationDisposition,
+    ) -> JobNotificationDisposition:
+        if disposition not in {
+            JobNotificationDisposition.SILENT,
+            JobNotificationDisposition.VISIBILITY_ONLY,
+        }:
+            raise JobError("invalid suppressed notification disposition")
+        now = self.clock().astimezone(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            event = await (
+                await db.execute(
+                    """SELECT 1 FROM background_job_events AS events
+                    INNER JOIN background_jobs AS jobs ON jobs.job_id = events.job_id
+                    WHERE events.event_id = ? AND jobs.session_id = ?""",
+                    (event_id, session_id),
+                )
+            ).fetchone()
+            if event is None:
+                await db.rollback()
+                raise JobNotFoundError("background job event not found")
+            existing = await (
+                await db.execute(
+                    """SELECT disposition FROM background_job_notification_deliveries
+                    WHERE event_id = ?""",
+                    (event_id,),
+                )
+            ).fetchone()
+            if existing is not None:
+                await db.rollback()
+                return JobNotificationDisposition(str(existing[0]))
+            await db.execute(
+                """INSERT INTO background_job_notification_deliveries(
+                    event_id, session_id, claim_owner, disposition, updated_at
+                ) VALUES (?, ?, NULL, ?, ?)""",
+                (event_id, session_id, disposition.value, now),
+            )
+            await db.commit()
+            return disposition
 
     async def add_follow_up(
         self,
@@ -801,11 +982,20 @@ class JobStore:
         entity_ids: tuple[str, ...] = (),
         artifact_ids: tuple[str, ...] = (),
     ) -> None:
+        sequence_row = await (
+            await db.execute(
+                """SELECT COALESCE(MAX(delivery_sequence), 0) + 1
+                FROM background_job_events"""
+            )
+        ).fetchone()
+        assert sequence_row is not None
+        delivery_sequence = int(sequence_row[0])
         await db.execute(
             """INSERT INTO background_job_events(
                 event_id, job_id, revision, kind, status, notification_policy,
-                priority, detail_code, entity_ids_json, artifact_ids_json, occurred_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                priority, detail_code, entity_ids_json, artifact_ids_json, occurred_at,
+                delivery_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 f"job-event:{job_id}:{revision}",
                 job_id,
@@ -818,5 +1008,6 @@ class JobStore:
                 json.dumps(entity_ids, separators=(",", ":")),
                 json.dumps(artifact_ids, separators=(",", ":")),
                 occurred_at,
+                delivery_sequence,
             ),
         )

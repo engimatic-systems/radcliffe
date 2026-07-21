@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from google.protobuf.timestamp_pb2 import Timestamp
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
+from radcliffe_domain.jobs import (
+    JobEventKind,
+    JobEventRecord,
+    JobNotificationPolicy,
+    JobStatus,
+)
 from radcliffe_domain.session import ConversationState, Operation
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
@@ -25,6 +31,36 @@ _SOURCE_TO_PROTO = {
     SourceKind.MODEL: protocol_pb2.SOURCE_KIND_MODEL,
     SourceKind.CALL: protocol_pb2.SOURCE_KIND_CALL,
     SourceKind.TEXT_SOURCE: protocol_pb2.SOURCE_KIND_TEXT_SOURCE,
+}
+
+_JOB_STATUS_TO_PROTO = {
+    JobStatus.QUEUED: protocol_pb2.JOB_STATUS_QUEUED,
+    JobStatus.RUNNING: protocol_pb2.JOB_STATUS_RUNNING,
+    JobStatus.WAITING: protocol_pb2.JOB_STATUS_WAITING,
+    JobStatus.SUCCEEDED: protocol_pb2.JOB_STATUS_SUCCEEDED,
+    JobStatus.FAILED: protocol_pb2.JOB_STATUS_FAILED,
+    JobStatus.CANCELLED: protocol_pb2.JOB_STATUS_CANCELLED,
+}
+
+_JOB_POLICY_TO_PROTO = {
+    JobNotificationPolicy.IMMEDIATE: protocol_pb2.JOB_NOTIFICATION_POLICY_IMMEDIATE,
+    JobNotificationPolicy.NEXT_SAFE_PAUSE: (protocol_pb2.JOB_NOTIFICATION_POLICY_NEXT_SAFE_PAUSE),
+    JobNotificationPolicy.SILENT: protocol_pb2.JOB_NOTIFICATION_POLICY_SILENT,
+    JobNotificationPolicy.USER_WAITING: protocol_pb2.JOB_NOTIFICATION_POLICY_USER_WAITING,
+}
+
+_JOB_EVENT_KIND_TO_PROTO = {
+    JobEventKind.ACCEPTED: protocol_pb2.JOB_EVENT_KIND_ACCEPTED,
+    JobEventKind.STARTED: protocol_pb2.JOB_EVENT_KIND_STARTED,
+    JobEventKind.LEASE_RECOVERED: protocol_pb2.JOB_EVENT_KIND_LEASE_RECOVERED,
+    JobEventKind.PROGRESS: protocol_pb2.JOB_EVENT_KIND_PROGRESS,
+    JobEventKind.WAITING: protocol_pb2.JOB_EVENT_KIND_WAITING,
+    JobEventKind.FOLLOW_UP_ADDED: protocol_pb2.JOB_EVENT_KIND_FOLLOW_UP_ADDED,
+    JobEventKind.PRIORITY_CHANGED: protocol_pb2.JOB_EVENT_KIND_PRIORITY_CHANGED,
+    JobEventKind.CANCELLATION_REQUESTED: (protocol_pb2.JOB_EVENT_KIND_CANCELLATION_REQUESTED),
+    JobEventKind.CANCELLED: protocol_pb2.JOB_EVENT_KIND_CANCELLED,
+    JobEventKind.SUCCEEDED: protocol_pb2.JOB_EVENT_KIND_SUCCEEDED,
+    JobEventKind.FAILED: protocol_pb2.JOB_EVENT_KIND_FAILED,
 }
 
 
@@ -117,6 +153,36 @@ class LiveKitEventSink:
             agent_control_request=request,
         )
         await self._send(event)
+
+    async def job_event(
+        self,
+        record: JobEventRecord,
+        participant_id: str | None = None,
+    ) -> None:
+        occurred_at = Timestamp()
+        occurred_at.FromDatetime(record.occurred_at)
+        event = protocol_pb2.ServerEvent(
+            protocol_version=2,
+            job_event=protocol_pb2.JobEvent(
+                schema_version=1,
+                event_id=record.event_id,
+                job=protocol_pb2.JobRef(
+                    job_id=record.job_id,
+                    session_id=self.session_id,
+                    revision=record.revision,
+                    status=_JOB_STATUS_TO_PROTO[record.status],
+                ),
+                kind=_JOB_EVENT_KIND_TO_PROTO[record.kind],
+                notification_policy=_JOB_POLICY_TO_PROTO[record.notification_policy],
+                priority=record.priority,
+                detail_code=record.detail_code,
+                entity_ids=record.entity_ids,
+                artifact_ids=record.artifact_ids,
+                occurred_at=occurred_at,
+                delivery_sequence=record.delivery_sequence,
+            ),
+        )
+        await self._send(event, participant_id)
 
     async def _send(
         self,

@@ -5,9 +5,10 @@ import base64
 import binascii
 import hashlib
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from time import monotonic
 from typing import Protocol, cast
 from uuid import uuid4
@@ -48,6 +49,22 @@ from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
 _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
+
+
+class JobAnnouncement(StrEnum):
+    COMPLETE = "Your background job is complete."
+    FAILED = "A background job failed."
+    WAITING_FOR_USER = "A background job needs your input."
+    WAITING_FOR_RESOURCE = "A background job is waiting for a resource."
+    CANCELLED = "A background job was cancelled."
+
+
+class NotificationAnnouncementOutcome(StrEnum):
+    DEFERRED = "deferred"
+    ALREADY_DELIVERED = "already_delivered"
+    SPOKEN = "spoken"
+    INTERRUPTED = "interrupted"
+    FAILED = "failed"
 
 
 def _is_emoji_base(character: str) -> bool:
@@ -408,6 +425,135 @@ class VoicePipeline:
                 async with self._coordinator:
                     if self._active_turn is turn:
                         self._active_turn = None
+
+    def notification_foreground_available(self) -> bool:
+        if (
+            self.engine.state is not ConversationState.LISTENING
+            or self._active_turn is not None
+            or self._paused_source is not None
+        ):
+            return False
+        return not any(
+            pending.operation.generation == self.engine.generation
+            and pending.terminal_status is None
+            for pending in self._pending_playback.values()
+        )
+
+    def foreground_turn_active(self) -> bool:
+        return self._active_turn is not None or self.engine.state in {
+            ConversationState.THINKING,
+            ConversationState.SPEAKING,
+            ConversationState.READING,
+        }
+
+    async def announce_job(
+        self,
+        event_id: str,
+        announcement: JobAnnouncement,
+        *,
+        foreground_quiet: Callable[[], bool],
+        claim: Callable[[], Awaitable[bool]],
+        release: Callable[[], Awaitable[bool]],
+    ) -> NotificationAnnouncementOutcome:
+        if not isinstance(announcement, JobAnnouncement):
+            raise ValueError("job announcement text must be allowlisted")
+        async with self._turn_serial:
+            task = cast(asyncio.Task[None], asyncio.current_task())
+            turn = _ActiveTurn(
+                f"job-notification:{event_id}",
+                task,
+                asyncio.Event(),
+            )
+            async with self._coordinator:
+                if not self.notification_foreground_available() or not foreground_quiet():
+                    return NotificationAnnouncementOutcome.DEFERRED
+                self._active_turn = turn
+            claimed = False
+            try:
+                claimed = await claim()
+                if not claimed:
+                    return NotificationAnnouncementOutcome.ALREADY_DELIVERED
+                async with self._coordinator:
+                    safe = (
+                        self._active_turn is turn
+                        and self.engine.state is ConversationState.LISTENING
+                        and self._paused_source is None
+                        and foreground_quiet()
+                    )
+                    if safe:
+                        previous = self.engine.state
+                        operation = self.engine.begin(ConversationState.SPEAKING)
+                        turn.operation = operation
+                    else:
+                        self._active_turn = None
+                if not safe:
+                    await release()
+                    return NotificationAnnouncementOutcome.DEFERRED
+                await self._notify_state(
+                    previous,
+                    "background job notification ready",
+                    operation,
+                )
+                segment_id = "job-notification:" + hashlib.sha256(event_id.encode()).hexdigest()
+                await self._speak(
+                    announcement.value,
+                    segment_id,
+                    0,
+                    operation,
+                    turn,
+                    source=SourceKind.SYSTEM,
+                    wait_for_playback=True,
+                )
+                async with self._coordinator:
+                    self._assert_owner(turn, operation)
+                    previous = self.engine.state
+                    self.engine.transition(ConversationState.LISTENING)
+                    self._active_turn = None
+                    await self._notify_state(
+                        previous,
+                        "background job notification complete",
+                        operation,
+                    )
+                return NotificationAnnouncementOutcome.SPOKEN
+            except asyncio.CancelledError:
+                await self._finish_job_announcement(turn, "interrupted")
+                return (
+                    NotificationAnnouncementOutcome.INTERRUPTED
+                    if claimed
+                    else NotificationAnnouncementOutcome.DEFERRED
+                )
+            except Exception as error:
+                logger.error(
+                    "background job announcement failed type={}",
+                    type(error).__name__,
+                )
+                await self._finish_job_announcement(turn, "failed")
+                return (
+                    NotificationAnnouncementOutcome.FAILED
+                    if claimed
+                    else NotificationAnnouncementOutcome.DEFERRED
+                )
+            finally:
+                async with self._coordinator:
+                    if self._active_turn is turn:
+                        self._active_turn = None
+
+    async def _finish_job_announcement(self, turn: _ActiveTurn, reason: str) -> None:
+        try:
+            await self.publisher.flush()
+        except Exception as error:
+            logger.error(
+                "failed to flush a background job announcement type={}",
+                type(error).__name__,
+            )
+        async with self._coordinator:
+            if self._active_turn is not turn:
+                return
+            previous = self.engine.state
+            if previous is ConversationState.SPEAKING:
+                self.engine.interrupt()
+                await self._notify_state(previous, f"background job notification {reason}")
+            self._active_turn = None
 
     async def _run_turn(self, turn: _ActiveTurn) -> None:
         self._assert_owner(turn)
