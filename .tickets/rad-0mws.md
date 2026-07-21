@@ -2,7 +2,7 @@
 id: rad-0mws
 status: in_progress
 deps: []
-links: [rad-fvx9, rad-9e2z]
+links: [rad-fvx9, rad-9e2z, rad-rc9v]
 created: 2026-07-17T23:53:05Z
 type: bug
 priority: 0
