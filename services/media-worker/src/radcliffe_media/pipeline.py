@@ -42,6 +42,7 @@ from radcliffe_domain.session import (
     PlaybackAcknowledgement,
     PlaybackStatus,
     SessionEngine,
+    StaleOperationError,
 )
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink, session_pseudonym
@@ -447,18 +448,26 @@ class VoicePipeline:
             or self._paused_source is not None
         ):
             return False
-        return not any(
+        return not self._current_generation_playback_pending()
+
+    def foreground_turn_active(self) -> bool:
+        return (
+            self._active_turn is not None
+            or self.engine.state
+            in {
+                ConversationState.THINKING,
+                ConversationState.SPEAKING,
+                ConversationState.READING,
+            }
+            or self._current_generation_playback_pending()
+        )
+
+    def _current_generation_playback_pending(self) -> bool:
+        return any(
             pending.operation.generation == self.engine.generation
             and pending.terminal_status is None
             for pending in self._pending_playback.values()
         )
-
-    def foreground_turn_active(self) -> bool:
-        return self._active_turn is not None or self.engine.state in {
-            ConversationState.THINKING,
-            ConversationState.SPEAKING,
-            ConversationState.READING,
-        }
 
     async def announce_job(
         self,
@@ -984,6 +993,22 @@ class VoicePipeline:
                 raise ValueError("playback acknowledgement refers to another segment")
             if acknowledgement.operation != pending.operation:
                 raise ValueError("playback acknowledgement belongs to another operation")
+            terminal_status = acknowledgement.status in {
+                PlaybackStatus.COMPLETED,
+                PlaybackStatus.FLUSHED,
+                PlaybackStatus.FAILED,
+            }
+            if (
+                acknowledgement.operation.session_id != self.engine.session_id
+                or acknowledgement.operation.generation > self.engine.generation
+                or (
+                    acknowledgement.operation.generation < self.engine.generation
+                    and not terminal_status
+                )
+            ):
+                raise StaleOperationError(
+                    "nonterminal playback acknowledgement belongs to a stale generation"
+                )
             expected_boundary = pending.boundary_index + (
                 1 if acknowledgement.status is PlaybackStatus.COMPLETED else 0
             )
@@ -1014,7 +1039,33 @@ class VoicePipeline:
             else:
                 raise ValueError("unsupported playback acknowledgement status")
             pending.latest_position_ms = acknowledgement.position_ms
-            persisted = await self.engine.acknowledge(acknowledgement)
+            if acknowledgement.operation.generation == self.engine.generation:
+                persisted = await self.engine.acknowledge(acknowledgement)
+            elif (
+                acknowledgement.operation.session_id == self.engine.session_id
+                and acknowledgement.operation.generation < self.engine.generation
+                and acknowledgement.status
+                in {
+                    PlaybackStatus.COMPLETED,
+                    PlaybackStatus.FLUSHED,
+                    PlaybackStatus.FAILED,
+                }
+            ):
+                persisted = await self.store.record_playback(
+                    acknowledgement_id=acknowledgement.acknowledgement_id,
+                    session_id=acknowledgement.operation.session_id,
+                    generation=acknowledgement.operation.generation,
+                    operation_id=acknowledgement.operation.operation_id,
+                    segment_id=acknowledgement.segment_id,
+                    status=acknowledgement.status.value,
+                    position_ms=acknowledgement.position_ms,
+                    boundary_index=acknowledgement.boundary_index,
+                    occurred_at=acknowledgement.occurred_at,
+                    detail=acknowledgement.detail,
+                    playback_id=acknowledgement.playback_id,
+                )
+            else:
+                raise StaleOperationError("playback acknowledgement belongs to another generation")
             self.telemetry.emit(
                 component="android",
                 event="playback",
@@ -1063,6 +1114,8 @@ class VoicePipeline:
             await self.publisher.flush()
 
     async def _finish_completed(self, turn: _ActiveTurn) -> None:
+        if turn.operation is not None:
+            await self._await_operation_playback(turn.operation)
         async with self._coordinator:
             self._assert_owner(turn, turn.operation)
             previous = self.engine.state
@@ -1072,6 +1125,35 @@ class VoicePipeline:
             self._paused_source = None
             await self._notify_state(previous, "turn complete", turn.operation)
             self._emit_turn_outcome(turn, "completed")
+
+    async def _await_operation_playback(self, operation: Operation) -> None:
+        if not self.client_playback_acknowledgements:
+            return
+        async with self._playback_lock:
+            pending = tuple(
+                item
+                for item in self._pending_playback.values()
+                if item.operation == operation and item.terminal_status is None
+            )
+            remaining_ms = sum(
+                max(0, item.duration_ms - item.latest_position_ms) for item in pending
+            )
+        if not pending:
+            return
+        timeout_seconds = remaining_ms / 1000 + self.playback_ack_timeout_seconds
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(item.terminal.wait() for item in pending)),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as error:
+            raise RuntimeError("client did not acknowledge completed turn playback") from error
+        async with self._playback_lock:
+            terminal_statuses = tuple(item.terminal_status for item in pending)
+        if PlaybackStatus.FAILED in terminal_statuses:
+            raise RuntimeError("client playback failed before turn completion")
+        if any(status is not PlaybackStatus.COMPLETED for status in terminal_statuses):
+            raise asyncio.CancelledError
 
     async def _finish_cancelled(self, turn: _ActiveTurn) -> None:
         async with self._coordinator:
