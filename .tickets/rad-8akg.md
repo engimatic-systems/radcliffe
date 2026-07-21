@@ -1,8 +1,8 @@
 ---
 id: rad-8akg
-status: in_progress
+status: closed
 deps: []
-links: [rad-uk3f, rad-l386]
+links: [rad-uk3f, rad-l386, rad-5r64]
 created: 2026-07-21T15:19:35Z
 type: bug
 priority: 0
@@ -31,3 +31,7 @@ An observed failed job can be retried by voice without a conflict or a duplicate
 **2026-07-21T15:54:25Z**
 
 2026-07-21 Pixel session did not exercise retry acceptance. The requested intentional ZeroDivisionError command exited 1, but the overall instruction was to demonstrate that expected error; Haiku correctly treated that goal as completed and called finish_job, so job_d524c1e0d88594339fcf4409bfdfc579 ended succeeded. A physical test still needs a job instructed to call fail_job, followed by the user saying retry that job.
+
+**2026-07-21T18:15:46Z**
+
+2026-07-21 final Pixel acceptance ses_b97423f51c8b64a498bfea2144ddd9ff: job_0efa74a5915de25cb0e8e70dec72b901 failed at revision 4 with task_failed; the direct voice command Retry that job created one retry command at revision 5 on the same job ID; the executor claimed attempt 2 at revision 6 and failed as instructed at revision 8. No duplicate job and no conflict occurred. The second failed terminal announcement and hidden outcome were persisted at sequences 14 and 15. Physical retry acceptance passes.

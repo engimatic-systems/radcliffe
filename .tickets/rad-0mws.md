@@ -1,6 +1,6 @@
 ---
 id: rad-0mws
-status: closed
+status: in_progress
 deps: []
 links: [rad-fvx9, rad-9e2z]
 created: 2026-07-17T23:53:05Z
@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-ghti
-tags: [radcliffe, stt, android, audio, quality, regression]
+tags: [radcliffe, stt, android, audio, quality, regression, operator-final-check]
 ---
 # Stop losing and misdecoding the first live Pixel utterance
 
@@ -32,3 +32,11 @@ Implemented the non-consent-bound work on 2026-07-17: Android no longer reports 
 **2026-07-18T04:18:32Z**
 
 Completed physical Pixel validation on 2026-07-17 with explicit owner consent. Fixed the production managed-worker environment allowlist so owner-scoped capture and optional verification settings reach dynamically created Pixel rooms; added a regression test. Captured six accepted target-speaker cases spanning first turn, multi-sentence, short commands, a natural pause, room noise, and speaker/earbud routes. All WAV/JSON pairs are mode 0600 in a 0700 directory, hashes match, and durations are under 30 seconds. First input arrived 64.84 ms after track subscription with 600 ms pre-roll. Private benchmark report artifacts/private-stt-capture/rad-0mws/corpus/benchmarks/20260718T041748Z/report.json passed full coverage: large-v3-turbo, large-v3-turbo-domain, and large-v3 each achieved macro WER 0.0, keyword recall 1.0, and zero dropped leading words; all cases classify no_error_detected. Kept large-v3-turbo-domain because it already passes without verifier overhead. Capture was disabled immediately after the corpus. Final make check passes: 141 Python passed/1 skipped, 21 Sidecar tests, Android unit/lint, ruff, formatting, and mypy; git diff --check passes.
+
+**2026-07-21T18:15:46Z**
+
+Reopened 2026-07-21 after recurrence in ordinary non-capture mode. Session ses_0871ab859cecd63c47447826759d2c0e USER sequence 1 retained only Using your read source tool; the next turn explicitly reported that the intended preceding request was not captured. Later accepted turns of 4.3s, 5.3s, and 16.6s were complete, so investigate first-turn subscription/readiness, buffering, and endpoint state before decoder length limits.
+
+**2026-07-21T18:18:39Z**
+
+Root cause and implementation 2026-07-21: the worker was fully subscribed and input-ready before speech, but the affected first utterance reached the 30,025 ms maximum_utterance endpoint with 22,412.5 ms foreground voice and no trailing silence. The uninterrupted 2,681 ms tail then began while the first cold transcription task was active, was classified as a barge-in, and cancelled the first 30 seconds; only the tail reached USER sequence 1. Raised the default hard utterance bound to 120 seconds while retaining silence endpointing and the explicit configurable safety cap. Added a deterministic 32-second continuous-speech regression proving one transcription, one USER handoff, and zero false barge-ins. Full repository verification passes: 340 Python tests with 1 skipped, 98 sidecar tests, TypeScript checks, Android unit tests, and lint. Keep in progress for a fresh-session Pixel utterance longer than 30 seconds.

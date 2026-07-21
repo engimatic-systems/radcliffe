@@ -60,7 +60,7 @@ class EndpointSettings:
     barge_in_release_ms: float = 120
     end_silence_ms: float = 900
     maximum_unconfirmed_ms: float = 2000
-    maximum_utterance_ms: float = 30000
+    maximum_utterance_ms: float = 120000
     minimum_maximum_voice_ratio: float = 0.05
     minimum_speech_windows: int = 2
     speech_probability: float = 0.5
@@ -151,7 +151,7 @@ class EndpointSettings:
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2000")
             ),
             maximum_utterance_ms=float(
-                os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "30000")
+                os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "120000")
             ),
             minimum_maximum_voice_ratio=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.05")

@@ -201,8 +201,10 @@ The Qwen broker remains available only through an explicit deprecated
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
-`RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 30
-seconds, and a subminimum burst now resets after normal endpoint silence rather
+`RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 120
+seconds so a long continuous instruction is not split into a cancelled first
+chunk and a retained tail; the limit remains a hard memory and processing bound.
+A subminimum burst resets after normal endpoint silence rather
 than holding one endpoint open. Maximum-duration candidates must also meet
 `RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO` (default `0.05`). Before Whisper, a
 local Silero pass requires at least two speech-like windows. After decoding,

@@ -444,6 +444,30 @@ async def test_maximum_utterance_bounds_intermittent_noise_that_defeats_silence(
 
 
 @pytest.mark.asyncio
+async def test_default_limit_keeps_a_continuous_thirty_two_second_turn_whole() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=1_600)
+
+    assert endpoint.turn_task is None
+    assert speech.calls == []
+
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    task = endpoint.turn_task
+    if task is not None:
+        await task
+
+    assert len(speech.calls) == 1
+    assert len(speech.calls[0]) == 1_645 * 640
+    assert voice.transcripts == ["transcript-1"]
+    assert voice.barge_ins == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("amplitude", [0, 400])
 async def test_digital_silence_and_room_tone_never_start_a_turn(amplitude: int) -> None:
     speech = FakeSpeech()
