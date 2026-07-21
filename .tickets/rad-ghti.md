@@ -55,3 +55,7 @@ Five consecutive real local-provider turns now pass through the black-box LiveKi
 **2026-07-21T14:51:53Z**
 
 Deferred physical observation from 2026-07-21 session ses_ece6459346fbe944ae5be96736984b1c: the final user envelope began mid-thought ('needs to be supplied...'), so the preceding words were not persisted. Per the user, do not prioritize this endpointing/transcription truncation until the background-job lifecycle plumbing is fixed.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 latest Pixel session reproduced the deferred truncation on its first turn. USER sequence 1 contained only Using your read source tool; USER sequence 4 says the intended preceding request was not captured by the microphone. Later 4.3s, 5.3s, and 16.6s turns were transcribed completely, narrowing the recurrence toward first-turn readiness or capture startup rather than a general long-input size cap. Do not start remediation until the background-job retry operator gate is resolved.

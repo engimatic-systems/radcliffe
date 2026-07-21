@@ -1,6 +1,6 @@
 ---
 id: rad-uk3f
-status: in_progress
+status: closed
 deps: []
 links: [rad-nhai, rad-l386, rad-8ai7, rad-8akg, rad-ig6k]
 created: 2026-07-21T14:35:08Z
@@ -40,3 +40,7 @@ Revision 90ab7fd passed the full repository suite (332 Python tests with 1 skipp
 **2026-07-21T15:33:18Z**
 
 2026-07-21 third physical trace confirms the durable job plumbing from the prior revision worked: the SYSTEM failure announcement and hidden CALL outcome, including job ID and model_provider_unavailable, preceded the next USER envelope and Haiku correctly explained the provider outage. A remaining context gap was tool failure auditing: those SYSTEM envelopes were durable but projected out. Tool failures now carry a stable content-safe reason such as permission denied, not found, conflict, invalid request, or service unavailable and are included chronologically in the next model context.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 final Pixel acceptance ses_0871ab859cecd63c47447826759d2c0e: the successful job announcement was persisted exactly once as SYSTEM sequence 11 and its hidden job outcome as CALL sequence 12 before USER sequence 13 requested the result. Together with the prior physical failed-job trace where model_provider_unavailable was available to Haiku and correctly explained, this satisfies success/failure chronological context and physical replay acceptance.

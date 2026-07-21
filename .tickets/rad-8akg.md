@@ -27,3 +27,7 @@ An observed failed job can be retried by voice without a conflict or a duplicate
 **2026-07-21T15:33:18Z**
 
 2026-07-21 physical trace: the direct retry request was forced into follow_up against terminal job_3c274297658316ff028879eb83febc74 and received a conflict. A later fresh-launch foreground turn failed in roughly 160 ms when the Anthropic count_tokens preflight returned 503; another background attempt exhausted four provider requests after only about seven seconds. Implemented an idempotent retry command for failed jobs with at most three total attempts, explicit voice retry routing, four transient context-accounting attempts, a safe media-worker retry for pre-stream 503, and six background provider attempts with about 31 seconds of bounded backoff. Deterministic retry, migration, and transient recovery tests pass.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 Pixel session did not exercise retry acceptance. The requested intentional ZeroDivisionError command exited 1, but the overall instruction was to demonstrate that expected error; Haiku correctly treated that goal as completed and called finish_job, so job_d524c1e0d88594339fcf4409bfdfc579 ended succeeded. A physical test still needs a job instructed to call fail_job, followed by the user saying retry that job.

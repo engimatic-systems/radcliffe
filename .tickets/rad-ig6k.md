@@ -27,3 +27,7 @@ Delayed position/started acknowledgements after a barge-in do not throw, mutate 
 **2026-07-21T15:33:18Z**
 
 2026-07-21 worker logs for ses_103f1841319850c7a20dfcff234d84ef repeatedly raised nonterminal playback acknowledgement belongs to a stale generation immediately after barge-ins. This is independent of the job permission/retry fixes and remains open.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 latest Pixel session reproduced this independently: after a confirmed barge-in at 08:46:33 local time, the worker logged one uncaught nonterminal playback acknowledgement belongs to a stale generation exception. Keep open.

@@ -1,6 +1,6 @@
 ---
 id: rad-l386
-status: in_progress
+status: closed
 deps: []
 links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i]
 created: 2026-07-21T14:12:34Z
@@ -48,3 +48,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T15:33:18Z**
 
 2026-07-21 third physical trace ses_103f1841319850c7a20dfcff234d84ef: job_1a3258add04b7b942c9e51dedc1322c0 succeeded and wrote a 3,370-byte UTF-8 Markdown artifact, but declared zero sources, so read_job_source returned not found. The result reader now derives a hash-verified source capability from safe Markdown artifacts, including historical results, and new jobs automatically promote such artifacts. Exact hidden jobId scoping prevents collisions; the observed historical artifact now resolves locally as hacker_news_headlines.md.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 final Pixel acceptance ses_0871ab859cecd63c47447826759d2c0e: job_ec6362e939637b66034f6b30b80efca1 downloaded Hacker News, extracted 30 headline-only rows, automatically promoted the 1,626-byte UTF-8 hacker_news_headlines.md source, and completed at revision 7. The next voice turn resolved it through a session/job-scoped capability, persisted canonical source bytes with matching SHA-256 and provenance, and read the full result aloud. There were no denied or repeated tool calls, and the operator explicitly confirmed this was the desired result.
