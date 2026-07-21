@@ -25,6 +25,7 @@ from radcliffe_domain.session import (
     ConversationState,
     PlaybackAcknowledgement,
     PlaybackStatus,
+    StaleOperationError,
 )
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
@@ -156,12 +157,15 @@ class FakeEvents:
         self.messages = []
         self.states = []
         self.turn_completed = asyncio.Event()
+        self.model_persisted = asyncio.Event()
         self.playback_segments = []
         self.playback_announced = asyncio.Event()
         self.agent_control_requests = []
 
     async def message(self, envelope) -> None:
         self.messages.append(envelope)
+        if envelope.source is SourceKind.MODEL:
+            self.model_persisted.set()
 
     async def state_changed(self, previous, current, generation, reason, operation=None) -> None:
         self.states.append((previous, current, generation, reason, operation))
@@ -1795,8 +1799,128 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
     )
     await pipeline.start()
 
-    await pipeline.handle_transcript("Leave playback awaiting acknowledgement")
+    turn = asyncio.create_task(
+        pipeline.handle_transcript("Leave playback awaiting acknowledgement")
+    )
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    for _ in range(100):
+        if len(events.playback_segments) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 2
+    await asyncio.wait_for(events.model_persisted.wait(), timeout=1)
+    await asyncio.sleep(0)
 
-    assert pipeline.engine.state is ConversationState.LISTENING
-    assert events.playback_segments
+    assert not turn.done()
+    assert pipeline.engine.state is ConversationState.SPEAKING
+    assert pipeline.foreground_turn_active()
     assert not pipeline.notification_foreground_available()
+
+    for index, segment in enumerate(events.playback_segments):
+        operation, playback_id, segment_id, boundary_index, duration_ms, *_ = segment
+        for suffix, status, position_ms, boundary in (
+            ("started", PlaybackStatus.STARTED, 0, boundary_index),
+            ("completed", PlaybackStatus.COMPLETED, duration_ms, boundary_index + 1),
+        ):
+            assert await pipeline.playback_acknowledgement(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=f"device-{index}-{suffix}",
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=status,
+                    position_ms=position_ms,
+                    boundary_index=boundary,
+                    occurred_at=datetime.now(UTC),
+                    playback_id=playback_id,
+                )
+            )
+
+    await asyncio.wait_for(turn, timeout=1)
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert not pipeline.foreground_turn_active()
+    assert pipeline.notification_foreground_available()
+
+
+@pytest.mark.asyncio
+async def test_post_model_queued_playback_can_be_interrupted_before_device_completion(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(
+        pipeline.handle_transcript("Queue a response that the phone has not finished")
+    )
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    for _ in range(100):
+        if len(events.playback_segments) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 2
+    await asyncio.wait_for(events.model_persisted.wait(), timeout=1)
+    await asyncio.sleep(0)
+    old_generation = events.playback_segments[0][0].generation
+
+    assert not turn.done()
+    assert pipeline.engine.state is ConversationState.SPEAKING
+    assert pipeline.foreground_turn_active()
+
+    await pipeline.barge_in()
+    await asyncio.wait_for(turn, timeout=1)
+
+    assert publisher.flushed
+    assert pipeline.engine.state is ConversationState.LISTENING
+    assert pipeline.engine.generation == old_generation + 1
+    assert any(reason == "interrupted" for _, _, _, reason, _ in events.states)
+
+    operation, playback_id, segment_id, boundary_index, *_ = events.playback_segments[0]
+    with pytest.raises(StaleOperationError, match="nonterminal"):
+        await pipeline.playback_acknowledgement(
+            PlaybackAcknowledgement(
+                acknowledgement_id="device-stale-started",
+                operation=operation,
+                segment_id=segment_id,
+                status=PlaybackStatus.STARTED,
+                position_ms=0,
+                boundary_index=boundary_index,
+                occurred_at=datetime.now(UTC),
+                playback_id=playback_id,
+            )
+        )
+
+    for index, segment in enumerate(events.playback_segments):
+        operation, playback_id, segment_id, boundary_index, *_ = segment
+        assert await pipeline.playback_acknowledgement(
+            PlaybackAcknowledgement(
+                acknowledgement_id=f"device-{index}-flushed",
+                operation=operation,
+                segment_id=segment_id,
+                status=PlaybackStatus.FLUSHED,
+                position_ms=0,
+                boundary_index=boundary_index,
+                occurred_at=datetime.now(UTC),
+                detail="verified speech interrupted queued playback",
+                playback_id=playback_id,
+            )
+        )
+
+    with sqlite3.connect(store.path) as database:
+        statuses = [
+            row[0]
+            for row in database.execute(
+                "SELECT status FROM playback_acknowledgements ORDER BY rowid"
+            )
+        ]
+    assert statuses == ["flushed", "flushed"]

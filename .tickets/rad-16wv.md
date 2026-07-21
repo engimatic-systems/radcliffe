@@ -1,6 +1,6 @@
 ---
 id: rad-16wv
-status: open
+status: in_progress
 deps: []
 links: [rad-n62u, rad-20nk, rad-t0va]
 created: 2026-07-20T19:47:21Z
@@ -28,3 +28,7 @@ Model foreground speech as one ownership lifecycle spanning generation, synthesi
 **2026-07-20T19:48:12Z**
 
 Observed 2026-07-20 in ses_eb23d75121af2c72f8c55641adab1136: media turn completed at 17:13:10.442407Z; final old-response device segment started 17:13:12.802Z for 20.034s; interruption utterance persisted 17:13:25.220Z; replacement answer persisted 17:13:27.778Z but did not start playback until 17:13:32.836Z, 3ms after stale playback completed. No FLUSHED playback acknowledgement or interrupted turn disposition was recorded. In ses_5fb0ac5ab311fbda54bb9652cb9b68b0, three genuine overlap candidates were retained as unconfirmed_barge_in after Silero returned speech_windows=0 (max probabilities .1565/.2015/.3709) despite RMS up to 12517.
+
+**2026-07-21T02:30:19Z**
+
+Implemented the queued-playback ownership fix on 2026-07-20. The worker now remains foreground-active/SPEAKING after model persistence until all current-generation device segments are completed or flushed; verified interruption advances generation while accepting only terminal acknowledgements from the old generation. Unit regression reproduces post-model queued playback and rejects stale nonterminal acknowledgements. Local Qwen/LiveKit conformance report artifacts/voice-conformance/20260721T022752Z/report.json passed: 15 playback attempts remained queued after Qwen active_turns reached 0; speech interruption acknowledged in 0.388s; old audio stopped in 0.417s; replacement generation 5 followed interrupted generation 4; replacement was audible in 2.267s; all automatic FLUSHED acknowledgements persisted. Full Python: 318 passed, 1 skipped. Physical-phone confirmation remains pending; the separate zero-speech-window classifier branch is not claimed fixed by this change.

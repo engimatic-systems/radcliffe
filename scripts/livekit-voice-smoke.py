@@ -63,6 +63,7 @@ class SmokeState:
     input: list[TimedAudio] = field(default_factory=list)
     output: list[TimedAudio] = field(default_factory=list)
     capture_tasks: list[asyncio.Task[None]] = field(default_factory=list)
+    protocol_tasks: list[asyncio.Task[None]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -551,6 +552,7 @@ async def run(commit: str) -> int:
     playback = ClientPlaybackTracker()
     checks: list[Check] = []
     cancelled_user_message_id: str | None = None
+    automatically_flushed_playback_ids: set[str] = set()
     run_error: Exception | None = None
 
     async def capture(track: rtc.Track) -> None:
@@ -576,6 +578,24 @@ async def run(commit: str) -> int:
             return
         if event.protocol_version == 2:
             state.events.append(TimedEvent(time.monotonic(), event))
+            if event.HasField("state_changed") and event.state_changed.reason == "interrupted":
+                acknowledgements = playback.flush(
+                    "verified speech interrupted synthetic decoded playback"
+                )
+                automatically_flushed_playback_ids.update(
+                    acknowledgement.playback_id for acknowledgement in acknowledgements
+                )
+
+                async def publish_flushes() -> None:
+                    for acknowledgement in acknowledgements:
+                        await send_playback_acknowledgement(
+                            room,
+                            acknowledgement,
+                            worker_identity,
+                        )
+
+                if acknowledgements:
+                    state.protocol_tasks.append(asyncio.create_task(publish_flushes()))
             if event.HasField("playback_segment"):
                 playback.announce(event.playback_segment)
 
@@ -1346,6 +1366,78 @@ async def run(commit: str) -> int:
             )
         )
 
+        await wait_until(
+            lambda: (
+                _event_after(
+                    state,
+                    barge_index,
+                    lambda event: (
+                        event.HasField("message")
+                        and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+                    ),
+                )
+                is not None
+            ),
+            45,
+        )
+        completed_count_model = _event_after(
+            state,
+            barge_index,
+            lambda event: (
+                event.HasField("message") and event.message.source == protocol_pb2.SOURCE_KIND_MODEL
+            ),
+        )
+        assert completed_count_model is not None
+        count_audio_after_model = await wait_for_audio_after(
+            state,
+            completed_count_model.received_at,
+            10,
+        )
+        async with httpx.AsyncClient(timeout=5) as sidecar_after_model:
+            async with asyncio.timeout(10):
+                while True:  # noqa: ASYNC110 - polling the external sidecar process
+                    completed_response = await sidecar_after_model.get(f"{sidecar_url}/healthz")
+                    completed_response.raise_for_status()
+                    active_after_model = int(completed_response.json().get("active_turns", 0))
+                    if active_after_model == 0:
+                        break
+                    await asyncio.sleep(0.05)
+        await asyncio.sleep(0.25)
+        latest_conversation_state = next(
+            (
+                item.event.state_changed.current
+                for item in reversed(state.events)
+                if item.event.HasField("state_changed")
+            ),
+            protocol_pb2.CONVERSATION_STATE_UNSPECIFIED,
+        )
+        checks.append(
+            Check(
+                "post_model_playback_remains_foreground_owned",
+                active_after_model == 0
+                and bool(playback.pending)
+                and latest_conversation_state == protocol_pb2.CONVERSATION_STATE_SPEAKING,
+                (
+                    "model stream completed while decoded playback remained queued and the "
+                    "worker stayed speaking"
+                    if active_after_model == 0
+                    and playback.pending
+                    and latest_conversation_state == protocol_pb2.CONVERSATION_STATE_SPEAKING
+                    else (
+                        f"sidecar active={active_after_model}, pending playback="
+                        f"{len(playback.pending)}, conversation state={latest_conversation_state}"
+                    )
+                ),
+                {
+                    "queued_attempts": len(playback.pending),
+                    "audio_after_model_seconds": round(
+                        count_audio_after_model - completed_count_model.received_at,
+                        3,
+                    ),
+                },
+            )
+        )
+
         replacement_index = len(state.events)
         replacement_started = time.monotonic()
         _, replacement_speech_end = await publish_audio(source, utterances["replacement"])
@@ -1492,9 +1584,12 @@ async def run(commit: str) -> int:
         cancelled_after = int(sidecar_after.get("cancelled_turns", 0))
         checks.append(
             Check(
-                "speech_replacement_closes_abandoned_http_stream",
-                cancelled_after > cancelled_before,
-                f"sidecar cancellation counter advanced {cancelled_before} -> {cancelled_after}",
+                "post_model_interruption_does_not_require_http_cancellation",
+                cancelled_after == cancelled_before,
+                (
+                    "the model stream had already closed, so interruption did not change the "
+                    f"sidecar cancellation counter ({cancelled_before} -> {cancelled_after})"
+                ),
             )
         )
 
@@ -1615,6 +1710,14 @@ async def run(commit: str) -> int:
         )
     finally:
         cleanup_errors: list[str] = []
+        if state.protocol_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*state.protocol_tasks),
+                    timeout=5,
+                )
+            except Exception as error:
+                cleanup_errors.append(f"playback acknowledgements: {type(error).__name__}: {error}")
         try:
             await room.disconnect()
         except Exception as error:
@@ -1692,6 +1795,32 @@ async def run(commit: str) -> int:
         )
     )
     source_envelopes = [item for item in envelopes if item.source.value == "text_source"]
+    with sqlite3.connect(output_dir / "events.sqlite3") as database:
+        persisted_automatic_flushes = {
+            playback_id
+            for (playback_id,) in database.execute(
+                """SELECT playback_id
+                FROM playback_acknowledgements
+                WHERE session_id = ? AND status = 'flushed'""",
+                (session_id,),
+            ).fetchall()
+        }
+    checks.append(
+        Check(
+            "post_model_interruption_persists_device_flush",
+            bool(automatically_flushed_playback_ids)
+            and automatically_flushed_playback_ids <= persisted_automatic_flushes,
+            (
+                "every automatically flushed old-generation playback attempt was persisted"
+                if automatically_flushed_playback_ids
+                and automatically_flushed_playback_ids <= persisted_automatic_flushes
+                else (
+                    f"automatic={sorted(automatically_flushed_playback_ids)!r}, "
+                    f"persisted={sorted(persisted_automatic_flushes)!r}"
+                )
+            ),
+        )
+    )
     if source_envelopes:
         source_message_id = source_envelopes[0].message_id
         with sqlite3.connect(output_dir / "events.sqlite3") as database:
