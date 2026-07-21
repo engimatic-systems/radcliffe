@@ -93,9 +93,10 @@ class LiveKitEventSink:
     ) -> None:
         occurred_at = Timestamp()
         occurred_at.GetCurrentTime()
+        operation_generation = operation.generation if operation is not None else generation
         reference = protocol_pb2.OperationRef(
             session_id=self.session_id,
-            generation=generation,
+            generation=operation_generation,
             operation_id=operation.operation_id if operation else "",
             cancellation_id=operation.cancellation_id if operation else "",
             trace_id=operation.trace_id if operation else "",
