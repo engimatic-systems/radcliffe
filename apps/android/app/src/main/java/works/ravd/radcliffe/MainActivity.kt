@@ -73,6 +73,7 @@ private data class PendingConversationExport(
     val profile: ConnectionProfile,
     val session: SessionSummary,
     val includeSystemMessages: Boolean,
+    val format: ConversationExportFormat,
 )
 
 private suspend inline fun <T> suspendRunCatching(
@@ -240,9 +241,7 @@ class MainActivity : ComponentActivity() {
             permissionAction = null
         }
 
-        val exportDocument = rememberLauncherForActivityResult(
-            ActivityResultContracts.CreateDocument("text/markdown"),
-        ) { uri ->
+        fun finishExport(uri: android.net.Uri?) {
             val request = pendingExport
             pendingExport = null
             if (uri == null) {
@@ -261,7 +260,8 @@ class MainActivity : ComponentActivity() {
                                 request.profile.deviceCredential,
                                 request.session.sessionId,
                             )
-                            val markdown = renderConversationMarkdown(
+                            val rendered = renderConversationExport(
+                                request.format,
                                 ConversationExport(
                                     request.session,
                                     timeline,
@@ -270,7 +270,7 @@ class MainActivity : ComponentActivity() {
                             )
                             val output = contentResolver.openOutputStream(uri, "wt")
                                 ?: error("Android could not open the selected document")
-                            output.bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+                            output.bufferedWriter(Charsets.UTF_8).use { it.write(rendered) }
                         }
                     }.onSuccess {
                         exportNotice = "Conversation exported"
@@ -282,7 +282,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        fun beginExport(sessionId: String) {
+        val markdownExportDocument = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("text/markdown"),
+            ::finishExport,
+        )
+        val htmlExportDocument = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("text/html"),
+            ::finishExport,
+        )
+
+        fun beginExport(sessionId: String, format: ConversationExportFormat) {
             if (exportInFlight) return
             val profile = storedProfile
             if (profile == null || !profile.isConfigured) {
@@ -306,8 +315,16 @@ class MainActivity : ComponentActivity() {
                         enrolled,
                         session,
                         showSystemMessages,
+                        format,
                     )
-                    exportDocument.launch(exportFileName(session))
+                    when (format) {
+                        ConversationExportFormat.MARKDOWN -> markdownExportDocument.launch(
+                            exportFileName(session, format),
+                        )
+                        ConversationExportFormat.HTML -> htmlExportDocument.launch(
+                            exportFileName(session, format),
+                        )
+                    }
                 }.onFailure { error ->
                     exportInFlight = false
                     exportNotice = "Export failed: ${error.message ?: "unknown error"}"
@@ -774,7 +791,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
-                    onExport = { beginExport(activeSessionId) },
+                    onExport = { format -> beginExport(activeSessionId, format) },
                     onArchive = {
                         updateSessionStatus(activeSessionId, "archived", current = true)
                     },
@@ -882,7 +899,7 @@ class MainActivity : ComponentActivity() {
         jobNotice: String?,
         onDiagnostics: () -> Unit,
         onShowSystemMessages: (Boolean) -> Unit,
-        onExport: () -> Unit,
+        onExport: (ConversationExportFormat) -> Unit,
         onArchive: () -> Unit,
         onConfigurationSet: (String, String) -> Unit,
         onConfigurationUndo: (ConfigurationMutationResult) -> Unit,
@@ -892,6 +909,7 @@ class MainActivity : ComponentActivity() {
         onCommand: (String) -> Unit,
     ) {
         var confirmArchive by remember(sessionId) { mutableStateOf(false) }
+        var selectExportFormat by remember(sessionId) { mutableStateOf(false) }
         val visibleMessages = visibleConversationMessages(messages, showSystemMessages)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -937,7 +955,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onExport, enabled = !exportInFlight) {
+            OutlinedButton(onClick = { selectExportFormat = true }, enabled = !exportInFlight) {
                 Text(if (exportInFlight) "Exporting…" else "Export")
             }
             TextButton(onClick = { confirmArchive = true }, enabled = !mutationInFlight) {
@@ -998,6 +1016,32 @@ class MainActivity : ComponentActivity() {
                 },
                 dismissButton = {
                     TextButton(onClick = { confirmArchive = false }) { Text("Cancel") }
+                },
+            )
+        }
+        if (selectExportFormat) {
+            AlertDialog(
+                onDismissRequest = { selectExportFormat = false },
+                title = { Text("Export format") },
+                text = { Text("Markdown is the portable default. HTML is self-contained for browsers.") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            selectExportFormat = false
+                            onExport(ConversationExportFormat.MARKDOWN)
+                        },
+                    ) { Text("Markdown (default)") }
+                },
+                dismissButton = {
+                    Row {
+                        OutlinedButton(
+                            onClick = {
+                                selectExportFormat = false
+                                onExport(ConversationExportFormat.HTML)
+                            },
+                        ) { Text("HTML") }
+                        TextButton(onClick = { selectExportFormat = false }) { Text("Cancel") }
+                    }
                 },
             )
         }
