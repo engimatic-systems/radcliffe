@@ -223,6 +223,30 @@ class ExactCountOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class SpokenAlternativeOrchestrator:
+    display = (
+        "The job job_0123456789abcdef wrote /srv/radcliffe/output/report.json. "
+        "Details are at https://docs.example.test/jobs/0123456789."
+    )
+    spoken = (
+        "The job identifier and file path are shown in the conversation. "
+        "A link is also shown in the conversation."
+    )
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "model_delta",
+            {
+                "text": self.display,
+                "spokenText": self.spoken,
+                "spokenCategories": ["identifier", "path", "url", "not_registered"],
+            },
+        )
+        yield SidecarEvent("model_complete", {"text": self.display})
+        yield SidecarEvent("complete", {})
+
+
 class BudgetExhaustedOrchestrator:
     async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
         del request, cancelled
@@ -784,6 +808,40 @@ async def test_exact_count_is_durable_and_every_item_reaches_tts(tmp_path) -> No
         if value.rstrip(".,").isdigit()
     ]
     assert observed == list(range(1, 61))
+
+
+@pytest.mark.asyncio
+async def test_spoken_alternative_preserves_visual_detail_without_speaking_it(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    events = FakeEvents()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SpokenAlternativeOrchestrator(),
+        tts,
+        publisher,
+        events,
+        telemetry=TelemetrySink(telemetry_path, strict=True),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Summarize the result")
+
+    durable = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert durable.content.inline_text == SpokenAlternativeOrchestrator.display
+    assert next(item for item in events.messages if item.source is SourceKind.MODEL) == durable
+    assert "".join(tts.inputs) == SpokenAlternativeOrchestrator.spoken
+    assert b"".join(publisher.audio).decode() == SpokenAlternativeOrchestrator.spoken
+    assert durable.metadata["radcliffe.spoken_output.categories"] == "identifier,path,url"
+    telemetry = telemetry_path.read_text()
+    assert telemetry.count('"event":"spoken_output"') == 3
+    assert "job_0123456789abcdef" not in telemetry
+    assert "/srv/radcliffe/output/report.json" not in telemetry
+    assert "https://" not in telemetry
 
 
 @pytest.mark.asyncio

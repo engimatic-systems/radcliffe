@@ -86,6 +86,12 @@ error before another paid request.
 same `run(TurnRequest, emit, signal)` contract without changing envelopes,
 projection policy, tools, Android, or playback state.
 
+Conversational `model_delta` events preserve provider text in `text` and may
+add `spokenText` plus content-free `spokenCategories` when machine-oriented
+detail needs a listening-friendly alternative. The media worker persists
+`text` for the timeline and sends `spokenText` to TTS. Exact-output turns omit
+the alternative, and canonical source envelopes bypass model deltas entirely.
+
 `GET /healthz` exposes the provider, pinned model, local/cloud boundary,
 accounting basis, content-free `active_turns` and cumulative `cancelled_turns`
 counters, plus aggregate budget state for cloud runs. The external conformance

@@ -63,6 +63,22 @@ _REGISTERED_TOOL_NAMES = frozenset(
         "manage_job",
     }
 )
+_SPOKEN_OUTPUT_CATEGORIES = frozenset(
+    {
+        "hash",
+        "identifier",
+        "url",
+        "path",
+        "timestamp",
+        "stack_trace",
+        "serialized_data",
+        "long_number",
+        "code",
+        "citation",
+        "repeated_punctuation",
+        "acronym_metadata",
+    }
+)
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
 
 
@@ -656,8 +672,12 @@ class VoicePipeline:
                 break
             self._assert_owner(turn, operation)
             if event.type == "model_delta" and not source_rendered:
-                delta = _canonical_model_text(str(event.payload.get("text", "")))
-                if not delta:
+                display_delta = _canonical_model_text(str(event.payload.get("text", "")))
+                raw_spoken = event.payload.get("spokenText")
+                spoken_delta = _canonical_model_text(
+                    raw_spoken if isinstance(raw_spoken, str) else display_delta
+                )
+                if not display_delta and not spoken_delta:
                     continue
                 if turn.first_model_delta_at is None:
                     turn.first_model_delta_at = monotonic()
@@ -666,9 +686,39 @@ class VoicePipeline:
                         "first_model_delta",
                         turn.first_model_delta_at - turn.started_at,
                     )
-                turn.model_text += delta
+                turn.model_text += display_delta
+                raw_categories = event.payload.get("spokenCategories")
+                categories = (
+                    sorted(
+                        {
+                            category
+                            for category in raw_categories
+                            if isinstance(category, str) and category in _SPOKEN_OUTPUT_CATEGORIES
+                        }
+                    )
+                    if isinstance(raw_categories, list)
+                    else []
+                )
+                for category in categories:
+                    self.telemetry.emit(
+                        component="media_worker",
+                        event="spoken_output",
+                        outcome="succeeded",
+                        session_id=self.engine.session_id,
+                        generation=operation.generation,
+                        phase=category,
+                        operation=operation,
+                    )
+                if categories:
+                    existing = set(
+                        turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(",")
+                    )
+                    existing.discard("")
+                    turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
+                        sorted(existing | set(categories))
+                    )
                 if not source_rendered:
-                    buffer += delta
+                    buffer += spoken_delta
                     buffer = await self._speak_complete_sentences(buffer, operation, turn)
             elif event.type == "tool_end" and bool(event.payload.get("isError")):
                 raw_tool_name = event.payload.get("toolName")

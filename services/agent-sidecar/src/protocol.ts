@@ -50,7 +50,13 @@ export interface ContextUsage {
 }
 
 export type SidecarEvent =
-  | { type: "model_delta"; requestId: string; text: string }
+  | {
+      type: "model_delta";
+      requestId: string;
+      text: string;
+      spokenText?: string;
+      spokenCategories?: string[];
+    }
   | { type: "model_complete"; requestId: string; text: string }
   | {
       type: "tool_start";

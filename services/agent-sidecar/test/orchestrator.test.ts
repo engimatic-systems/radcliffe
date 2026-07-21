@@ -78,6 +78,9 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("ambiguous title must be clarified");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("inference flag is true");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("source entity IDs");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Optimize ordinary responses for listening");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("raw URLs");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("explicitly requests exact delivery");
   });
 
   it("identifies Radcliffe as the harness without assigning the model that identity", () => {
@@ -136,6 +139,33 @@ describe("PiAgentOrchestrator", () => {
     );
     expect(events.at(-1)).toEqual({ type: "complete", requestId: "request-1" });
     expect(tool).not.toHaveBeenCalled();
+  });
+
+  it("keeps machine detail in display text while emitting a speakable alternative", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-spoken-output-test" });
+    const raw =
+      "The job job_0123456789abcdef wrote /srv/radcliffe/output/report.json. " +
+      "Details are at https://docs.example.test/jobs/0123456789.";
+    faux.setResponses([fauxAssistantMessage(raw)]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(request([packet("spoken-output", "Summarize the result")]), (event) => {
+      events.push(event);
+    });
+
+    const deltas = events.filter((event) => event.type === "model_delta");
+    expect(deltas.map((event) => ("text" in event ? event.text : "")).join("")).toBe(raw);
+    const spoken = deltas
+      .map((event) => (event.type === "model_delta" ? (event.spokenText ?? event.text) : ""))
+      .join("");
+    expect(spoken).not.toContain("job_0123456789abcdef");
+    expect(spoken).not.toContain("/srv/radcliffe/output/report.json");
+    expect(spoken).not.toContain("https://");
+    expect(deltas.flatMap((event) => (event.type === "model_delta" ? (event.spokenCategories ?? []) : []))).toEqual(
+      expect.arrayContaining(["identifier", "path", "url"]),
+    );
+    expect(events.find((event) => event.type === "model_complete")).toMatchObject({ text: raw });
   });
 
   it("surfaces a provider budget failure as a visible sidecar error", async () => {
@@ -321,6 +351,25 @@ describe("PiAgentOrchestrator", () => {
       kind: "literal",
       literal: "No compression allowed",
     });
+  });
+
+  it("does not substitute explicitly requested exact machine output", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-machine-output-test" });
+    const literal = "https://example.test/a?q=1";
+    faux.setResponses([fauxAssistantMessage("I would normally add a preamble.")]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(
+      request([packet("exact-url", `Repeat exactly ${literal}`)]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(events.filter((event) => event.type === "model_delta")).toEqual([
+      { type: "model_delta", requestId: "request-1", text: literal },
+    ]);
   });
 
   it.each([

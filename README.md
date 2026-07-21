@@ -384,3 +384,10 @@ completed sentence boundaries in SQLite. Successful canonical source rendering
 is terminal for its assistant turn, so a provider postamble cannot add a model
 message after the source; model text is also filtered through the deterministic
 no-emoji output policy before TTS or persistence.
+
+Ordinary model output also passes through the bounded
+[spoken-output policy](docs/spoken-output-policy.md). Machine-oriented detail
+remains in the durable model envelope and Android timeline, while TTS receives
+a truthful category-level alternative. Explicit exact/verbatim requests and
+canonical source envelopes bypass this substitution. The content-free Qwen and
+Haiku evaluation entry point is `scripts/spoken-output-conformance.py`.

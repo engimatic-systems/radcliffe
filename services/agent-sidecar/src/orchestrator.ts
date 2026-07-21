@@ -21,6 +21,7 @@ import type {
   ToolExecutor,
   TurnRequest,
 } from "./protocol.js";
+import { splitCompletedSpeechSegments, spokenOutputFor } from "./spoken-output.js";
 
 interface RadcliffeContextMessage {
   role: "radcliffe";
@@ -773,6 +774,12 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "An explicit exact-output request overrides response-detail brevity. Never abbreviate an exact " +
   "enumeration, identifier, hash, URL, JSON value, path, timestamp, quotation, verbatim reading, " +
   "or character sequence with an ellipsis, a summary, or 'and so on'. " +
+  "Optimize ordinary responses for listening. Do not volunteer or laboriously read hashes, UUIDs, " +
+  "internal IDs, raw URLs, filesystem paths, machine timestamps, stack traces, serialized data, " +
+  "long numbers, code, citation machinery, repeated punctuation, or acronym-heavy metadata. State " +
+  "the human meaning instead. If machine detail is useful in the visual conversation, include it " +
+  "once with a nearby plain-language description; Radcliffe will provide a speakable alternative. " +
+  "Only read or spell machine detail when the user explicitly requests exact delivery. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
@@ -1103,6 +1110,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       }
     }
     let modelText = "";
+    let pendingDisplayText = "";
     let groundedJobCall = false;
     let groundedJobDetails: Record<string, unknown> | undefined;
     const matchingJobCalls = new Set<string>();
@@ -1422,6 +1430,24 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     });
     let runJobCallSeen = false;
     let runJobSucceeded = false;
+    const emitSpeechSegments = async (flush: boolean) => {
+      const split = splitCompletedSpeechSegments(pendingDisplayText, flush);
+      pendingDisplayText = split.remainder;
+      for (const segment of split.segments) {
+        const spoken = spokenOutputFor(segment);
+        await emit({
+          type: "model_delta",
+          requestId: request.requestId,
+          text: segment,
+          ...(spoken.text !== segment
+            ? {
+                spokenText: spoken.text,
+                spokenCategories: spoken.categories,
+              }
+            : {}),
+        });
+      }
+    };
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         if (
@@ -1430,11 +1456,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         ) {
           modelText += event.assistantMessageEvent.delta;
           if (!exactOutputIntent) {
-            await emit({
-              type: "model_delta",
-              requestId: request.requestId,
-              text: event.assistantMessageEvent.delta,
-            });
+            pendingDisplayText += event.assistantMessageEvent.delta;
+            await emitSpeechSegments(false);
           }
         }
       } else if (event.type === "message_end" && event.message.role === "assistant") {
@@ -1451,6 +1474,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         }
         if (event.message.stopReason === "error") {
           providerError = event.message.errorMessage ?? "model provider failed";
+        }
+        if (!exactOutputIntent && pendingDisplayText) {
+          await emitSpeechSegments(true);
         }
         await emit({
           type: "usage",
