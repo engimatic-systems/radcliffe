@@ -62,6 +62,7 @@ class EndpointSettings:
     strong_barge_in_confirmation_ms: float = 400
     barge_in_release_ms: float = 120
     end_silence_ms: float = 900
+    continuation_grace_ms: float = 750
     maximum_unconfirmed_ms: float = 2000
     maximum_utterance_ms: float = 120000
     minimum_maximum_voice_ratio: float = 0.05
@@ -88,6 +89,7 @@ class EndpointSettings:
                 self.strong_barge_in_confirmation_ms,
                 self.barge_in_release_ms,
                 self.end_silence_ms,
+                self.continuation_grace_ms,
                 self.maximum_unconfirmed_ms,
                 self.maximum_utterance_ms,
                 self.short_foreground_voice_ms,
@@ -150,6 +152,9 @@ class EndpointSettings:
                 os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "120")
             ),
             end_silence_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_SILENCE_MS", "900")),
+            continuation_grace_ms=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_CONTINUATION_GRACE_MS", "750")
+            ),
             maximum_unconfirmed_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2000")
             ),
@@ -221,15 +226,26 @@ class EndpointProcessor(FrameProcessor):
         self.barge_in_confirmed = False
         self.candidate_pre_roll_ms = 0.0
         self.candidate_participant_id: str | None = None
-        self.turn_task: asyncio.Task[None] | None = None
+        self._turn_tasks: set[asyncio.Task[None]] = set()
+        self._completion_serial = asyncio.Lock()
+        self._last_endpoint_at: float | None = None
+        self.continuation_of_prior_endpoint = False
         self.paused = False
+
+    @property
+    def turn_task(self) -> asyncio.Task[None] | None:
+        active = tuple(task for task in self._turn_tasks if not task.done())
+        return active[-1] if active else None
+
+    def _active_turn_tasks(self) -> tuple[asyncio.Task[None], ...]:
+        return tuple(task for task in self._turn_tasks if not task.done())
 
     def foreground_quiet(self) -> bool:
         return (
             not self.paused
             and not self.speaking
             and not self.buffer
-            and (self.turn_task is None or self.turn_task.done())
+            and not self._active_turn_tasks()
         )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -270,9 +286,14 @@ class EndpointProcessor(FrameProcessor):
             if self.capture is not None:
                 self.capture.candidate_started(frame.user_id)
             voice_active = self.voice is not None and self.voice.foreground_turn_active()
-            self.started_during_active_turn = voice_active or (
-                self.turn_task is not None and not self.turn_task.done()
+            recent_endpoint = (
+                self._last_endpoint_at is not None
+                and (monotonic() - self._last_endpoint_at) * 1000
+                <= self.settings.continuation_grace_ms
             )
+            self.continuation_of_prior_endpoint = recent_endpoint
+            self._last_endpoint_at = None
+            self.started_during_active_turn = voice_active
         if not self.speaking:
             self._remember_idle_audio(frame.audio, frame.sample_rate, frame.num_channels)
             return
@@ -293,6 +314,12 @@ class EndpointProcessor(FrameProcessor):
             if self.barge_in_silence_ms >= self.settings.barge_in_release_ms:
                 self.barge_in_voice_ms = 0
                 self.barge_in_analyzed_voice_ms = 0
+        if (
+            not self.started_during_active_turn
+            and self.voice is not None
+            and self.voice.foreground_turn_active()
+        ):
+            self.started_during_active_turn = True
         if self.started_during_active_turn and not self.barge_in_confirmed:
             await self._maybe_confirm_barge_in(frame.sample_rate, frame.num_channels)
         utterance_ms = len(self.buffer) / (2 * frame.num_channels * frame.sample_rate) * 1000
@@ -363,6 +390,9 @@ class EndpointProcessor(FrameProcessor):
             maximum_rms = self.maximum_rms
             average_rms = self.rms_total / max(self.rms_frames, 1)
             trailing_silence_ms = self.silence_ms
+            continuation_handoff_required = (
+                self.continuation_of_prior_endpoint and not self.barge_in_confirmed
+            )
             logger.info(
                 "voice turn phase complete phase=endpoint reason={} audio_ms={} voice_ms={} "
                 "foreground_voice_ms={} trailing_silence_ms={} maximum_rms={} average_rms={}",
@@ -375,7 +405,8 @@ class EndpointProcessor(FrameProcessor):
                 round(average_rms, 2),
             )
             self._reset_candidate()
-            self.turn_task = asyncio.create_task(
+            self._last_endpoint_at = monotonic()
+            task = asyncio.create_task(
                 self._complete(
                     audio,
                     frame.sample_rate,
@@ -387,9 +418,12 @@ class EndpointProcessor(FrameProcessor):
                     pre_roll_ms=max(0.0, pre_roll_ms),
                     trailing_silence_ms=trailing_silence_ms,
                     participant_id=candidate_participant_id,
+                    continuation_handoff_required=continuation_handoff_required,
                 ),
                 name="radcliffe-voice-turn",
             )
+            self._turn_tasks.add(task)
+            task.add_done_callback(self._turn_tasks.discard)
         elif silence_endpoint or maximum_endpoint:
             logger.info(
                 "voice endpoint rejected reason=insufficient_rms_speech audio_ms={} voice_ms={}",
@@ -445,10 +479,11 @@ class EndpointProcessor(FrameProcessor):
                     )
                     return
         self.barge_in_confirmed = True
+        disposition = "continued" if self.continuation_of_prior_endpoint else "interrupted"
         logger.info(
             "voice barge-in confirmed verifier={} barge_in_voice_ms={} "
             "foreground_voice_ms={} maximum_rms={} speech_windows={} "
-            "maximum_speech_probability={}",
+            "maximum_speech_probability={} disposition={}",
             verifier,
             round(self.barge_in_voice_ms, 2),
             round(self.foreground_voice_ms, 2),
@@ -457,12 +492,14 @@ class EndpointProcessor(FrameProcessor):
             round(maximum_speech_probability, 4)
             if maximum_speech_probability is not None
             else None,
+            disposition,
         )
-        await self._cancel_current_turn(
-            preserve_candidate=True,
-            verifier=verifier,
-            evidence_duration_ms=self.barge_in_voice_ms,
-        )
+        if self.voice is not None:
+            await self.voice.barge_in(
+                verifier=verifier,
+                evidence_duration_ms=self.barge_in_voice_ms,
+                disposition=disposition,
+            )
 
     def _reset_candidate(self, *, preserve_speaking: bool = False) -> None:
         self.speaking = preserve_speaking
@@ -478,6 +515,7 @@ class EndpointProcessor(FrameProcessor):
         self.rms_frames = 0
         self.started_during_active_turn = False
         self.barge_in_confirmed = False
+        self.continuation_of_prior_endpoint = False
         self.candidate_pre_roll_ms = 0
         self.candidate_participant_id = None
 
@@ -500,6 +538,37 @@ class EndpointProcessor(FrameProcessor):
         pre_roll_ms: float,
         trailing_silence_ms: float,
         participant_id: str | None,
+        continuation_handoff_required: bool = False,
+    ) -> None:
+        async with self._completion_serial:
+            await self._complete_serial(
+                pcm,
+                sample_rate,
+                channels,
+                voice_ms=voice_ms,
+                foreground_voice_ms=foreground_voice_ms,
+                voice_ratio=voice_ratio,
+                endpoint_reason=endpoint_reason,
+                pre_roll_ms=pre_roll_ms,
+                trailing_silence_ms=trailing_silence_ms,
+                participant_id=participant_id,
+                continuation_handoff_required=continuation_handoff_required,
+            )
+
+    async def _complete_serial(
+        self,
+        pcm: bytes,
+        sample_rate: int,
+        channels: int,
+        *,
+        voice_ms: float,
+        foreground_voice_ms: float,
+        voice_ratio: float,
+        endpoint_reason: str,
+        pre_roll_ms: float,
+        trailing_silence_ms: float,
+        participant_id: str | None,
+        continuation_handoff_required: bool,
     ) -> None:
         started_at = monotonic()
         try:
@@ -592,7 +661,17 @@ class EndpointProcessor(FrameProcessor):
             )
             if self.voice is not None and not self.paused:
                 if assessment.accepted:
-                    await self.voice.handle_transcript(transcription.text)
+                    if continuation_handoff_required:
+                        logger.info(
+                            "voice continuation handoff preserving prior user turn "
+                            "after verified delayed transcription"
+                        )
+                        await self.voice.barge_in(
+                            verifier="continuation_handoff",
+                            evidence_duration_ms=foreground_voice_ms,
+                            disposition="continued",
+                        )
+                    await self.voice.submit_transcript(transcription.text)
                 elif assessment.reason == "decoder_disagreement" or (
                     assessment.reason == "low_log_probability" and not short_candidate
                 ):
@@ -601,9 +680,6 @@ class EndpointProcessor(FrameProcessor):
             raise
         except Exception as error:
             logger.error("voice turn failed before completion type={}", type(error).__name__)
-        finally:
-            if self.turn_task is asyncio.current_task():
-                self.turn_task = None
 
     async def interrupt(self) -> None:
         self.paused = False
@@ -616,32 +692,34 @@ class EndpointProcessor(FrameProcessor):
         verifier: str = "explicit_control",
         evidence_duration_ms: float | None = None,
     ) -> None:
-        turn_task = self.turn_task
+        turn_tasks = self._active_turn_tasks()
         if not preserve_candidate:
             self._reset_candidate()
+            self._last_endpoint_at = None
         if self.voice is not None:
             await self.voice.barge_in(
                 verifier=verifier,
                 evidence_duration_ms=evidence_duration_ms,
             )
-        if turn_task is not None and not turn_task.done():
-            turn_task.cancel()
-            await asyncio.gather(turn_task, return_exceptions=True)
-        if self.turn_task is turn_task:
-            self.turn_task = None
+        current = asyncio.current_task()
+        cancellable = tuple(task for task in turn_tasks if task is not current)
+        for task in cancellable:
+            task.cancel()
+        if cancellable:
+            await asyncio.gather(*cancellable, return_exceptions=True)
 
     async def pause(self) -> None:
         self.paused = True
         self._reset_candidate()
         self.idle_buffer.clear()
+        self._last_endpoint_at = None
         if self.voice is not None:
             await self.voice.pause()
-        turn_task = self.turn_task
-        if turn_task is not None and not turn_task.done():
-            turn_task.cancel()
-            await asyncio.gather(turn_task, return_exceptions=True)
-        if self.turn_task is turn_task:
-            self.turn_task = None
+        turn_tasks = self._active_turn_tasks()
+        for task in turn_tasks:
+            task.cancel()
+        if turn_tasks:
+            await asyncio.gather(*turn_tasks, return_exceptions=True)
 
     async def resume(self) -> None:
         self.paused = False
@@ -652,6 +730,7 @@ class EndpointProcessor(FrameProcessor):
         self.paused = False
         self._reset_candidate()
         self.idle_buffer.clear()
+        self._last_endpoint_at = None
         if self.voice is not None:
             await self.voice.participant_connected()
 

@@ -357,7 +357,10 @@ class VoicePipeline:
         *,
         verifier: str = "explicit_control",
         evidence_duration_ms: float | None = None,
+        disposition: str = "interrupted",
     ) -> None:
+        if disposition not in {"continued", "interrupted"}:
+            raise ValueError("barge-in disposition must be continued or interrupted")
         turn = self._active_turn
         operation = turn.operation if turn is not None else None
         if operation is not None:
@@ -380,7 +383,7 @@ class VoicePipeline:
                 phase="barge_in",
                 operation=operation,
             )
-        await self._cancel_active("interrupted", always_flush=True)
+        await self._cancel_active(disposition, always_flush=True)
         if operation is not None:
             self.telemetry.emit(
                 component="media_worker",
@@ -395,7 +398,7 @@ class VoicePipeline:
             previous = self.engine.state
             self._paused_source = None
             self.engine.interrupt()
-            await self._notify_state(previous, "interrupted")
+            await self._notify_state(previous, disposition)
 
     async def pause(self) -> None:
         task: asyncio.Task[None] | None = None
@@ -454,7 +457,32 @@ class VoicePipeline:
             await self._notify_state(previous, "session ended")
 
     async def handle_transcript(self, text: str) -> None:
+        await self._handle_transcript(text)
+
+    async def submit_transcript(self, text: str) -> None:
+        """Persist and activate a transcript without coupling capture to response lifetime."""
+
+        submitted = asyncio.Event()
+        task = asyncio.create_task(
+            self._handle_transcript(text, submitted=submitted),
+            name="radcliffe-model-turn",
+        )
+        task.add_done_callback(lambda _task: submitted.set())
+        await submitted.wait()
+        if task.done():
+            await task
+        else:
+            task.add_done_callback(self._consume_background_task)
+
+    async def _handle_transcript(
+        self,
+        text: str,
+        *,
+        submitted: asyncio.Event | None = None,
+    ) -> None:
         if self._closed_for_handoff:
+            if submitted is not None:
+                submitted.set()
             return
         submission = await self._begin_submission()
         turn_id = str(uuid4())
@@ -473,6 +501,8 @@ class VoicePipeline:
                 else:
                     stale = False
                     self._active_turn = turn
+            if submitted is not None:
+                submitted.set()
             if stale:
                 await self._append_disposition(turn, "superseded")
                 return
@@ -484,6 +514,8 @@ class VoicePipeline:
                 await self._finish_failed(turn)
                 raise
             finally:
+                if submitted is not None:
+                    submitted.set()
                 async with self._coordinator:
                     if self._active_turn is turn:
                         self._active_turn = None

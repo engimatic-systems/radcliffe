@@ -1679,6 +1679,45 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
 
 
 @pytest.mark.asyncio
+async def test_recent_endpoint_continuation_keeps_both_user_fragments_in_context(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = InterruptibleOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    first = asyncio.create_task(pipeline.handle_transcript("Four score and seven years ago"))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+    await pipeline.barge_in(disposition="continued")
+    await asyncio.wait_for(first, timeout=1)
+    await pipeline.handle_transcript("our fathers brought forth on this continent")
+
+    second_packets = orchestrator.requests[1]["packets"]
+    assert isinstance(second_packets, list)
+    included = [packet["content"] for packet in second_packets if packet["include"]]
+    assert included == [
+        "Four score and seven years ago",
+        "One. ",
+        "our fathers brought forth on this continent",
+    ]
+    replay = await store.replay("s1")
+    dispositions = [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in replay
+        if TURN_DISPOSITION_METADATA in item.metadata
+    ]
+    assert dispositions == ["continued", "completed"]
+
+
+@pytest.mark.asyncio
 async def test_repeated_cancellation_races_never_reinclude_abandoned_prompts(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
