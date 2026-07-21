@@ -326,6 +326,122 @@ This design allows a later feature to read every eligible message
 deterministically while injecting source-aware context for user speech, model
 output, calls, and text sources.
 
+### Deterministic agent-control action boundary
+
+Behavior changes and session transitions cross one versioned boundary:
+
+```text
+spoken request → structured model tool call → CALL audit envelope
+               → AgentControlActionRequest → policy registry
+               → confirmation when required → authorized executor
+               → AgentControlActionResult → UI and audit projection
+```
+
+Model prose is never parsed as a command. Pi may expose the small typed
+`configure` and `manage_session` tools, while an exceptional `delivery.rate`
+argument may accompany a read/snippet request. The Tool Gateway converts those
+typed requests into the canonical protobuf envelope; neither the model nor the
+tool name is authority to mutate application state.
+
+Every request uses action schema version `1` and declares:
+
+- a stable request ID and registered `AgentControlActionId`;
+- the active `OperationRef`, including session, generation, operation,
+  cancellation, and trace IDs;
+- an `AgentControlOrigin` containing source kind, actor ID, source-message ID,
+  and a tool-call ID only for `CALL` provenance;
+- an exact snippet, turn, session, device, or operator-default target;
+- a session-monotonic request sequence and stable idempotency key;
+- the confirmation policy expected by the registry; and
+- exactly one typed action payload and a timestamp.
+
+`USER`, `MODEL`, `CALL`, `TEXT_SOURCE`, and `SYSTEM` origins remain distinct in
+the audit record. A normal model-driven control request should be `CALL`, linked
+to the user message that caused the typed tool call. Raw `MODEL` origin is
+available for a provider adapter that supplies equivalent structured output,
+but its capability grant may independently forbid it. `TEXT_SOURCE` may affect
+only that source snippet's delivery. `SYSTEM` is reserved for an authenticated
+operator path and never means that arbitrary system text is executable.
+
+The initial registry is closed:
+
+| Stable action ID | Typed payload | Allowed scope | Required confirmation |
+| --- | --- | --- | --- |
+| `speech_delivery.set_rate` (`1`) | rate: `0.75x`, `1.0x`, `1.25x`, or `1.5x` | snippet | none |
+| `configuration.set` (`2`) | `response_detail` or `default_speech_rate` with its matching enum value | turn or session | none |
+| `configuration.set` (`2`) | same allowlisted keys | device | authenticated user |
+| `configuration.set` (`2`) | same allowlisted keys | operator default | authenticated operator |
+| `session.create` (`3`) | empty | session | none |
+| `session.switch` (`4`) | destination session ID | session | authenticated user |
+| `session.restart` (`5`) | empty | session | authenticated user |
+
+There is no free-form setting name or generic arguments object in the canonical
+contract. The strict sidecar JSON type rejects extra properties before protobuf
+conversion. The protobuf contract has no filesystem path, web URL, command,
+environment, secret, credential, download, privilege, or process-execution
+field. Such capabilities require separate tools, grants, schemas, and
+confirmation policies; they cannot be smuggled through agent control.
+
+The policy boundary validates in this order: supported schema and safe IDs;
+registered action and matching payload; target shape and argument enum;
+origin/action/scope capability grant and expiry; current operation generation;
+idempotency and precedence-slot collision; then declared confirmation policy.
+It emits only stable rejection codes:
+
+- unsupported schema, malformed envelope, or unregistered action;
+- unauthorized origin/action/scope;
+- invalid scope, target, or typed argument;
+- stale generation;
+- idempotency conflict or concurrent precedence conflict;
+- confirmation-policy mismatch; or
+- cancelled/already-authorized state.
+
+An exact retry with the same idempotency key and deterministic request bytes
+returns the first durable decision without reapplying the action. Reusing that
+key with different bytes is rejected. Different requests with the same action,
+configuration key, target, scope, generation, and request-sequence slot are
+also rejected instead of using arrival order. A retry after reconnect therefore
+cannot silently replace a previous request, and work from an older generation
+cannot mutate the current session.
+
+When multiple already-authorized settings are applicable, precedence is:
+
+```text
+snippet > turn > session > device > operator default
+```
+
+Within one scope, a newer generation wins, then a greater session-monotonic
+request sequence. Two different payloads tied at that slot are a conflict, not
+a lexical or timing-based winner. Precedence is evaluated only among requests
+for the same stable action/configuration key and applicable target; it never
+allows one action family to override another.
+
+Confirmation is itself a versioned, idempotent message tied to the same
+operation. User confirmation requires `USER` provenance; operator confirmation
+requires authenticated `SYSTEM` provenance. Denial becomes cancellation. A
+cancellation may arrive before the request and leave a tombstone, or cancel a
+request awaiting confirmation. Once the boundary has released an action as
+`AUTHORIZED`, cancellation cannot pretend to roll back an executor that may
+already have applied it; reversal is a new typed action with its own audit
+record. Session-switch executors must durably preserve history and cancel or
+rehome owned work before reporting `APPLIED`.
+
+The result distinguishes `AWAITING_CONFIRMATION`, `AUTHORIZED`, `APPLIED`,
+`REJECTED`, `DUPLICATE`, `CANCELLED`, `FAILED`, and `SUPERSEDED`. The policy
+boundary reports authorization; the state owner alone may report application,
+including an applied sequence and resulting state digest. Audit projection
+stores schema/request/action IDs, operation and provenance IDs, target scope,
+request sequence, idempotency key, declared confirmation, request SHA-256,
+disposition, rejection code, and replay status. It excludes credentials,
+message text, and arbitrary argument serialization.
+
+Unknown protobuf fields are preserved when forwarding a Protocol v2 message,
+but the active boundary rejects an unknown action or enum value. New optional
+fields and new registered IDs are additive minor changes. Existing numeric IDs,
+scope meanings, confirmation requirements, replay behavior, and precedence
+cannot change in place; incompatible semantics require a new field or Protocol
+v3.
+
 ### Deterministic context-budget accounting
 
 Context usage is measured after `ContextProjection` and Pi's custom-message

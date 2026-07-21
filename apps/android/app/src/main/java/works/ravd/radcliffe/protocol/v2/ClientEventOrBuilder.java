@@ -71,5 +71,27 @@ public interface ClientEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.MessageEnvelope getMessage();
 
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   * @return Whether the agentControlConfirmation field is set.
+   */
+  boolean hasAgentControlConfirmation();
+  /**
+   * <code>.radcliffe.v2.AgentControlConfirmation agent_control_confirmation = 7;</code>
+   * @return The agentControlConfirmation.
+   */
+  works.ravd.radcliffe.protocol.v2.AgentControlConfirmation getAgentControlConfirmation();
+
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   * @return Whether the agentControlCancellation field is set.
+   */
+  boolean hasAgentControlCancellation();
+  /**
+   * <code>.radcliffe.v2.AgentControlCancellation agent_control_cancellation = 8;</code>
+   * @return The agentControlCancellation.
+   */
+  works.ravd.radcliffe.protocol.v2.AgentControlCancellation getAgentControlCancellation();
+
   public works.ravd.radcliffe.protocol.v2.ClientEvent.PayloadCase getPayloadCase();
 }

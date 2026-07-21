@@ -213,6 +213,54 @@ public object ServerEventKt {
     public fun hasPlaybackSegment(): kotlin.Boolean {
       return _builder.hasPlaybackSegment()
     }
+
+    /**
+     * `.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;`
+     */
+    public var agentControlRequest: works.ravd.radcliffe.protocol.v2.AgentControlActionRequest
+      @kotlin.jvm.JvmName("getAgentControlRequest")
+        get() = _builder.agentControlRequest
+      @kotlin.jvm.JvmName("setAgentControlRequest")
+        set(value) {
+        _builder.agentControlRequest = value
+      }
+    /**
+     * `.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;`
+     */
+    public fun clearAgentControlRequest() {
+      _builder.clearAgentControlRequest()
+    }
+    /**
+     * `.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;`
+     * @return Whether the agentControlRequest field is set.
+     */
+    public fun hasAgentControlRequest(): kotlin.Boolean {
+      return _builder.hasAgentControlRequest()
+    }
+
+    /**
+     * `.radcliffe.v2.AgentControlActionResult agent_control_result = 10;`
+     */
+    public var agentControlResult: works.ravd.radcliffe.protocol.v2.AgentControlActionResult
+      @kotlin.jvm.JvmName("getAgentControlResult")
+        get() = _builder.agentControlResult
+      @kotlin.jvm.JvmName("setAgentControlResult")
+        set(value) {
+        _builder.agentControlResult = value
+      }
+    /**
+     * `.radcliffe.v2.AgentControlActionResult agent_control_result = 10;`
+     */
+    public fun clearAgentControlResult() {
+      _builder.clearAgentControlResult()
+    }
+    /**
+     * `.radcliffe.v2.AgentControlActionResult agent_control_result = 10;`
+     * @return Whether the agentControlResult field is set.
+     */
+    public fun hasAgentControlResult(): kotlin.Boolean {
+      return _builder.hasAgentControlResult()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -245,3 +293,9 @@ public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.errorOrNull: wo
 
 public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.playbackSegmentOrNull: works.ravd.radcliffe.protocol.v2.PlaybackSegment?
   get() = if (hasPlaybackSegment()) getPlaybackSegment() else null
+
+public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.agentControlRequestOrNull: works.ravd.radcliffe.protocol.v2.AgentControlActionRequest?
+  get() = if (hasAgentControlRequest()) getAgentControlRequest() else null
+
+public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.agentControlResultOrNull: works.ravd.radcliffe.protocol.v2.AgentControlActionResult?
+  get() = if (hasAgentControlResult()) getAgentControlResult() else null

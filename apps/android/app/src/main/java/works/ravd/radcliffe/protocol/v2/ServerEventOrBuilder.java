@@ -93,5 +93,27 @@ public interface ServerEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.PlaybackSegment getPlaybackSegment();
 
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   * @return Whether the agentControlRequest field is set.
+   */
+  boolean hasAgentControlRequest();
+  /**
+   * <code>.radcliffe.v2.AgentControlActionRequest agent_control_request = 9;</code>
+   * @return The agentControlRequest.
+   */
+  works.ravd.radcliffe.protocol.v2.AgentControlActionRequest getAgentControlRequest();
+
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   * @return Whether the agentControlResult field is set.
+   */
+  boolean hasAgentControlResult();
+  /**
+   * <code>.radcliffe.v2.AgentControlActionResult agent_control_result = 10;</code>
+   * @return The agentControlResult.
+   */
+  works.ravd.radcliffe.protocol.v2.AgentControlActionResult getAgentControlResult();
+
   public works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase getPayloadCase();
 }
