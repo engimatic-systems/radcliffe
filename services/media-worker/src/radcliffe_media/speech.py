@@ -11,9 +11,17 @@ from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
 import httpx
+import mlx.core as mx  # type: ignore[import-not-found]
 import mlx_whisper  # type: ignore[import-untyped]
 import numpy as np
 from parakeet_mlx import from_pretrained as load_parakeet_model  # type: ignore[import-untyped]
+from parakeet_mlx.alignment import (  # type: ignore[import-untyped]
+    merge_longest_common_subsequence,
+    merge_longest_contiguous,
+    sentences_to_result,
+    tokens_to_sentences,
+)
+from parakeet_mlx.audio import get_logmel as get_parakeet_logmel  # type: ignore[import-untyped]
 
 DEFAULT_PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
@@ -88,6 +96,11 @@ def pcm_to_16khz_mono(pcm: bytes, sample_rate: int, channels: int) -> np.ndarray
 
 
 class _ParakeetToken(Protocol):
+    id: int
+    text: str
+    start: float
+    duration: float
+    end: float
     confidence: float
 
 
@@ -99,15 +112,19 @@ class _ParakeetResult(Protocol):
     text: str
     sentences: list[_ParakeetSentence]
 
+    @property
+    def tokens(self) -> list[_ParakeetToken]: ...
+
+
+class _ParakeetPreprocessor(Protocol):
+    sample_rate: int
+    hop_length: int
+
 
 class _ParakeetModel(Protocol):
-    def transcribe(
-        self,
-        path: Path | str,
-        *,
-        chunk_duration: float | None = None,
-        overlap_duration: float = 15.0,
-    ) -> _ParakeetResult: ...
+    preprocessor_config: _ParakeetPreprocessor
+
+    def generate(self, mel: object) -> list[_ParakeetResult]: ...
 
 
 class LocalAppleSpeechProvider:
@@ -307,19 +324,55 @@ class ParakeetAppleSpeechProvider(LocalAppleSpeechProvider):
     def _transcribe_locked(self, waveform: np.ndarray) -> _ParakeetResult:
         if self._parakeet is None:
             self._parakeet = cast(_ParakeetModel, load_parakeet_model(self.parakeet_model))
-        pcm = (np.clip(waveform, -1.0, 1.0) * 32767).astype("<i2").tobytes()
-        with tempfile.TemporaryDirectory(prefix="radcliffe-parakeet-") as directory:
-            audio_path = Path(directory) / "turn.wav"
-            with wave.open(str(audio_path), "wb") as stream:
-                stream.setnchannels(1)
-                stream.setsampwidth(2)
-                stream.setframerate(16000)
-                stream.writeframes(pcm)
-            return self._parakeet.transcribe(
-                audio_path,
-                chunk_duration=self.chunk_duration,
-                overlap_duration=self.overlap_duration,
-            )
+        sample_rate = self._parakeet.preprocessor_config.sample_rate
+        if sample_rate != 16000:
+            raise RuntimeError(f"Parakeet model requires unexpected sample rate: {sample_rate}")
+        if waveform.size / sample_rate <= self.chunk_duration:
+            return self._generate_locked(waveform)
+
+        chunk_samples = int(self.chunk_duration * sample_rate)
+        overlap_samples = int(self.overlap_duration * sample_rate)
+        tokens: list[_ParakeetToken] = []
+        for start in range(0, waveform.size, chunk_samples - overlap_samples):
+            end = min(start + chunk_samples, waveform.size)
+            if end - start < self._parakeet.preprocessor_config.hop_length:
+                break
+            chunk = self._generate_locked(waveform[start:end])
+            offset = start / sample_rate
+            for token in chunk.tokens:
+                token.start += offset
+                token.end = token.start + token.duration
+            if not tokens:
+                tokens = chunk.tokens
+                continue
+            try:
+                tokens = cast(
+                    list[_ParakeetToken],
+                    merge_longest_contiguous(
+                        tokens,
+                        chunk.tokens,
+                        overlap_duration=self.overlap_duration,
+                    ),
+                )
+            except RuntimeError:
+                tokens = cast(
+                    list[_ParakeetToken],
+                    merge_longest_common_subsequence(
+                        tokens,
+                        chunk.tokens,
+                        overlap_duration=self.overlap_duration,
+                    ),
+                )
+        return cast(_ParakeetResult, sentences_to_result(tokens_to_sentences(tokens)))
+
+    def _generate_locked(self, waveform: np.ndarray) -> _ParakeetResult:
+        if self._parakeet is None:
+            raise RuntimeError("Parakeet model is not loaded")
+        mel = get_parakeet_logmel(mx.array(waveform), self._parakeet.preprocessor_config)
+        results = self._parakeet.generate(mel)
+        if not results:
+            raise RuntimeError("Parakeet produced no transcription result")
+        return results[0]
 
     @staticmethod
     def _sentence_evidence(sentence: _ParakeetSentence) -> TranscriptionSegmentEvidence:

@@ -1,7 +1,6 @@
 import asyncio
 import math
 import sys
-import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -156,32 +155,35 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
 @pytest.mark.asyncio
 async def test_local_parakeet_is_preloaded_and_returns_confidence_evidence(monkeypatch) -> None:
     model_loads: list[str] = []
-    transcriptions: list[dict[str, object]] = []
+    waveforms: list[np.ndarray] = []
 
     class FakeParakeet:
-        def transcribe(self, path, *, chunk_duration, overlap_duration):
-            with wave.open(str(path), "rb") as stream:
-                transcriptions.append(
-                    {
-                        "channels": stream.getnchannels(),
-                        "sample_rate": stream.getframerate(),
-                        "frames": stream.getnframes(),
-                        "chunk_duration": chunk_duration,
-                        "overlap_duration": overlap_duration,
-                    }
-                )
-            if len(transcriptions) == 1:
-                return SimpleNamespace(text="", sentences=[])
+        preprocessor_config = SimpleNamespace(sample_rate=16000, hop_length=160)
+
+        def generate(self, _mel):
+            if len(waveforms) == 1:
+                return [SimpleNamespace(text="", sentences=[], tokens=[])]
             sentence = SimpleNamespace(
                 tokens=[SimpleNamespace(confidence=0.8), SimpleNamespace(confidence=0.5)]
             )
-            return SimpleNamespace(text=" Four score and seven years ago. ", sentences=[sentence])
+            return [
+                SimpleNamespace(
+                    text=" Four score and seven years ago. ",
+                    sentences=[sentence],
+                    tokens=sentence.tokens,
+                )
+            ]
 
     def fake_load(model: str):
         model_loads.append(model)
         return FakeParakeet()
 
+    def fake_logmel(waveform, _configuration):
+        waveforms.append(np.array(waveform))
+        return object()
+
     monkeypatch.setattr("radcliffe_media.speech.load_parakeet_model", fake_load)
+    monkeypatch.setattr("radcliffe_media.speech.get_parakeet_logmel", fake_logmel)
     provider = ParakeetAppleSpeechProvider(
         parakeet_model="local-parakeet",
         chunk_duration=90,
@@ -194,15 +196,11 @@ async def test_local_parakeet_is_preloaded_and_returns_confidence_evidence(monke
     transcription = await provider.transcribe_with_evidence(stereo_8khz, 8000, 2)
 
     assert model_loads == ["local-parakeet"]
-    assert len(transcriptions) == 2
-    assert transcriptions[0]["frames"] == 16000
-    assert transcriptions[1] == {
-        "channels": 1,
-        "sample_rate": 16000,
-        "frames": 1600,
-        "chunk_duration": 90,
-        "overlap_duration": 10,
-    }
+    assert len(waveforms) == 2
+    assert waveforms[0].shape == (16000,)
+    assert np.count_nonzero(waveforms[0]) == 0
+    assert waveforms[1].shape == (1600,)
+    assert np.allclose(waveforms[1], 0.5)
     assert transcription.text == "Four score and seven years ago."
     assert len(transcription.segments) == 1
     assert transcription.segments[0].average_log_probability == pytest.approx(
