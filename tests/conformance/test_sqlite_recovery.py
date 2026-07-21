@@ -94,6 +94,22 @@ def populated_database(path: Path, *, suffix: str = "one") -> Path:
             "INSERT INTO device_auth_audit VALUES (?, 'owner', ?, 'enrolled', 'success', ?)",
             (f"event-{suffix}", f"device-{suffix}", now),
         )
+        database.execute(
+            """INSERT INTO configuration_values VALUES (
+                'owner', 'response_detail', 'session', ?, 'brief', 1, ?, ?
+            )""",
+            (f"session-{suffix}", f"device-{suffix}", now),
+        )
+        database.execute(
+            "INSERT INTO configuration_mutations VALUES (?, ?, ?, ?, ?)",
+            (
+                f"configuration-{suffix}",
+                f"configuration-key-{suffix}",
+                b"configuration-request-digest",
+                b'{"value":"brief"}',
+                now,
+            ),
+        )
         database.commit()
     path.chmod(0o600)
     return path
@@ -167,13 +183,15 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 6,
+        "schema_migrations": 7,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
         "playback_acknowledgements": 1,
         "devices": 1,
         "device_auth_audit": 1,
+        "configuration_values": 1,
+        "configuration_mutations": 1,
     }
     with pytest.raises(RECOVERY.RecoveryError, match="cannot replace the live"):
         RECOVERY.restore_backup(

@@ -50,7 +50,12 @@ const EMPTY_USAGE = {
 };
 
 export const RADCLIFFE_SYSTEM_PROMPT =
-  "You are Radcliffe. You can discover authorized Markdown filenames with list_sources and read " +
+  "You are Radcliffe. You may inspect, set, reset, or undo only response_detail and " +
+  "default_speech_rate with configure. Map concise or short to brief, normal to standard, " +
+  "thorough or verbose to detailed, slowly to 0.75x, regular to 1.0x, quickly to 1.25x, and " +
+  "very fast to 1.5x. Use turn scope for a temporary request and session scope when the user " +
+  "asks the change to continue. Never invent another setting key. You can discover authorized " +
+  "Markdown filenames with list_sources and read " +
   "one with read_source. If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
@@ -78,6 +83,71 @@ export const READ_SOURCE_PARAMETERS = Type.Object({
     ]),
   ),
 });
+export const CONFIGURE_DESCRIPTION =
+  "Inspect, set, reset, or undo one registered Radcliffe setting. Only response_detail and " +
+  "default_speech_rate are allowed. Turn overrides expire after the current turn; session values " +
+  "persist for this conversation.";
+const CONFIGURATION_KEY = Type.Union([
+  Type.Literal("response_detail"),
+  Type.Literal("default_speech_rate"),
+]);
+const CONFIGURATION_SCOPE = Type.Optional(
+  Type.Union([Type.Literal("turn"), Type.Literal("session")]),
+);
+export const CONFIGURE_PARAMETERS = Type.Union([
+  Type.Object(
+    {
+      operation: Type.Literal("inspect"),
+      key: CONFIGURATION_KEY,
+      scope: CONFIGURATION_SCOPE,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("set"),
+      key: Type.Literal("response_detail"),
+      scope: CONFIGURATION_SCOPE,
+      value: Type.Union([
+        Type.Literal("brief"),
+        Type.Literal("standard"),
+        Type.Literal("detailed"),
+      ]),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("set"),
+      key: Type.Literal("default_speech_rate"),
+      scope: CONFIGURATION_SCOPE,
+      value: Type.Union([
+        Type.Literal("0.75x"),
+        Type.Literal("1.0x"),
+        Type.Literal("1.25x"),
+        Type.Literal("1.5x"),
+      ]),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("reset"),
+      key: CONFIGURATION_KEY,
+      scope: CONFIGURATION_SCOPE,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("undo"),
+      key: CONFIGURATION_KEY,
+      scope: CONFIGURATION_SCOPE,
+      undoMutationId: Type.String({ minLength: 1, maxLength: 128 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextMessage {
   return "role" in message && message.role === "radcliffe";
@@ -116,12 +186,23 @@ export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
   });
 }
 
+function systemPrompt(request: TurnRequest): string {
+  return (
+    RADCLIFFE_SYSTEM_PROMPT +
+    (request.responseDetail === "brief"
+      ? " Keep this response brief."
+      : request.responseDetail === "detailed"
+        ? " Give a detailed response."
+        : " Use standard response detail.")
+  );
+}
+
 export function modelContextFromRequest(request: TurnRequest) {
   const messages: RadcliffeContextMessage[] = request.packets
     .filter((packet) => packet.include)
     .map((packet) => ({ role: "radcliffe", packet }));
   return {
-    systemPrompt: RADCLIFFE_SYSTEM_PROMPT,
+    systemPrompt: systemPrompt(request),
     messages: convertRadcliffeContext(messages),
     tools: [
       {
@@ -133,6 +214,11 @@ export function modelContextFromRequest(request: TurnRequest) {
         name: "read_source",
         description: READ_SOURCE_DESCRIPTION,
         parameters: READ_SOURCE_PARAMETERS,
+      },
+      {
+        name: "configure",
+        description: CONFIGURE_DESCRIPTION,
+        parameters: CONFIGURE_PARAMETERS,
       },
     ],
   };
@@ -168,6 +254,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const packets = request.packets.filter((packet) => packet.include);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
+    const turnId =
+      Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
     let modelText = "";
     const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
       name: "list_sources",
@@ -188,7 +276,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           sessionId: request.sessionId,
           generation: request.generation,
           operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
           traceId: request.traceId!,
+          turnId,
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "list_sources",
@@ -228,10 +318,55 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           sessionId: request.sessionId,
           generation: request.generation,
           operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
           traceId: request.traceId!,
+          turnId,
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "read_source",
+          arguments: params,
+        };
+        const result = await this.executeTool(toolRequest, toolSignal, (update) => {
+          onUpdate?.({
+            content: [{ type: "text", text: JSON.stringify(update) }],
+            details: update,
+          });
+        });
+        return {
+          content: [{ type: "text" as const, text: result.modelContent }],
+          details: result.details,
+        };
+      },
+    };
+    type ConfigureArguments = Extract<
+      ToolExecutionRequest,
+      { toolName: "configure" }
+    >["arguments"];
+    const configure: AgentTool<typeof CONFIGURE_PARAMETERS> = {
+      name: "configure",
+      label: "Configure Radcliffe",
+      description: CONFIGURE_DESCRIPTION,
+      parameters: CONFIGURE_PARAMETERS,
+      executionMode: "sequential" as const,
+      execute: async (
+        toolCallId: string,
+        params: ConfigureArguments,
+        toolSignal?: AbortSignal,
+        onUpdate?: (value: {
+          content: Array<{ type: "text"; text: string }>;
+          details: unknown;
+        }) => void,
+      ) => {
+        const toolRequest: ToolExecutionRequest = {
+          sessionId: request.sessionId,
+          generation: request.generation,
+          operationId: request.operationId!,
+          cancellationId: request.cancellationId!,
+          traceId: request.traceId!,
+          turnId,
+          callId: toolCallId,
+          idempotencyKey: `${request.requestId}:${toolCallId}`,
+          toolName: "configure",
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {
@@ -252,10 +387,10 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     }));
     const agent = new Agent({
       initialState: {
-        systemPrompt: RADCLIFFE_SYSTEM_PROMPT,
+        systemPrompt: systemPrompt(request),
         model: this.model,
         thinkingLevel: "off",
-        tools: [listSources, readSource],
+        tools: [listSources, readSource, configure],
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,

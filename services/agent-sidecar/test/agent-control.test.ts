@@ -42,6 +42,9 @@ describe("agent-control contract", () => {
       "session.create": 3,
       "session.switch": 4,
       "session.restart": 5,
+      "configuration.inspect": 6,
+      "configuration.reset": 7,
+      "configuration.undo": 8,
     });
     expect(isAgentControlRequest(deliveryRequest())).toBe(true);
     expect(
@@ -110,6 +113,35 @@ describe("agent-control contract", () => {
         arguments: { destinationSessionId: "session-1" },
       }),
     ).toBe(false);
+  });
+
+  it("validates inspect reset and undo as separate registered actions", () => {
+    const base = {
+      ...deliveryRequest(),
+      target: { scope: "session", sessionId: "session-1" },
+      confirmation: "none",
+    };
+    expect(
+      isAgentControlRequest({
+        ...base,
+        actionId: "configuration.inspect",
+        arguments: { key: "response_detail" },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentControlRequest({
+        ...base,
+        actionId: "configuration.reset",
+        arguments: { key: "default_speech_rate" },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentControlRequest({
+        ...base,
+        actionId: "configuration.undo",
+        arguments: { key: "response_detail", mutationId: "mutation-1" },
+      }),
+    ).toBe(true);
   });
 
   it("keeps user model call and text-source origins distinct", () => {

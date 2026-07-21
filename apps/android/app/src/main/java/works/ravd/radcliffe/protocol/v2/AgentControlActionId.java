@@ -35,6 +35,18 @@ public enum AgentControlActionId
    * <code>AGENT_CONTROL_ACTION_ID_SESSION_RESTART = 5;</code>
    */
   AGENT_CONTROL_ACTION_ID_SESSION_RESTART(5),
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT = 6;</code>
+   */
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT(6),
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET = 7;</code>
+   */
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET(7),
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;</code>
+   */
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO(8),
   UNRECOGNIZED(-1),
   ;
 
@@ -62,6 +74,18 @@ public enum AgentControlActionId
    * <code>AGENT_CONTROL_ACTION_ID_SESSION_RESTART = 5;</code>
    */
   public static final int AGENT_CONTROL_ACTION_ID_SESSION_RESTART_VALUE = 5;
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT = 6;</code>
+   */
+  public static final int AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT_VALUE = 6;
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET = 7;</code>
+   */
+  public static final int AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET_VALUE = 7;
+  /**
+   * <code>AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;</code>
+   */
+  public static final int AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO_VALUE = 8;
 
 
   @java.lang.Override
@@ -91,6 +115,9 @@ public enum AgentControlActionId
       case 3: return AGENT_CONTROL_ACTION_ID_SESSION_CREATE;
       case 4: return AGENT_CONTROL_ACTION_ID_SESSION_SWITCH;
       case 5: return AGENT_CONTROL_ACTION_ID_SESSION_RESTART;
+      case 6: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT;
+      case 7: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET;
+      case 8: return AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO;
       default: return null;
     }
   }

@@ -10,10 +10,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
+from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import api
 from pydantic import (
     BaseModel,
@@ -23,11 +24,31 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from radcliffe_domain.agent_control import (
+    AgentControlBoundary,
+    AgentControlGrant,
+)
 from radcliffe_domain.catalog import (
     InvalidPageCursorError,
     SessionCatalog,
     SessionConflictError,
     SessionRecord,
+)
+from radcliffe_domain.configuration import (
+    SETTING_DEFINITIONS,
+    ConfigurationConfirmationRequired,
+    ConfigurationConflictError,
+    ConfigurationContext,
+    ConfigurationCorruptionError,
+    ConfigurationError,
+    ConfigurationKey,
+    ConfigurationMutation,
+    ConfigurationMutationResult,
+    ConfigurationRegistry,
+    ConfigurationScope,
+    EffectiveConfiguration,
+    configuration_key,
+    normalize_configuration_value,
 )
 from radcliffe_domain.devices import (
     DeviceCredentialRotationError,
@@ -49,6 +70,7 @@ from radcliffe_domain.session import Operation
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
 from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_control.context_usage import (
     ContextUsageClient,
@@ -235,6 +257,32 @@ class ListSourcesArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ConfigureArguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    operation: Literal["inspect", "set", "reset", "undo"]
+    key: Literal["response_detail", "default_speech_rate"]
+    scope: Literal["turn", "session"] = "session"
+    value: str | None = None
+    undo_mutation_id: str | None = None
+
+    @model_validator(mode="after")
+    def valid_operation_shape(self) -> ConfigureArguments:
+        if self.operation == "set":
+            normalize_configuration_value(self.key, self.value)
+        elif self.value is not None:
+            raise ValueError("only set accepts a setting value")
+        if self.operation == "undo" and not self.undo_mutation_id:
+            raise ValueError("undo requires undo_mutation_id")
+        if self.operation != "undo" and self.undo_mutation_id is not None:
+            raise ValueError("only undo accepts undo_mutation_id")
+        return self
+
+
 class ToolCallRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -246,25 +294,85 @@ class ToolCallRequest(BaseModel):
     generation: int
     operation_id: str = Field(min_length=16, max_length=128)
     trace_id: str = Field(pattern=r"^trc_[0-9a-f]{32}$")
+    cancellation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    turn_id: str | None = Field(default=None, min_length=1, max_length=128)
     call_id: str
     idempotency_key: str
-    tool_name: Literal["list_sources", "read_source"]
-    arguments: ReadSourceArguments | ListSourcesArguments
+    tool_name: Literal["list_sources", "read_source", "configure"]
+    arguments: ReadSourceArguments | ListSourcesArguments | ConfigureArguments
 
     @model_validator(mode="after")
     def arguments_match_tool(self) -> ToolCallRequest:
         expected = {
             "list_sources": ListSourcesArguments,
             "read_source": ReadSourceArguments,
+            "configure": ConfigureArguments,
         }[self.tool_name]
         if not isinstance(self.arguments, expected):
             raise ValueError(f"arguments do not match {self.tool_name}")
+        if self.tool_name == "configure" and (self.cancellation_id is None or self.turn_id is None):
+            raise ValueError("configure requires cancellation_id and turn_id")
         return self
 
 
 class ToolCallResponse(BaseModel):
     model_content: str = Field(serialization_alias="modelContent")
     details: dict[str, str]
+
+
+class ConfigurationValueResponse(BaseModel):
+    key: Literal["response_detail", "default_speech_rate"]
+    value: str
+    effective_scope: str
+    revision: int
+    default: str
+    allowed_values: tuple[str, ...]
+    allowed_scopes: tuple[str, ...]
+    persistent_scopes: tuple[str, ...]
+    confirmation_by_scope: dict[str, str]
+
+
+class ConfigurationListResponse(BaseModel):
+    items: tuple[ConfigurationValueResponse, ...]
+
+
+class ConfigurationMutationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["set", "reset", "undo"]
+    key: Literal["response_detail", "default_speech_rate"]
+    scope: Literal["device", "session", "turn"]
+    value: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=0)
+    undo_mutation_id: str | None = None
+
+    @model_validator(mode="after")
+    def valid_mutation_shape(self) -> ConfigurationMutationRequest:
+        if self.operation == "set":
+            normalize_configuration_value(self.key, self.value)
+        elif self.value is not None:
+            raise ValueError("only set accepts a setting value")
+        if self.scope in {"session", "turn"} and not self.session_id:
+            raise ValueError(f"{self.scope} scope requires session_id")
+        if self.scope == "turn" and not self.turn_id:
+            raise ValueError("turn scope requires turn_id")
+        if self.operation == "undo" and not self.undo_mutation_id:
+            raise ValueError("undo requires undo_mutation_id")
+        if self.operation != "undo" and self.undo_mutation_id is not None:
+            raise ValueError("only undo accepts undo_mutation_id")
+        return self
+
+
+class ConfigurationMutationResponse(BaseModel):
+    mutation_id: str
+    previous_value: str | None
+    applied_value: str | None
+    revision: int
+    replayed: bool
+    effective: ConfigurationValueResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +395,10 @@ class Runtime:
     devices: DeviceRegistry
     readiness: ReadinessProbe
     telemetry: TelemetrySink
+    configuration: ConfigurationRegistry
+    agent_controls: AgentControlBoundary
+    configuration_sequences: dict[str, int]
+    configuration_requests: dict[str, protocol_pb2.AgentControlActionRequest]
 
 
 def _bearer(authorization: str | None, expected: str) -> None:
@@ -305,6 +417,226 @@ def _summary(record: SessionRecord) -> SessionSummaryResponse:
         protocol_version=record.protocol_version,
         generation=record.generation,
         worker_status=("external" if record.worker_mode == "external" else record.worker_status),  # type: ignore[arg-type]
+    )
+
+
+def _configuration_value_response(
+    key: ConfigurationKey,
+    effective: EffectiveConfiguration,
+) -> ConfigurationValueResponse:
+    definition = SETTING_DEFINITIONS[key]
+    return ConfigurationValueResponse(
+        key=key.value,
+        value=effective.value,
+        effective_scope=effective.effective_scope,
+        revision=effective.revision,
+        default=definition.default,
+        allowed_values=definition.allowed_values,
+        allowed_scopes=tuple(sorted(scope.value for scope in definition.allowed_scopes)),
+        persistent_scopes=tuple(sorted(scope.value for scope in definition.persistent_scopes)),
+        confirmation_by_scope={
+            scope.value: confirmation
+            for scope, confirmation in definition.confirmation_by_scope.items()
+        },
+    )
+
+
+_CONFIGURATION_KEY_TO_PROTO = {
+    ConfigurationKey.RESPONSE_DETAIL: protocol_pb2.AGENT_CONFIGURATION_KEY_RESPONSE_DETAIL,
+    ConfigurationKey.DEFAULT_SPEECH_RATE: (
+        protocol_pb2.AGENT_CONFIGURATION_KEY_DEFAULT_SPEECH_RATE
+    ),
+}
+_CONFIGURATION_SCOPE_TO_PROTO = {
+    ConfigurationScope.TURN: protocol_pb2.AGENT_CONTROL_SCOPE_TURN,
+    ConfigurationScope.SESSION: protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+}
+_RESPONSE_DETAIL_TO_PROTO = {
+    "brief": protocol_pb2.RESPONSE_DETAIL_BRIEF,
+    "standard": protocol_pb2.RESPONSE_DETAIL_STANDARD,
+    "detailed": protocol_pb2.RESPONSE_DETAIL_DETAILED,
+}
+_SPEECH_RATE_TO_PROTO = {
+    "0.75x": protocol_pb2.SPEECH_RATE_SLOW_0_75X,
+    "1.0x": protocol_pb2.SPEECH_RATE_NORMAL_1_0X,
+    "1.25x": protocol_pb2.SPEECH_RATE_FAST_1_25X,
+    "1.5x": protocol_pb2.SPEECH_RATE_VERY_FAST_1_5X,
+}
+
+
+def _configuration_action_request(
+    request: ToolCallRequest,
+    arguments: ConfigureArguments,
+    sequence: int,
+    requested_at: Timestamp | None = None,
+) -> protocol_pb2.AgentControlActionRequest:
+    key = configuration_key(arguments.key)
+    scope = ConfigurationScope(arguments.scope)
+    timestamp = Timestamp()
+    if requested_at is None:
+        timestamp.GetCurrentTime()
+    else:
+        timestamp.CopyFrom(requested_at)
+    action = protocol_pb2.AgentControlActionRequest(
+        schema_version=1,
+        request_id=f"configuration:{request.call_id}",
+        operation=protocol_pb2.OperationRef(
+            session_id=request.session_id,
+            generation=request.generation,
+            operation_id=request.operation_id,
+            cancellation_id=request.cancellation_id,
+            trace_id=request.trace_id,
+        ),
+        origin=protocol_pb2.AgentControlOrigin(
+            source=protocol_pb2.SOURCE_KIND_CALL,
+            actor_id="agent-sidecar",
+            source_message_id=f"call:{request.call_id}",
+            tool_call_id=request.call_id,
+        ),
+        target=protocol_pb2.AgentControlTarget(
+            scope=_CONFIGURATION_SCOPE_TO_PROTO[scope],
+            session_id=request.session_id,
+            turn_id=request.turn_id if scope is ConfigurationScope.TURN else "",
+        ),
+        request_sequence=sequence,
+        idempotency_key=request.idempotency_key,
+        confirmation=protocol_pb2.AGENT_CONTROL_CONFIRMATION_REQUIREMENT_NONE,
+        requested_at=timestamp,
+    )
+    if arguments.operation == "set":
+        action.action_id = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_SET
+        action.configuration.key = _CONFIGURATION_KEY_TO_PROTO[key]
+        value = normalize_configuration_value(key, arguments.value)
+        if key is ConfigurationKey.RESPONSE_DETAIL:
+            action.configuration.response_detail = _RESPONSE_DETAIL_TO_PROTO[value]
+        else:
+            action.configuration.speech_rate = _SPEECH_RATE_TO_PROTO[value]
+    elif arguments.operation == "inspect":
+        action.action_id = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT
+        action.configuration_inspect.key = _CONFIGURATION_KEY_TO_PROTO[key]
+    elif arguments.operation == "reset":
+        action.action_id = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET
+        action.configuration_reset.key = _CONFIGURATION_KEY_TO_PROTO[key]
+    else:
+        action.action_id = protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO
+        action.configuration_undo.key = _CONFIGURATION_KEY_TO_PROTO[key]
+        action.configuration_undo.mutation_id = arguments.undo_mutation_id or ""
+    return action
+
+
+async def _execute_configuration_tool(
+    active: Runtime,
+    request: ToolCallRequest,
+    arguments: ConfigureArguments,
+) -> ToolCallResponse:
+    previous_request = active.configuration_requests.get(request.idempotency_key)
+    if previous_request is None:
+        sequence = active.configuration_sequences.get(request.session_id, 0) + 1
+        active.configuration_sequences[request.session_id] = sequence
+        requested_at = None
+    else:
+        sequence = previous_request.request_sequence
+        requested_at = previous_request.requested_at
+    action = _configuration_action_request(request, arguments, sequence, requested_at)
+    grant = AgentControlGrant(
+        grant_id=f"configuration:{request.session_id}:{request.generation}",
+        session_id=request.session_id,
+        generation=request.generation,
+        actor_id="agent-sidecar",
+        allowed_origins=frozenset({protocol_pb2.SOURCE_KIND_CALL}),
+        allowed_actions=frozenset(
+            {
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_SET,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET,
+                protocol_pb2.AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO,
+            }
+        ),
+        allowed_scopes=frozenset(
+            {
+                protocol_pb2.AGENT_CONTROL_SCOPE_TURN,
+                protocol_pb2.AGENT_CONTROL_SCOPE_SESSION,
+            }
+        ),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    decision = active.agent_controls.submit(
+        action,
+        grant=grant,
+        current_generation=request.generation,
+    )
+    if decision.result.disposition != protocol_pb2.AGENT_CONTROL_DISPOSITION_AUTHORIZED:
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if decision.result.rejection_code
+            in {
+                protocol_pb2.AGENT_CONTROL_REJECTION_CODE_IDEMPOTENCY_CONFLICT,
+                protocol_pb2.AGENT_CONTROL_REJECTION_CODE_CONFLICT,
+            }
+            else status.HTTP_403_FORBIDDEN
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"configuration action rejected ({decision.result.rejection_code})",
+        )
+    if previous_request is None:
+        active.configuration_requests[request.idempotency_key] = action
+
+    key = configuration_key(arguments.key)
+    scope = ConfigurationScope(arguments.scope)
+    context = ConfigurationContext(
+        owner_id=active.settings.owner_id,
+        session_id=request.session_id,
+        turn_id=request.turn_id,
+    )
+    mutation_result: ConfigurationMutationResult | None = None
+    try:
+        if arguments.operation == "inspect":
+            effective = await active.configuration.inspect(key, context)
+        else:
+            mutation_result = await active.configuration.mutate(
+                ConfigurationMutation(
+                    mutation_id=f"configuration:{request.call_id}",
+                    idempotency_key=request.idempotency_key,
+                    key=key,
+                    scope=scope,
+                    kind=arguments.operation,
+                    context=context,
+                    actor_id="agent-sidecar",
+                    value=arguments.value,
+                    undo_mutation_id=arguments.undo_mutation_id,
+                )
+            )
+            effective = mutation_result.effective
+    except ConfigurationConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConfigurationConfirmationRequired as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConfigurationCorruptionError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    payload = {
+        "key": key.value,
+        "value": effective.value,
+        "effective_scope": effective.effective_scope,
+        "revision": effective.revision,
+        "operation": arguments.operation,
+        "mutation_id": mutation_result.mutation_id if mutation_result else None,
+        "replayed": mutation_result.replayed if mutation_result else decision.replayed,
+    }
+    return ToolCallResponse(
+        model_content=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        details={
+            "key": key.value,
+            "value": effective.value,
+            "effectiveScope": effective.effective_scope,
+            "revision": str(effective.revision),
+            "operation": arguments.operation,
+            "mutationId": mutation_result.mutation_id if mutation_result else "",
+            "replayed": str(payload["replayed"]).lower(),
+        },
     )
 
 
@@ -381,6 +713,7 @@ def create_app(
                     participant_identity=_worker_identity(record.session_id),
                     role="worker",
                 ),
+                owner_id=settings.owner_id,
             )
             workers = WorkerSupervisor(
                 catalog=catalog,
@@ -401,6 +734,10 @@ def create_app(
             DeviceRegistry(settings.database_path),
             readiness_probe or ReadinessProbe(settings),
             TelemetrySink(settings.telemetry_path),
+            ConfigurationRegistry(settings.database_path),
+            AgentControlBoundary(),
+            {},
+            {},
         )
         await reconcile_workers(runtime)
         if workers is not None:
@@ -948,6 +1285,100 @@ def create_app(
             role="worker",
         )
 
+    @app.get("/v1/configuration", response_model=ConfigurationListResponse)
+    async def get_configuration(
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
+        session_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> ConfigurationListResponse:
+        if session_id is not None:
+            record = await active.catalog.get(
+                principal_id=active.settings.owner_id,
+                session_id=session_id,
+            )
+            if record is None:
+                raise HTTPException(status_code=404, detail="session not found")
+        context = ConfigurationContext(
+            owner_id=active.settings.owner_id,
+            device_id=device.device_id,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        try:
+            values: list[ConfigurationValueResponse] = []
+            for key in ConfigurationKey:
+                values.append(
+                    _configuration_value_response(
+                        key,
+                        await active.configuration.inspect(key, context),
+                    )
+                )
+        except ConfigurationCorruptionError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        return ConfigurationListResponse(items=tuple(values))
+
+    @app.post(
+        "/v1/configuration/mutations",
+        response_model=ConfigurationMutationResponse,
+    )
+    async def mutate_configuration(
+        request: ConfigurationMutationRequest,
+        active: Runtime = Depends(get_runtime),  # noqa: B008
+        device: DeviceRecord = Depends(require_device),  # noqa: B008
+    ) -> ConfigurationMutationResponse:
+        if request.session_id is not None:
+            record = await active.catalog.get(
+                principal_id=active.settings.owner_id,
+                session_id=request.session_id,
+            )
+            if record is None:
+                raise HTTPException(status_code=404, detail="session not found")
+        context = ConfigurationContext(
+            owner_id=active.settings.owner_id,
+            device_id=device.device_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+        )
+        mutation_id = (
+            "configuration:"
+            + hashlib.sha256(f"{device.device_id}:{request.idempotency_key}".encode()).hexdigest()[
+                :32
+            ]
+        )
+        try:
+            result = await active.configuration.mutate(
+                ConfigurationMutation(
+                    mutation_id=mutation_id,
+                    idempotency_key=request.idempotency_key,
+                    key=request.key,
+                    scope=request.scope,
+                    kind=request.operation,
+                    context=context,
+                    actor_id=device.device_id,
+                    value=request.value,
+                    expected_revision=request.expected_revision,
+                    undo_mutation_id=request.undo_mutation_id,
+                    confirmed=True,
+                )
+            )
+        except ConfigurationConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ConfigurationConfirmationRequired as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ConfigurationCorruptionError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except ConfigurationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ConfigurationMutationResponse(
+            mutation_id=result.mutation_id,
+            previous_value=result.previous_value,
+            applied_value=result.applied_value,
+            revision=result.revision,
+            replayed=result.replayed,
+            effective=_configuration_value_response(result.key, result.effective),
+        )
+
     @app.post("/v1/tool-calls", response_model=ToolCallResponse)
     async def execute_tool(
         request: ToolCallRequest,
@@ -959,7 +1390,7 @@ def create_app(
             session_id=request.session_id,
             generation=request.generation,
             operation_id=request.operation_id,
-            cancellation_id="",
+            cancellation_id=request.cancellation_id or f"tool:{request.call_id}",
             trace_id=request.trace_id,
         )
         active.telemetry.emit(
@@ -1007,6 +1438,22 @@ def create_app(
                     grant,
                 )
             try:
+                if request.tool_name == "configure":
+                    response = await _execute_configuration_tool(
+                        active,
+                        request,
+                        cast(ConfigureArguments, request.arguments),
+                    )
+                    active.telemetry.emit(
+                        component="control",
+                        event="tool",
+                        outcome="completed",
+                        session_id=request.session_id,
+                        generation=request.generation,
+                        phase="execution",
+                        operation=operation,
+                    )
+                    return response
                 if request.tool_name == "list_sources":
                     catalog = await active.gateway.list_sources(
                         call_id=request.call_id,

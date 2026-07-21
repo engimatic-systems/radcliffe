@@ -396,6 +396,9 @@ The initial registry is closed:
 | `session.create` (`3`) | empty | session | none |
 | `session.switch` (`4`) | destination session ID | session | authenticated user |
 | `session.restart` (`5`) | empty | session | authenticated user |
+| `configuration.inspect` (`6`) | one allowlisted configuration key | turn, session, device, or operator default | none |
+| `configuration.reset` (`7`) | one allowlisted configuration key | turn or session / device / operator default | none / authenticated user / authenticated operator |
+| `configuration.undo` (`8`) | one allowlisted key and prior mutation ID | turn or session / device / operator default | none / authenticated user / authenticated operator |
 
 There is no free-form setting name or generic arguments object in the canonical
 contract. The strict sidecar JSON type rejects extra properties before protobuf
@@ -403,6 +406,39 @@ conversion. The protobuf contract has no filesystem path, web URL, command,
 environment, secret, credential, download, privilege, or process-execution
 field. Such capabilities require separate tools, grants, schemas, and
 confirmation policies; they cannot be smuggled through agent control.
+
+### Registered behavior configuration
+
+The initial configuration registry is deliberately closed:
+
+| Key | Schema and bounds | Built-in default | Allowed scopes | Persistence |
+| --- | --- | --- | --- | --- |
+| `response_detail` | enum: `brief`, `standard`, `detailed` | `standard` | turn, session, device, operator default | turn expires with its exact turn ID; all other layers are durable |
+| `default_speech_rate` | enum: `0.75x`, `1.0x`, `1.25x`, `1.5x` | `1.0x` | turn, session, device, operator default | turn expires with its exact turn ID; all other layers are durable |
+
+Effective precedence is built-in, operator default, device, session, then exact
+turn. A tombstoned reset reveals the next lower layer. Each target has a
+monotonic revision; authenticated clients may provide an expected revision so
+concurrent devices receive a visible conflict instead of silently overwriting
+one another. Mutation and idempotency IDs make exact retries replay their first
+result, while changed retries fail. Undo succeeds only when no later mutation
+has occupied the target.
+
+The model-visible `configure` tool supports inspect, set, reset, and undo for
+only these two keys and only turn or session scope. Common spoken synonyms are
+normalized before registry application, but stored values remain canonical.
+Device changes are explicit authenticated Android actions and operator-default
+changes remain outside model authority. Credentials, endpoints, grants,
+developer options, arbitrary preference keys, and paid-provider policy have no
+registry entry and therefore cannot be inspected or changed through this path.
+
+The worker resolves response detail before sending a turn to the sidecar and
+resolves default speech pace at each playback boundary. An explicit snippet
+delivery instruction still wins, including an explicit `1.0x`. Configuration
+audit envelopes are durable and available to Android, but excluded from later
+ContextProjection. Android loads the authoritative effective registry on
+reconnect, applies live updates, and exposes bounded choices plus reset and
+undo.
 
 The policy boundary validates in this order: supported schema and safe IDs;
 registered action and matching payload; target shape and bounded typed argument;

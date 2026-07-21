@@ -14,8 +14,15 @@ from uuid import uuid4
 
 from google.protobuf.message import DecodeError
 from loguru import logger
+from radcliffe_domain.configuration import (
+    SETTING_DEFINITIONS,
+    ConfigurationContext,
+    ConfigurationKey,
+    ConfigurationRegistry,
+)
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
+    CONFIGURATION_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
@@ -173,6 +180,9 @@ class VoicePipeline:
         client_playback_acknowledgements: bool = False,
         playback_ack_timeout_seconds: float = 2.0,
         defer_readiness_until_input: bool = False,
+        configuration_registry: ConfigurationRegistry | None = None,
+        configuration_owner_id: str = "local-owner",
+        configuration_device_id: str | None = None,
     ) -> None:
         if model_chunk_chars <= 0:
             raise ValueError("model chunk size must be positive")
@@ -189,6 +199,9 @@ class VoicePipeline:
         self.client_playback_acknowledgements = client_playback_acknowledgements
         self.playback_ack_timeout_seconds = playback_ack_timeout_seconds
         self.defer_readiness_until_input = defer_readiness_until_input
+        self.configuration_registry = configuration_registry
+        self.configuration_owner_id = configuration_owner_id
+        self.configuration_device_id = configuration_device_id
         self._active_turn: _ActiveTurn | None = None
         self._coordinator = asyncio.Lock()
         self._turn_serial = asyncio.Lock()
@@ -409,7 +422,12 @@ class VoicePipeline:
             "sessionId": self.engine.session_id,
             "generation": self.engine.generation,
             "operationId": operation.operation_id,
+            "cancellationId": operation.cancellation_id,
             "traceId": operation.trace_id,
+            "responseDetail": await self._effective_configuration(
+                ConfigurationKey.RESPONSE_DETAIL,
+                turn.turn_id,
+            ),
             "packets": [
                 packet.to_wire(int(item.created_at.timestamp() * 1000))
                 for item, packet in zip(history, packets, strict=True)
@@ -452,6 +470,11 @@ class VoicePipeline:
                     source_rendered = True
                     buffer = ""
                     turn.model_text = turn.rendered_model_text
+                else:
+                    await self._persist_configuration_update(
+                        event.payload.get("result"),
+                        turn,
+                    )
             elif event.type == "model_complete" and not source_rendered:
                 turn.model_text = _canonical_model_text(
                     str(event.payload.get("text", turn.model_text))
@@ -560,7 +583,7 @@ class VoicePipeline:
                 operation,
                 turn,
                 source=SourceKind.TEXT_SOURCE,
-                delivery=segment.delivery,
+                delivery=segment.delivery if segment.delivery_overridden else None,
                 wait_for_playback=True,
             )
             turn.next_source_boundary = segment.boundary_index + 1
@@ -614,7 +637,12 @@ class VoicePipeline:
         wait_for_playback: bool = False,
     ) -> None:
         self._assert_owner(turn, operation)
-        delivery = delivery or SpeechDelivery()
+        delivery = delivery or SpeechDelivery.parse(
+            await self._effective_configuration(
+                ConfigurationKey.DEFAULT_SPEECH_RATE,
+                turn.turn_id,
+            )
+        )
         synth_started = monotonic()
         if getattr(self.synthesizer, "supports_speech_rate", False):
             audio = await self.synthesizer.synthesize(
@@ -927,6 +955,38 @@ class VoicePipeline:
             metadata,
         )
 
+    async def _persist_configuration_update(
+        self,
+        result: object,
+        turn: _ActiveTurn,
+    ) -> bool:
+        details = self._tool_details(result)
+        if details is None:
+            return False
+        key = self._detail_text(details, "key")
+        value = self._detail_text(details, "value")
+        operation = self._detail_text(details, "operation")
+        if key is None or value is None or operation not in {"set", "reset", "undo"}:
+            return False
+        metadata = {
+            TURN_ID_METADATA: turn.turn_id,
+            TURN_EVENT_METADATA: CONFIGURATION_EVENT,
+            "radcliffe.configuration.key": key,
+            "radcliffe.configuration.value": value,
+            "radcliffe.configuration.scope": (
+                self._detail_text(details, "effectiveScope") or "built_in"
+            ),
+            "radcliffe.configuration.revision": self._detail_text(details, "revision") or "0",
+            "radcliffe.configuration.mutation_id": (self._detail_text(details, "mutationId") or ""),
+        }
+        await self._append_text(
+            SourceKind.SYSTEM,
+            "Behavior setting updated",
+            metadata,
+            notify=True,
+        )
+        return True
+
     async def _persist_model(
         self,
         turn: _ActiveTurn,
@@ -964,6 +1024,24 @@ class VoicePipeline:
         turn.model_persisted = True
         if notify and self.events is not None:
             await self.events.message(envelope)
+
+    async def _effective_configuration(
+        self,
+        key: ConfigurationKey,
+        turn_id: str,
+    ) -> str:
+        if self.configuration_registry is None:
+            return SETTING_DEFINITIONS[key].default
+        effective = await self.configuration_registry.inspect(
+            key,
+            ConfigurationContext(
+                owner_id=self.configuration_owner_id,
+                device_id=self.configuration_device_id,
+                session_id=self.engine.session_id,
+                turn_id=turn_id,
+            ),
+        )
+        return effective.value
 
     def _log_phase(self, turn: _ActiveTurn, phase: str, seconds: float) -> None:
         operation = turn.operation

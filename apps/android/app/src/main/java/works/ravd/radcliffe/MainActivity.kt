@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 private sealed interface SessionAction {
     data object Create : SessionAction
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
         val activeSessionId by SessionModel.sessionId.collectAsState()
         val storedProfile by profiles.profile.collectAsState(initial = null)
         val showSystemMessages by profiles.showSystemMessages.collectAsState(initial = false)
+        val liveConfigurationUpdates by BehaviorConfigurationModel.updates.collectAsState()
         val scope = rememberCoroutineScope()
         var editing by remember { mutableStateOf(false) }
         var initialized by remember { mutableStateOf(false) }
@@ -117,6 +119,14 @@ class MainActivity : ComponentActivity() {
         var exportInFlight by remember { mutableStateOf(false) }
         var pendingExport by remember { mutableStateOf<PendingConversationExport?>(null) }
         var exportNotice by remember { mutableStateOf<String?>(null) }
+        var configurationValues by remember {
+            mutableStateOf<List<RegisteredConfiguration>>(emptyList())
+        }
+        var configurationInFlight by remember { mutableStateOf(false) }
+        var configurationNotice by remember { mutableStateOf<String?>(null) }
+        var lastConfigurationMutation by remember {
+            mutableStateOf<ConfigurationMutationResult?>(null)
+        }
 
         LaunchedEffect(storedProfile) {
             val profile = storedProfile ?: return@LaunchedEffect
@@ -160,6 +170,33 @@ class MainActivity : ComponentActivity() {
                 refreshKey += 1
             }
             previousVoiceState = state
+        }
+
+        LaunchedEffect(
+            activeSessionId,
+            storedProfile?.controlUrl,
+            storedProfile?.deviceCredential,
+        ) {
+            val profile = storedProfile ?: return@LaunchedEffect
+            if (activeSessionId.isBlank() || !profile.isEnrolled) {
+                configurationValues = emptyList()
+                return@LaunchedEffect
+            }
+            suspendRunCatching {
+                withContext(Dispatchers.IO) {
+                    SessionApi.configuration(
+                        profile.controlUrl,
+                        profile.deviceCredential,
+                        activeSessionId,
+                    )
+                }
+            }.onSuccess {
+                configurationValues = it
+                configurationNotice = null
+            }.onFailure { error ->
+                configurationNotice =
+                    "Behavior settings unavailable: ${error.message ?: "unknown error"}"
+            }
         }
 
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -239,6 +276,63 @@ class MainActivity : ComponentActivity() {
                     exportInFlight = false
                     exportNotice = "Export failed: ${error.message ?: "unknown error"}"
                 }
+            }
+        }
+
+        fun mutateBehavior(
+            operation: String,
+            key: String,
+            value: String? = null,
+            undoMutationId: String? = null,
+        ) {
+            if (configurationInFlight || activeSessionId.isBlank()) return
+            val sessionId = activeSessionId
+            val profile = storedProfile
+            if (profile == null || !profile.isEnrolled) {
+                configurationNotice = "Connection settings are unavailable"
+                return
+            }
+            configurationInFlight = true
+            configurationNotice = when (operation) {
+                "reset" -> "Resetting behavior…"
+                "undo" -> "Undoing behavior change…"
+                else -> "Updating behavior…"
+            }
+            scope.launch {
+                suspendRunCatching {
+                    withContext(Dispatchers.IO) {
+                        SessionApi.mutateConfiguration(
+                            baseUrl = profile.controlUrl,
+                            deviceCredential = profile.deviceCredential,
+                            sessionId = sessionId,
+                            operation = operation,
+                            key = key,
+                            value = value,
+                            undoMutationId = undoMutationId,
+                            idempotencyKey = UUID.randomUUID().toString(),
+                        )
+                    }
+                }.onSuccess { result ->
+                    if (SessionModel.sessionId.value != sessionId) return@onSuccess
+                    configurationValues = configurationValues
+                        .filterNot { it.key == result.effective.key } + result.effective
+                    configurationValues = configurationValues.sortedBy { it.key }
+                    lastConfigurationMutation = if (operation == "undo") null else result
+                    BehaviorConfigurationModel.update(
+                        ConfigurationUpdate(
+                            key = result.effective.key,
+                            value = result.effective.value,
+                            effectiveScope = result.effective.effectiveScope,
+                            revision = result.effective.revision,
+                            mutationId = result.mutationId,
+                        ),
+                    )
+                    configurationNotice = "Behavior updated"
+                }.onFailure { error ->
+                    configurationNotice =
+                        "Behavior change failed: ${error.message ?: "unknown error"}"
+                }
+                configurationInFlight = false
             }
         }
 
@@ -561,6 +655,21 @@ class MainActivity : ComponentActivity() {
                     exportInFlight = exportInFlight,
                     operationNotice = operationNotice,
                     exportNotice = exportNotice,
+                    configurationValues = configurationValues.map { setting ->
+                        val live = liveConfigurationUpdates[setting.key]
+                        if (live == null) {
+                            setting
+                        } else {
+                            setting.copy(
+                                value = live.value,
+                                effectiveScope = live.effectiveScope,
+                                revision = live.revision,
+                            )
+                        }
+                    },
+                    configurationInFlight = configurationInFlight,
+                    configurationNotice = configurationNotice,
+                    lastConfigurationMutation = lastConfigurationMutation,
                     onDiagnostics = { diagnosticsVisible = !diagnosticsVisible },
                     onShowSystemMessages = { show ->
                         scope.launch {
@@ -577,6 +686,19 @@ class MainActivity : ComponentActivity() {
                     onExport = { beginExport(activeSessionId) },
                     onArchive = {
                         updateSessionStatus(activeSessionId, "archived", current = true)
+                    },
+                    onConfigurationSet = { key, value ->
+                        mutateBehavior("set", key, value)
+                    },
+                    onConfigurationReset = { key ->
+                        mutateBehavior("reset", key)
+                    },
+                    onConfigurationUndo = { mutation ->
+                        mutateBehavior(
+                            "undo",
+                            mutation.effective.key,
+                            undoMutationId = mutation.mutationId,
+                        )
                     },
                     onCommand = ::command,
                 )
@@ -639,10 +761,17 @@ class MainActivity : ComponentActivity() {
         exportInFlight: Boolean,
         operationNotice: String?,
         exportNotice: String?,
+        configurationValues: List<RegisteredConfiguration>,
+        configurationInFlight: Boolean,
+        configurationNotice: String?,
+        lastConfigurationMutation: ConfigurationMutationResult?,
         onDiagnostics: () -> Unit,
         onShowSystemMessages: (Boolean) -> Unit,
         onExport: () -> Unit,
         onArchive: () -> Unit,
+        onConfigurationSet: (String, String) -> Unit,
+        onConfigurationReset: (String) -> Unit,
+        onConfigurationUndo: (ConfigurationMutationResult) -> Unit,
         onCommand: (String) -> Unit,
     ) {
         var confirmArchive by remember(sessionId) { mutableStateOf(false) }
@@ -701,6 +830,15 @@ class MainActivity : ComponentActivity() {
                 Text(if (diagnosticsVisible) "Hide diagnostics" else "Diagnostics")
             }
         }
+        ConfigurationCard(
+            values = configurationValues,
+            mutationInFlight = configurationInFlight,
+            notice = configurationNotice,
+            lastMutation = lastConfigurationMutation,
+            onSet = onConfigurationSet,
+            onReset = onConfigurationReset,
+            onUndo = onConfigurationUndo,
+        )
         operationNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         exportNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (diagnosticsVisible) {
@@ -738,6 +876,59 @@ class MainActivity : ComponentActivity() {
                     TextButton(onClick = { confirmArchive = false }) { Text("Cancel") }
                 },
             )
+        }
+    }
+
+    @Composable
+    private fun ConfigurationCard(
+        values: List<RegisteredConfiguration>,
+        mutationInFlight: Boolean,
+        notice: String?,
+        lastMutation: ConfigurationMutationResult?,
+        onSet: (String, String) -> Unit,
+        onReset: (String) -> Unit,
+        onUndo: (ConfigurationMutationResult) -> Unit,
+    ) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Conversation behavior", style = MaterialTheme.typography.titleSmall)
+                if (values.isEmpty()) {
+                    Text("Loading registered settings…", style = MaterialTheme.typography.bodySmall)
+                }
+                values.sortedBy { it.key }.forEach { setting ->
+                    val label = when (setting.key) {
+                        "response_detail" -> "Response detail"
+                        "default_speech_rate" -> "Default speech pace"
+                        else -> setting.key
+                    }
+                    Text(
+                        "$label · ${setting.value} · ${setting.effectiveScope}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        setting.allowedValues.forEach { value ->
+                            TextButton(
+                                onClick = { onSet(setting.key, value) },
+                                enabled = !mutationInFlight && value != setting.value,
+                            ) { Text(value) }
+                        }
+                    }
+                    TextButton(
+                        onClick = { onReset(setting.key) },
+                        enabled = !mutationInFlight && setting.effectiveScope == "session",
+                    ) { Text("Reset $label") }
+                }
+                lastMutation?.let { mutation ->
+                    OutlinedButton(
+                        onClick = { onUndo(mutation) },
+                        enabled = !mutationInFlight,
+                    ) { Text("Undo last behavior change") }
+                }
+                notice?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+            }
         }
     }
 

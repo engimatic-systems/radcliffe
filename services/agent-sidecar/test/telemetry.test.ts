@@ -56,6 +56,7 @@ describe("content-free telemetry", () => {
       sessionId: "session",
       generation: 1,
       operationId: "operation-123456",
+      cancellationId: "cancellation-123456",
       traceId: `trc_${"d".repeat(32)}`,
       packets: [],
     };

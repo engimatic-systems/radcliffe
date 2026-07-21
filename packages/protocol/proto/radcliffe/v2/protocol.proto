@@ -72,6 +72,9 @@ enum AgentControlActionId {
   AGENT_CONTROL_ACTION_ID_SESSION_CREATE = 3;
   AGENT_CONTROL_ACTION_ID_SESSION_SWITCH = 4;
   AGENT_CONTROL_ACTION_ID_SESSION_RESTART = 5;
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_INSPECT = 6;
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_RESET = 7;
+  AGENT_CONTROL_ACTION_ID_CONFIGURATION_UNDO = 8;
 }
 
 enum AgentControlConfirmationRequirement {
@@ -278,6 +281,19 @@ message ConfigurationAction {
   }
 }
 
+message ConfigurationInspectAction {
+  AgentConfigurationKey key = 1;
+}
+
+message ConfigurationResetAction {
+  AgentConfigurationKey key = 1;
+}
+
+message ConfigurationUndoAction {
+  AgentConfigurationKey key = 1;
+  string mutation_id = 2;
+}
+
 message SessionCreateAction {}
 
 message SessionSwitchAction {
@@ -302,6 +318,9 @@ message AgentControlActionRequest {
     SessionCreateAction session_create = 12;
     SessionSwitchAction session_switch = 13;
     SessionRestartAction session_restart = 14;
+    ConfigurationInspectAction configuration_inspect = 16;
+    ConfigurationResetAction configuration_reset = 17;
+    ConfigurationUndoAction configuration_undo = 18;
   }
   google.protobuf.Timestamp requested_at = 15;
 }

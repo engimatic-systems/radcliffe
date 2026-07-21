@@ -15,6 +15,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.workers.runner import WorkerRunner
+from radcliffe_domain.configuration import ConfigurationRegistry
 from radcliffe_domain.session import PlaybackAcknowledgement
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
@@ -593,7 +594,8 @@ async def run() -> None:
     missing = [key for key, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"missing required settings: {', '.join(missing)}")
-    store = EventStore(Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3")))
+    database_path = Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3"))
+    store = EventStore(database_path)
     await store.migrate()
     speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
     if speech_provider == "local":
@@ -651,6 +653,8 @@ async def run() -> None:
             os.environ.get("RADCLIFFE_PLAYBACK_ACK_TIMEOUT_SECONDS", "2")
         ),
         defer_readiness_until_input=True,
+        configuration_registry=ConfigurationRegistry(database_path),
+        configuration_owner_id=os.environ.get("RADCLIFFE_OWNER_ID", "local-owner"),
     )
     endpoint.voice = voice
     await voice.start()

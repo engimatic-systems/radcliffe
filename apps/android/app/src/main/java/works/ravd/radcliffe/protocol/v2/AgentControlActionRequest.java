@@ -28,6 +28,9 @@ public  final class AgentControlActionRequest extends
     SESSION_CREATE(12),
     SESSION_SWITCH(13),
     SESSION_RESTART(14),
+    CONFIGURATION_INSPECT(16),
+    CONFIGURATION_RESET(17),
+    CONFIGURATION_UNDO(18),
     ACTION_NOT_SET(0);
     private final int value;
     private ActionCase(int value) {
@@ -48,6 +51,9 @@ public  final class AgentControlActionRequest extends
         case 12: return SESSION_CREATE;
         case 13: return SESSION_SWITCH;
         case 14: return SESSION_RESTART;
+        case 16: return CONFIGURATION_INSPECT;
+        case 17: return CONFIGURATION_RESET;
+        case 18: return CONFIGURATION_UNDO;
         case 0: return ACTION_NOT_SET;
         default: return null;
       }
@@ -700,6 +706,162 @@ public  final class AgentControlActionRequest extends
    */
   private void clearSessionRestart() {
     if (actionCase_ == 14) {
+      actionCase_ = 0;
+      action_ = null;
+    }
+  }
+
+  public static final int CONFIGURATION_INSPECT_FIELD_NUMBER = 16;
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   */
+  @java.lang.Override
+  public boolean hasConfigurationInspect() {
+    return actionCase_ == 16;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction getConfigurationInspect() {
+    if (actionCase_ == 16) {
+       return (works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction) action_;
+    }
+    return works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setConfigurationInspect(works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction value) {
+    value.getClass();  // minimal bytecode null check
+    action_ = value;
+    actionCase_ = 16;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeConfigurationInspect(works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction value) {
+    value.getClass();  // minimal bytecode null check
+    if (actionCase_ == 16 &&
+        action_ != works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.getDefaultInstance()) {
+      action_ = works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.newBuilder((works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction) action_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      action_ = value;
+    }
+    actionCase_ = 16;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+   */
+  private void clearConfigurationInspect() {
+    if (actionCase_ == 16) {
+      actionCase_ = 0;
+      action_ = null;
+    }
+  }
+
+  public static final int CONFIGURATION_RESET_FIELD_NUMBER = 17;
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   */
+  @java.lang.Override
+  public boolean hasConfigurationReset() {
+    return actionCase_ == 17;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.ConfigurationResetAction getConfigurationReset() {
+    if (actionCase_ == 17) {
+       return (works.ravd.radcliffe.protocol.v2.ConfigurationResetAction) action_;
+    }
+    return works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setConfigurationReset(works.ravd.radcliffe.protocol.v2.ConfigurationResetAction value) {
+    value.getClass();  // minimal bytecode null check
+    action_ = value;
+    actionCase_ = 17;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeConfigurationReset(works.ravd.radcliffe.protocol.v2.ConfigurationResetAction value) {
+    value.getClass();  // minimal bytecode null check
+    if (actionCase_ == 17 &&
+        action_ != works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.getDefaultInstance()) {
+      action_ = works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.newBuilder((works.ravd.radcliffe.protocol.v2.ConfigurationResetAction) action_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      action_ = value;
+    }
+    actionCase_ = 17;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+   */
+  private void clearConfigurationReset() {
+    if (actionCase_ == 17) {
+      actionCase_ = 0;
+      action_ = null;
+    }
+  }
+
+  public static final int CONFIGURATION_UNDO_FIELD_NUMBER = 18;
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   */
+  @java.lang.Override
+  public boolean hasConfigurationUndo() {
+    return actionCase_ == 18;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction getConfigurationUndo() {
+    if (actionCase_ == 18) {
+       return (works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction) action_;
+    }
+    return works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setConfigurationUndo(works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction value) {
+    value.getClass();  // minimal bytecode null check
+    action_ = value;
+    actionCase_ = 18;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergeConfigurationUndo(works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction value) {
+    value.getClass();  // minimal bytecode null check
+    if (actionCase_ == 18 &&
+        action_ != works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.getDefaultInstance()) {
+      action_ = works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.newBuilder((works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction) action_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      action_ = value;
+    }
+    actionCase_ = 18;
+  }
+  /**
+   * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+   */
+  private void clearConfigurationUndo() {
+    if (actionCase_ == 18) {
       actionCase_ = 0;
       action_ = null;
     }
@@ -1490,6 +1652,150 @@ public  final class AgentControlActionRequest extends
     }
 
     /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    @java.lang.Override
+    public boolean hasConfigurationInspect() {
+      return instance.hasConfigurationInspect();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction getConfigurationInspect() {
+      return instance.getConfigurationInspect();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    public Builder setConfigurationInspect(works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction value) {
+      copyOnWrite();
+      instance.setConfigurationInspect(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    public Builder setConfigurationInspect(
+        works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.Builder builderForValue) {
+      copyOnWrite();
+      instance.setConfigurationInspect(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    public Builder mergeConfigurationInspect(works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction value) {
+      copyOnWrite();
+      instance.mergeConfigurationInspect(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationInspectAction configuration_inspect = 16;</code>
+     */
+    public Builder clearConfigurationInspect() {
+      copyOnWrite();
+      instance.clearConfigurationInspect();
+      return this;
+    }
+
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    @java.lang.Override
+    public boolean hasConfigurationReset() {
+      return instance.hasConfigurationReset();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.ConfigurationResetAction getConfigurationReset() {
+      return instance.getConfigurationReset();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    public Builder setConfigurationReset(works.ravd.radcliffe.protocol.v2.ConfigurationResetAction value) {
+      copyOnWrite();
+      instance.setConfigurationReset(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    public Builder setConfigurationReset(
+        works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.Builder builderForValue) {
+      copyOnWrite();
+      instance.setConfigurationReset(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    public Builder mergeConfigurationReset(works.ravd.radcliffe.protocol.v2.ConfigurationResetAction value) {
+      copyOnWrite();
+      instance.mergeConfigurationReset(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationResetAction configuration_reset = 17;</code>
+     */
+    public Builder clearConfigurationReset() {
+      copyOnWrite();
+      instance.clearConfigurationReset();
+      return this;
+    }
+
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    @java.lang.Override
+    public boolean hasConfigurationUndo() {
+      return instance.hasConfigurationUndo();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction getConfigurationUndo() {
+      return instance.getConfigurationUndo();
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    public Builder setConfigurationUndo(works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction value) {
+      copyOnWrite();
+      instance.setConfigurationUndo(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    public Builder setConfigurationUndo(
+        works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.Builder builderForValue) {
+      copyOnWrite();
+      instance.setConfigurationUndo(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    public Builder mergeConfigurationUndo(works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction value) {
+      copyOnWrite();
+      instance.mergeConfigurationUndo(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.ConfigurationUndoAction configuration_undo = 18;</code>
+     */
+    public Builder clearConfigurationUndo() {
+      copyOnWrite();
+      instance.clearConfigurationUndo();
+      return this;
+    }
+
+    /**
      * <code>.google.protobuf.Timestamp requested_at = 15;</code>
      */
     @java.lang.Override
@@ -1570,11 +1876,15 @@ public  final class AgentControlActionRequest extends
             works.ravd.radcliffe.protocol.v2.SessionSwitchAction.class,
             works.ravd.radcliffe.protocol.v2.SessionRestartAction.class,
             "requestedAt_",
+            works.ravd.radcliffe.protocol.v2.ConfigurationInspectAction.class,
+            works.ravd.radcliffe.protocol.v2.ConfigurationResetAction.class,
+            works.ravd.radcliffe.protocol.v2.ConfigurationUndoAction.class,
           };
           java.lang.String info =
-              "\u0000\u000f\u0001\u0001\u0001\u000f\u000f\u0000\u0000\u0000\u0001\u000b\u0002\u0208" +
+              "\u0000\u0012\u0001\u0001\u0001\u0012\u0012\u0000\u0000\u0000\u0001\u000b\u0002\u0208" +
               "\u0003\u1009\u0000\u0004\u1009\u0001\u0005\u1009\u0002\u0006\f\u0007\u0003\b\u0208" +
-              "\t\f\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000\u000f\u1009\u0003";
+              "\t\f\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000\u000f\u1009\u0003\u0010" +
+              "<\u0000\u0011<\u0000\u0012<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

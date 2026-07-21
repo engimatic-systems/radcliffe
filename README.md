@@ -88,6 +88,12 @@ An explicit per-source delivery request can add `rate` to `read_source` as
 The bounded instruction is render metadata, not spoken or model-visible text;
 canonical source bytes and hashes remain unchanged across playback and resume.
 
+Conversational behavior changes use the typed `configure` tool. The initial
+registry contains only response detail (`brief`, `standard`, `detailed`) and
+default speech pace (`0.75x`, `1.0x`, `1.25x`, `1.5x`). Turn overrides expire
+with the exact turn; session changes persist for that conversation. Android
+shows the effective value and provides bounded set, reset, and undo controls.
+
 The local simulation is the fast reviewer entry point. The external deployment
 and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.

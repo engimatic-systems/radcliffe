@@ -195,11 +195,12 @@ class VoiceSessionService : MediaSessionService() {
             val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)
             if (ready != current) {
                 SessionModel.state(ready)
+                if (ready == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
                 notify("Listening", false)
             }
         }
         if (event.hasStateChanged()) {
-            SessionModel.state(when (event.stateChanged.current) {
+            val current = when (event.stateChanged.current) {
                 ConversationState.CONVERSATION_STATE_CONNECTING -> VoiceState.CONNECTING
                 ConversationState.CONVERSATION_STATE_LISTENING -> VoiceState.LISTENING
                 ConversationState.CONVERSATION_STATE_THINKING -> VoiceState.THINKING
@@ -209,10 +210,33 @@ class VoiceSessionService : MediaSessionService() {
                 ConversationState.CONVERSATION_STATE_RECONNECTING -> VoiceState.RECONNECTING
                 ConversationState.CONVERSATION_STATE_FAILED -> VoiceState.FAILED
                 else -> VoiceState.IDLE
-            })
+            }
+            SessionModel.state(current)
+            if (current == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
         }
         if (event.hasMessage() && event.message.content.hasInlineText()) {
             val message = event.message
+            if (message.metadataMap["radcliffe.event"] == "configuration_changed") {
+                val key = message.metadataMap["radcliffe.configuration.key"]
+                val value = message.metadataMap["radcliffe.configuration.value"]
+                if (key != null && value != null) {
+                    BehaviorConfigurationModel.update(
+                        ConfigurationUpdate(
+                            key = key,
+                            value = value,
+                            effectiveScope = message.metadataMap[
+                                "radcliffe.configuration.scope"
+                            ] ?: "built_in",
+                            revision = message.metadataMap[
+                                "radcliffe.configuration.revision"
+                            ]?.toIntOrNull() ?: 0,
+                            mutationId = message.metadataMap[
+                                "radcliffe.configuration.mutation_id"
+                            ],
+                        ),
+                    )
+                }
+            }
             val kind = when (message.source) {
                 SourceKind.SOURCE_KIND_USER -> MessageKind.USER
                 SourceKind.SOURCE_KIND_MODEL -> MessageKind.MODEL
