@@ -32,3 +32,7 @@ A completed spoken announcement appears exactly once in durable replay and model
 **2026-07-21T15:00:04Z**
 
 Failure plumbing now distinguishes background model rate limits, provider outages, rejected requests, invalid responses, and generic trusted-executor faults. These stable terminal detail codes flow through the existing durable hidden job-outcome envelope and manage_job latestEvent, so the next foreground turn can explain or inspect the failure without transcript disclosure.
+
+**2026-07-21T15:02:47Z**
+
+Revision 90ab7fd passed the full repository suite (332 Python tests with 1 skipped, 95 sidecar tests, Android unit tests and lint) and the deployed Haiku background-job preflight. Deterministic pipeline coverage proves a successfully spoken SYSTEM announcement and hidden CALL outcome precede the next USER envelope; interrupted speech persists neither. The remaining acceptance gate is the physical phone failure-then-why replay.

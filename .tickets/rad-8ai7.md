@@ -1,6 +1,6 @@
 ---
 id: rad-8ai7
-status: in_progress
+status: closed
 deps: []
 links: [rad-uk3f, rad-l386]
 created: 2026-07-21T14:35:08Z
@@ -27,3 +27,7 @@ One explicit command installs/restarts the managed Haiku user-test profile; phon
 **2026-07-21T14:35:25Z**
 
 2026-07-21 mixed-model root cause: sidecar health correctly reported Anthropic Haiku, but var/job-executor.env still launched sandbox_agent with --model qwen3:8b through Ollama. The Hacker News job repeated obsolete HTML parsing, malformed API commands, eight empty assistant actions, and identical timeouts before the 24-step resource limit. Future user-test preflight must cover both foreground and job model roles.
+
+**2026-07-21T15:02:47Z**
+
+Revision 90ab7fd is installed under the live-haiku-4.5 user-test profile. Preflight proved both foreground and background model roles are pinned to claude-haiku-4-5-20251001, the protected broker credential is configured without entering the disposable command container, and the sandbox plus synthetic checks pass. A paid isolated background job then fetched and promoted a real Hacker News source successfully. Qwen remains available only through the explicit deprecated Ollama development selector.

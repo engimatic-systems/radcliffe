@@ -40,3 +40,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T15:00:04Z**
 
 2026-07-21 isolated Haiku conformance job job_9df03620527e83b55c8f1e8fe7352ec successfully fetched the official Hacker News API data and wrote its report, then exposed an executor bug: DockerSandbox embedded model commands inside a brace group followed by a semicolon, which made valid heredoc terminators fail parsing. After Haiku worked around that syntax, the next provider exception was collapsed to executor_failed. The command is now passed as a separate shell argument, and bounded provider retries emit stable model_rate_limited, model_provider_unavailable, model_request_failed, or model_response_invalid codes with content-safe private diagnostics.
+
+**2026-07-21T15:02:47Z**
+
+2026-07-21 deployed regression pass on revision 90ab7fd: isolated Haiku job job_f627f6ffe8df4fb07bd40bd41e3ff8b7 fetched the official Hacker News Firebase API and succeeded at revision 8. It promoted two artifacts, one UTF-8 Markdown source, and one grounded finding; independent verification confirmed the source names the official API and contains at least ten headline rows. The conformance session was archived. Physical phone fetch/read remains the operator-final-check gate.
