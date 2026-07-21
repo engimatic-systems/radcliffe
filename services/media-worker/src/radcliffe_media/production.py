@@ -52,9 +52,11 @@ class EndpointSettings:
     pre_roll_ms: float = 600
     foreground_rms_threshold: float = 1200
     barge_in_rms_threshold: float = 1800
+    strong_barge_in_rms_threshold: float = 8000
     minimum_voice_ms: float = 250
     minimum_foreground_voice_ms: float = 160
     barge_in_confirmation_ms: float = 120
+    strong_barge_in_confirmation_ms: float = 400
     barge_in_release_ms: float = 120
     end_silence_ms: float = 900
     maximum_unconfirmed_ms: float = 2000
@@ -62,6 +64,7 @@ class EndpointSettings:
     minimum_maximum_voice_ratio: float = 0.05
     minimum_speech_windows: int = 2
     speech_probability: float = 0.5
+    strong_barge_in_minimum_probability: float = 0.15
     minimum_average_log_probability: float = -1.5
     short_foreground_voice_ms: float = 700
     short_minimum_average_log_probability: float = -0.9
@@ -75,9 +78,11 @@ class EndpointSettings:
                 self.pre_roll_ms,
                 self.foreground_rms_threshold,
                 self.barge_in_rms_threshold,
+                self.strong_barge_in_rms_threshold,
                 self.minimum_voice_ms,
                 self.minimum_foreground_voice_ms,
                 self.barge_in_confirmation_ms,
+                self.strong_barge_in_confirmation_ms,
                 self.barge_in_release_ms,
                 self.end_silence_ms,
                 self.maximum_unconfirmed_ms,
@@ -91,6 +96,10 @@ class EndpointSettings:
             raise ValueError("foreground RMS threshold must exceed the candidate threshold")
         if self.barge_in_rms_threshold < self.foreground_rms_threshold:
             raise ValueError("barge-in RMS threshold must not be below the foreground threshold")
+        if self.strong_barge_in_rms_threshold <= self.barge_in_rms_threshold:
+            raise ValueError("strong barge-in RMS threshold must exceed the normal threshold")
+        if self.strong_barge_in_confirmation_ms < self.barge_in_confirmation_ms:
+            raise ValueError("strong barge-in confirmation must not be shorter than normal")
         if self.minimum_foreground_voice_ms > self.maximum_unconfirmed_ms:
             raise ValueError("foreground confirmation must fit inside the unconfirmed timeout")
         if not 0 < self.minimum_maximum_voice_ratio <= 1:
@@ -99,6 +108,8 @@ class EndpointSettings:
             raise ValueError("minimum speech windows must be positive")
         if not 0 < self.speech_probability < 1:
             raise ValueError("speech probability must be between zero and one")
+        if not 0 < self.strong_barge_in_minimum_probability < self.speech_probability:
+            raise ValueError("strong barge-in probability must be below the speech threshold")
         if not 0 <= self.maximum_no_speech_probability <= 1:
             raise ValueError("no-speech probability must be between zero and one")
         if self.maximum_compression_ratio <= 0:
@@ -119,12 +130,18 @@ class EndpointSettings:
                 os.environ.get("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1200")
             ),
             barge_in_rms_threshold=float(os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1800")),
+            strong_barge_in_rms_threshold=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS", "8000")
+            ),
             minimum_voice_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "250")),
             minimum_foreground_voice_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "160")
             ),
             barge_in_confirmation_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_CONFIRMATION_MS", "120")
+            ),
+            strong_barge_in_confirmation_ms=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS", "400")
             ),
             barge_in_release_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "120")
@@ -144,6 +161,9 @@ class EndpointSettings:
             ),
             speech_probability=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.5")
+            ),
+            strong_barge_in_minimum_probability=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY", "0.15")
             ),
             minimum_average_log_probability=float(
                 os.environ.get("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-1.5")
@@ -384,30 +404,62 @@ class EndpointProcessor(FrameProcessor):
         self.barge_in_analyzed_voice_ms = self.barge_in_voice_ms
         speech_windows: int | None = None
         maximum_speech_probability: float | None = None
+        verifier = "speech_activity"
         if self.activity is not None:
             evidence = await self.activity.analyze(bytes(self.buffer), sample_rate, channels)
             speech_windows = evidence.speech_window_count
             maximum_speech_probability = evidence.maximum_probability
             if speech_windows < self.settings.minimum_speech_windows:
-                logger.info(
-                    "voice barge-in candidate rejected reason=insufficient_speech_activity "
-                    "barge_in_voice_ms={} speech_windows={} maximum_speech_probability={}",
-                    round(self.barge_in_voice_ms, 2),
-                    speech_windows,
-                    round(maximum_speech_probability, 4),
+                strong_zero_window_candidate = (
+                    speech_windows == 0
+                    and self.barge_in_voice_ms >= self.settings.strong_barge_in_confirmation_ms
+                    and self.maximum_rms >= self.settings.strong_barge_in_rms_threshold
+                    and maximum_speech_probability
+                    >= self.settings.strong_barge_in_minimum_probability
                 )
-                return
+                if strong_zero_window_candidate:
+                    verifier = "high_energy_fallback"
+                else:
+                    disposition = (
+                        "pending_high_energy_fallback"
+                        if speech_windows == 0
+                        and self.maximum_rms >= self.settings.strong_barge_in_rms_threshold
+                        and maximum_speech_probability
+                        >= self.settings.strong_barge_in_minimum_probability
+                        else "rejected"
+                    )
+                    logger.info(
+                        "voice barge-in candidate disposition={} "
+                        "reason=insufficient_speech_activity barge_in_voice_ms={} "
+                        "foreground_voice_ms={} maximum_rms={} speech_windows={} "
+                        "maximum_speech_probability={}",
+                        disposition,
+                        round(self.barge_in_voice_ms, 2),
+                        round(self.foreground_voice_ms, 2),
+                        round(self.maximum_rms, 2),
+                        speech_windows,
+                        round(maximum_speech_probability, 4),
+                    )
+                    return
         self.barge_in_confirmed = True
         logger.info(
-            "voice barge-in confirmed barge_in_voice_ms={} speech_windows={} "
+            "voice barge-in confirmed verifier={} barge_in_voice_ms={} "
+            "foreground_voice_ms={} maximum_rms={} speech_windows={} "
             "maximum_speech_probability={}",
+            verifier,
             round(self.barge_in_voice_ms, 2),
+            round(self.foreground_voice_ms, 2),
+            round(self.maximum_rms, 2),
             speech_windows,
             round(maximum_speech_probability, 4)
             if maximum_speech_probability is not None
             else None,
         )
-        await self._cancel_current_turn(preserve_candidate=True)
+        await self._cancel_current_turn(
+            preserve_candidate=True,
+            verifier=verifier,
+            evidence_duration_ms=self.barge_in_voice_ms,
+        )
 
     def _reset_candidate(self, *, preserve_speaking: bool = False) -> None:
         self.speaking = preserve_speaking
@@ -554,12 +606,21 @@ class EndpointProcessor(FrameProcessor):
         self.paused = False
         await self._cancel_current_turn()
 
-    async def _cancel_current_turn(self, *, preserve_candidate: bool = False) -> None:
+    async def _cancel_current_turn(
+        self,
+        *,
+        preserve_candidate: bool = False,
+        verifier: str = "explicit_control",
+        evidence_duration_ms: float | None = None,
+    ) -> None:
         turn_task = self.turn_task
         if not preserve_candidate:
             self._reset_candidate()
         if self.voice is not None:
-            await self.voice.barge_in()
+            await self.voice.barge_in(
+                verifier=verifier,
+                evidence_duration_ms=evidence_duration_ms,
+            )
         if turn_task is not None and not turn_task.done():
             turn_task.cancel()
             await asyncio.gather(turn_task, return_exceptions=True)

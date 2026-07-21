@@ -302,8 +302,45 @@ class VoicePipeline:
                 await self._notify_state(previous, "audio input ready")
             return self.engine.generation
 
-    async def barge_in(self) -> None:
+    async def barge_in(
+        self,
+        *,
+        verifier: str = "explicit_control",
+        evidence_duration_ms: float | None = None,
+    ) -> None:
+        turn = self._active_turn
+        operation = turn.operation if turn is not None else None
+        if operation is not None:
+            self.telemetry.emit(
+                component="media_worker",
+                event="barge_in",
+                outcome="succeeded",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase=verifier,
+                operation=operation,
+                duration_ms=evidence_duration_ms,
+            )
+            self.telemetry.emit(
+                component="media_worker",
+                event="playback_flush",
+                outcome="started",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase="barge_in",
+                operation=operation,
+            )
         await self._cancel_active("interrupted", always_flush=True)
+        if operation is not None:
+            self.telemetry.emit(
+                component="media_worker",
+                event="playback_flush",
+                outcome="succeeded",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase="barge_in",
+                operation=operation,
+            )
         if self.engine.state is ConversationState.PAUSED:
             previous = self.engine.state
             self._paused_source = None

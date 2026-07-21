@@ -190,6 +190,13 @@ generic segment evidence rejects non-finite, repetitive, no-speech, or very
 low-log-probability output. Rejection logs contain only aggregate confidence
 and timing—not transcript text or microphone audio—and no phrase is
 blacklisted.
+During active playback, a sustained near-field candidate that is much stronger
+than the normal barge-in floor can recover from Silero's zero-window branch only
+after 400 ms and a non-zero confidence floor. The bounded fallback defaults are
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS=8000`,
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS=400`, and
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY=0.15`; ordinary echo, room
+tone, and loud non-speech remain subject to the normal Silero gate.
 Model speech flushes on sentence and completed-line
 boundaries, with `RADCLIFFE_MODEL_CHUNK_CHARS` providing an upper bound for
 punctuation-poor output. Phase logs report endpointing, transcription, first

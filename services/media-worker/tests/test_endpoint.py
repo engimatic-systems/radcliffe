@@ -52,6 +52,24 @@ class FakeActivity:
         )
 
 
+class SequencedActivity(FakeActivity):
+    def __init__(self, probabilities: tuple[float, ...]) -> None:
+        super().__init__(speech_windows=0, maximum_probability=probabilities[-1])
+        self.probabilities = probabilities
+
+    async def analyze(
+        self, _pcm: bytes, _sample_rate: int, _channels: int
+    ) -> SpeechActivityEvidence:
+        probability = self.probabilities[min(self.calls, len(self.probabilities) - 1)]
+        self.calls += 1
+        return SpeechActivityEvidence(
+            window_count=50,
+            speech_window_count=0,
+            maximum_probability=probability,
+            average_probability=probability / 2,
+        )
+
+
 class FakeVoice:
     def __init__(self, *, block_first: bool = False) -> None:
         self.block_first = block_first
@@ -74,7 +92,7 @@ class FakeVoice:
         finally:
             self.active -= 1
 
-    async def barge_in(self) -> None:
+    async def barge_in(self, **_evidence: object) -> None:
         self.barge_ins += 1
 
     def foreground_turn_active(self) -> bool:
@@ -199,14 +217,17 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_PRE_ROLL_MS", "360")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1900")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS", "9000")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "180")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_CONFIRMATION_MS", "340")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS", "500")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "140")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "20000")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.07")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "3")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.55")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY", "0.2")
     monkeypatch.setenv("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-0.9")
     monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_FOREGROUND_MS", "650")
     monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_MIN_AVG_LOGPROB", "-0.7")
@@ -218,9 +239,11 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         pre_roll_ms=360,
         foreground_rms_threshold=1300,
         barge_in_rms_threshold=1900,
+        strong_barge_in_rms_threshold=9000,
         minimum_voice_ms=300,
         minimum_foreground_voice_ms=180,
         barge_in_confirmation_ms=340,
+        strong_barge_in_confirmation_ms=500,
         barge_in_release_ms=140,
         end_silence_ms=1200,
         maximum_unconfirmed_ms=2200,
@@ -228,6 +251,7 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         minimum_maximum_voice_ratio=0.07,
         minimum_speech_windows=3,
         speech_probability=0.55,
+        strong_barge_in_minimum_probability=0.2,
         minimum_average_log_probability=-0.9,
         short_foreground_voice_ms=650,
         short_minimum_average_log_probability=-0.7,
@@ -309,6 +333,59 @@ async def test_loud_non_speech_must_pass_activity_gate_before_barge_in() -> None
     endpoint.activity = FakeActivity(speech_windows=0, maximum_probability=0.12)
 
     await feed(endpoint, voiced=True, frames=30)
+    await feed(endpoint, voiced=False, frames=45)
+
+    assert voice.active == 1
+    assert voice.barge_ins == 0
+    assert voice.transcripts == ["transcript-1"]
+    assert len(speech.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retained_high_energy_zero_window_overlap_uses_bounded_fallback() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(
+        speech,
+        EndpointSettings(barge_in_confirmation_ms=137.5),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    activity = SequencedActivity((0.1565, 0.2015, 0.3709))
+    endpoint.activity = activity
+
+    for _ in range(21):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=12517),
+            FrameDirection.DOWNSTREAM,
+        )
+
+    assert activity.calls == 3
+    assert voice.barge_ins == 1
+    assert endpoint.barge_in_confirmed
+    assert voice.active == 0
+
+
+@pytest.mark.asyncio
+async def test_strong_zero_window_echo_stays_rejected_below_probability_floor() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    endpoint.activity = FakeActivity(speech_windows=0, maximum_probability=0.12)
+
+    for _ in range(30):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=12517),
+            FrameDirection.DOWNSTREAM,
+        )
     await feed(endpoint, voiced=False, frames=45)
 
     assert voice.active == 1

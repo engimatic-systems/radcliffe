@@ -1849,6 +1849,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
     await store.migrate()
     events = FakeEvents()
     publisher = FakePublisher()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
     pipeline = VoicePipeline(
         "s1",
         store,
@@ -1856,6 +1857,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
         FakeSynthesizer(),
         publisher,
         events,
+        telemetry=TelemetrySink(telemetry_path, strict=True),
         client_playback_acknowledgements=True,
     )
     await pipeline.start()
@@ -1877,7 +1879,10 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
     assert pipeline.engine.state is ConversationState.SPEAKING
     assert pipeline.foreground_turn_active()
 
-    await pipeline.barge_in()
+    await pipeline.barge_in(
+        verifier="high_energy_fallback",
+        evidence_duration_ms=412.5,
+    )
     await asyncio.wait_for(turn, timeout=1)
 
     assert publisher.flushed
@@ -1924,3 +1929,18 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
             )
         ]
     assert statuses == ["flushed", "flushed"]
+    telemetry = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
+    correlated = [item for item in telemetry if item["operation"] == operation.operation_id]
+    assert any(
+        item["event"] == "barge_in"
+        and item["phase"] == "high_energy_fallback"
+        and item["duration_ms"] == 412.5
+        for item in correlated
+    )
+    assert [item["outcome"] for item in correlated if item["event"] == "playback_flush"] == [
+        "started",
+        "succeeded",
+    ]
+    assert any(
+        item["event"] == "playback" and item["outcome"] == "interrupted" for item in correlated
+    )
