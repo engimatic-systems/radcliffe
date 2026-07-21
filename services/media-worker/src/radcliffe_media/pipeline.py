@@ -684,7 +684,11 @@ class VoicePipeline:
                     and result_details.get("recoverable") is True
                     and result_details.get("errorCode") == "invalid_arguments"
                 )
-                raw_field = result_details.get("field") if recoverable else None
+                raw_field = (
+                    result_details.get("field")
+                    if recoverable and isinstance(result_details, dict)
+                    else None
+                )
                 field = (
                     raw_field
                     if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
