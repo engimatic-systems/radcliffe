@@ -27,7 +27,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -940,21 +939,12 @@ class MainActivity : ComponentActivity() {
         }
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column {
-                Text("Show system messages", style = MaterialTheme.typography.bodySmall)
-                Text(
-                    "Protocol notices remain stored when hidden",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            Switch(
+            SystemMessageToggle(
                 checked = showSystemMessages,
                 onCheckedChange = onShowSystemMessages,
             )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { selectExportFormat = true }, enabled = !exportInFlight) {
                 Text(if (exportInFlight) "Exporting…" else "Export")
             }
