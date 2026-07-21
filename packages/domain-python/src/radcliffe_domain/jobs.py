@@ -93,6 +93,10 @@ _EXECUTOR_DETAIL_CODES = {
             "tool_arguments_invalid",
             "model_no_action",
             "model_unavailable",
+            "model_rate_limited",
+            "model_provider_unavailable",
+            "model_request_failed",
+            "model_response_invalid",
         }
     ),
     JobEventKind.CANCELLED: frozenset(

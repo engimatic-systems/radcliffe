@@ -96,6 +96,14 @@ _JOB_OUTCOME_EXPLANATIONS = {
     "tool_arguments_invalid": "The job agent repeatedly produced invalid tool arguments.",
     "model_no_action": "The job model repeatedly failed to choose an available action.",
     "model_unavailable": "No approved background job model was configured.",
+    "model_rate_limited": (
+        "The job model provider kept rate-limiting the request after bounded retries."
+    ),
+    "model_provider_unavailable": (
+        "The job model provider remained unavailable after bounded retries."
+    ),
+    "model_request_failed": "The job model provider rejected the request.",
+    "model_response_invalid": "The job model provider returned an invalid or oversized response.",
 }
 
 

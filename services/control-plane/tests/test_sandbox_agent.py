@@ -1,5 +1,6 @@
 import json
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from radcliffe_control.sandbox_agent import (
     SYSTEM_PROMPT,
     AnthropicAgent,
     DockerSandbox,
+    JobModelRequestError,
     OllamaAgent,
     PrivateTranscript,
     StartFrame,
@@ -178,6 +180,92 @@ def test_anthropic_job_model_is_pinned_bounded_and_forces_one_tool(monkeypatch) 
         }
     ]
     assert agent.spent_usd == pytest.approx(0.0002)
+
+
+def test_anthropic_job_model_retries_rate_limits_without_recording_response_body(
+    monkeypatch,
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_request(_request, *, timeout):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages",
+                429,
+                "rate limited",
+                {"retry-after": "2"},
+                None,
+            )
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    monkeypatch.setattr("radcliffe_control.sandbox_agent.time.sleep", delays.append)
+
+    message = AnthropicAgent(api_key="fake-key").chat([{"role": "user", "content": "do work"}])
+
+    assert attempts == 2
+    assert delays == [2.0]
+    assert message["tool_calls"]
+
+
+def test_agent_reports_a_stable_model_provider_failure(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+
+    class FailedAgent:
+        @property
+        def spent_usd(self) -> float:
+            return 0.0
+
+        def chat(self, _messages):
+            raise JobModelRequestError("model_rate_limited")
+
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
+            agent=FailedAgent(),
+            transcript=transcript,
+            max_steps=1,
+        )
+    finally:
+        transcript.close()
+
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "model_rate_limited"
+    records = [
+        json.loads(line)
+        for line in workspace.joinpath("agent-transcript.jsonl").read_text().splitlines()
+    ]
+    assert records[-1] == {
+        "kind": "model_error",
+        "payload": {"code": "model_rate_limited"},
+    }
 
 
 def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> None:
@@ -542,6 +630,42 @@ def test_docker_sandbox_mounts_only_attempt_workspace_and_uses_internal_network(
     assert not any(
         "TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_create
     )
+
+
+def test_docker_sandbox_passes_multiline_commands_as_an_opaque_argument(tmp_path) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    command = """cat > report.md <<'EOF'\nfirst line\nsecond line\nEOF"""
+    calls: list[list[str]] = []
+
+    def capture(arguments, *, timeout=30, check=True):
+        del timeout, check
+        calls.append(list(arguments))
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    sandbox._run = capture  # type: ignore[method-assign]
+
+    assert sandbox.execute(command) == (0, "", False)
+    invocation = calls[-1]
+    assert invocation[-1] == command
+    assert command not in invocation[-3]
+    local = subprocess.run(
+        invocation[-5:],
+        cwd=workspace,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert local.returncode == 0
+    assert workspace.joinpath("report.md").read_text() == "first line\nsecond line\n"
 
 
 def test_docker_sandbox_cleans_partial_start_when_proxy_is_unavailable(tmp_path) -> None:

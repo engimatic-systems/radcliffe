@@ -28,3 +28,7 @@ A completed spoken announcement appears exactly once in durable replay and model
 **2026-07-21T14:35:25Z**
 
 2026-07-21 physical Haiku trace ses_ece6459346fbe944ae5be96736984b1c: job job_b2c386d6c3e04be43cbe5be9e680b184 failed at revision 16 with detail_code=resource_exhausted and delivery_sequence=141. The durable envelope stream contains no JobEvent or harness-announcement entry between the user's earlier request and later 'Do you know why?' turn. The worker spoke the allowlisted failure phrase through foreground audio only; context_replay therefore could not project it. The private job transcript shows repeated failed commands and no terminal explanation.
+
+**2026-07-21T15:00:04Z**
+
+Failure plumbing now distinguishes background model rate limits, provider outages, rejected requests, invalid responses, and generic trusted-executor faults. These stable terminal detail codes flow through the existing durable hidden job-outcome envelope and manage_job latestEvent, so the next foreground turn can explain or inspect the failure without transcript disclosure.

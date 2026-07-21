@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -406,7 +407,7 @@ class DockerSandbox:
         )
 
     def execute(self, command: str, *, timeout_seconds: int = 180) -> tuple[int, str, bool]:
-        bounded = f"set -o pipefail; {{ {command}; }} 2>&1 | head -c {COMMAND_OUTPUT_LIMIT}"
+        bounded = f'set -o pipefail; bash -lc "$1" 2>&1 | head -c {COMMAND_OUTPUT_LIMIT}'
         try:
             result = self._run(
                 [
@@ -416,8 +417,10 @@ class DockerSandbox:
                     "--signal=TERM",
                     str(timeout_seconds),
                     "bash",
-                    "-lc",
+                    "-c",
                     bounded,
+                    "radcliffe-job-command",
+                    command,
                 ],
                 timeout=timeout_seconds + 15,
                 check=False,
@@ -514,8 +517,15 @@ class AnthropicBudgetExhausted(RuntimeError):
     pass
 
 
+class JobModelRequestError(RuntimeError):
+    def __init__(self, detail_code: str) -> None:
+        super().__init__("the background job model request failed")
+        self.detail_code = detail_code
+
+
 class AnthropicAgent:
     endpoint = "https://api.anthropic.com/v1/messages"
+    max_request_attempts = 4
 
     def __init__(
         self,
@@ -639,16 +649,39 @@ class AnthropicAgent:
                 separators=(",", ":"),
             ).encode(),
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                encoded = response.read(MODEL_RESPONSE_LIMIT + 1)
+        payload: object = None
+        for attempt in range(self.max_request_attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    encoded = response.read(MODEL_RESPONSE_LIMIT + 1)
                 if len(encoded) > MODEL_RESPONSE_LIMIT:
-                    raise RuntimeError("Anthropic model response exceeded its limit")
+                    raise JobModelRequestError("model_response_invalid")
                 payload = json.loads(encoded)
-        except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-            raise RuntimeError("Anthropic job model request failed") from error
+                break
+            except urllib.error.HTTPError as error:
+                if error.code == 429:
+                    detail_code = "model_rate_limited"
+                elif error.code in {500, 502, 503, 529}:
+                    detail_code = "model_provider_unavailable"
+                else:
+                    raise JobModelRequestError("model_request_failed") from error
+                if attempt + 1 >= self.max_request_attempts:
+                    raise JobModelRequestError(detail_code) from error
+                retry_after = 0.0
+                if error.headers is not None:
+                    try:
+                        retry_after = float(error.headers.get("retry-after", "0"))
+                    except ValueError:
+                        retry_after = 0.0
+                time.sleep(min(30.0, max(float(2**attempt), retry_after)))
+            except (OSError, urllib.error.URLError) as error:
+                if attempt + 1 >= self.max_request_attempts:
+                    raise JobModelRequestError("model_provider_unavailable") from error
+                time.sleep(float(2**attempt))
+            except json.JSONDecodeError as error:
+                raise JobModelRequestError("model_response_invalid") from error
         if not isinstance(payload, dict) or not isinstance(payload.get("content"), list):
-            raise RuntimeError("Anthropic job model returned an invalid message")
+            raise JobModelRequestError("model_response_invalid")
         usage = payload.get("usage")
         if isinstance(usage, dict):
             input_tokens = int(usage.get("input_tokens", 0))
@@ -1052,6 +1085,10 @@ def run_agent(
         except AnthropicBudgetExhausted:
             emit_event("failed", "budget_exhausted")
             return False
+        except JobModelRequestError as error:
+            transcript.append("model_error", {"code": error.detail_code})
+            emit_event("failed", error.detail_code)
+            return False
         transcript.append("model", message)
         tool_calls = message.get("tool_calls")
         if not isinstance(tool_calls, list) or not tool_calls:
@@ -1354,7 +1391,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
             else 1
         )
-    except (OSError, RuntimeError, ValueError, ValidationError):
+    except (OSError, RuntimeError, ValueError, ValidationError) as error:
+        if transcript is not None:
+            transcript.append(
+                "executor_error",
+                {"code": "executor_failed", "type": type(error).__name__},
+            )
         emit_event("failed", "executor_failed")
         return 1
     finally:

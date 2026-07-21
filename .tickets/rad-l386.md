@@ -36,3 +36,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T14:51:53Z**
 
 2026-07-21 second physical trace ses_ece6459346fbe944ae5be96736984b1c exposed two additional causes. The foreground sidecar was Haiku, but the background executor was still Qwen. Its Hacker News attempt used an obsolete HTML selector, then malformed or incomplete API pipelines, repeated identical failures, emitted eight no-action responses, and exhausted 24 steps. The Marginal Revolution attempt also called finish_job with an explicitly failed summary, incorrectly producing succeeded status. The fix must pin Haiku for the job broker, block identical failed commands/no-action loops, and provide a typed unsuccessful completion with a durable summary.
+
+**2026-07-21T15:00:04Z**
+
+2026-07-21 isolated Haiku conformance job job_9df03620527e83b55c8f1e8fe7352ec successfully fetched the official Hacker News API data and wrote its report, then exposed an executor bug: DockerSandbox embedded model commands inside a brace group followed by a semicolon, which made valid heredoc terminators fail parsing. After Haiku worked around that syntax, the next provider exception was collapsed to executor_failed. The command is now passed as a separate shell argument, and bounded provider retries emit stable model_rate_limited, model_provider_unavailable, model_request_failed, or model_response_invalid codes with content-safe private diagnostics.
