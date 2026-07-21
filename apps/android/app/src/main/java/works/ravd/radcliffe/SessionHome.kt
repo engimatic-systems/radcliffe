@@ -388,7 +388,7 @@ private fun ContextDonut(model: ContextIndicatorModel) {
         ContextSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
         ContextSeverity.NEAR_LIMIT, ContextSeverity.OVER_LIMIT -> MaterialTheme.colorScheme.error
         ContextSeverity.UNKNOWN -> MaterialTheme.colorScheme.secondary
-        ContextSeverity.UNAVAILABLE -> MaterialTheme.colorScheme.outline
+        ContextSeverity.UNAVAILABLE -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val track = MaterialTheme.colorScheme.surfaceVariant
     Box(
