@@ -63,6 +63,8 @@ class EndpointSettings:
     minimum_speech_windows: int = 2
     speech_probability: float = 0.5
     minimum_average_log_probability: float = -1.5
+    short_foreground_voice_ms: float = 700
+    short_minimum_average_log_probability: float = -0.9
     maximum_no_speech_probability: float = 0.6
     maximum_compression_ratio: float = 2.4
 
@@ -80,6 +82,7 @@ class EndpointSettings:
                 self.end_silence_ms,
                 self.maximum_unconfirmed_ms,
                 self.maximum_utterance_ms,
+                self.short_foreground_voice_ms,
             )
             <= 0
         ):
@@ -100,6 +103,12 @@ class EndpointSettings:
             raise ValueError("no-speech probability must be between zero and one")
         if self.maximum_compression_ratio <= 0:
             raise ValueError("compression ratio must be positive")
+        if not math.isfinite(self.minimum_average_log_probability) or not math.isfinite(
+            self.short_minimum_average_log_probability
+        ):
+            raise ValueError("decoder confidence thresholds must be finite")
+        if self.short_minimum_average_log_probability < self.minimum_average_log_probability:
+            raise ValueError("short decoder confidence must not be looser than the general floor")
 
     @classmethod
     def from_environment(cls) -> EndpointSettings:
@@ -138,6 +147,12 @@ class EndpointSettings:
             ),
             minimum_average_log_probability=float(
                 os.environ.get("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-1.5")
+            ),
+            short_foreground_voice_ms=float(
+                os.environ.get("RADCLIFFE_WHISPER_SHORT_FOREGROUND_MS", "700")
+            ),
+            short_minimum_average_log_probability=float(
+                os.environ.get("RADCLIFFE_WHISPER_SHORT_MIN_AVG_LOGPROB", "-0.9")
             ),
             maximum_no_speech_probability=float(
                 os.environ.get("RADCLIFFE_WHISPER_MAX_NO_SPEECH_PROBABILITY", "0.6")
@@ -343,6 +358,7 @@ class EndpointProcessor(FrameProcessor):
                     frame.sample_rate,
                     frame.num_channels,
                     voice_ms=voice_ms,
+                    foreground_voice_ms=foreground_voice_ms,
                     voice_ratio=voice_ratio,
                     endpoint_reason="maximum_utterance" if maximum_endpoint else "silence",
                     pre_roll_ms=max(0.0, pre_roll_ms),
@@ -423,6 +439,7 @@ class EndpointProcessor(FrameProcessor):
         channels: int,
         *,
         voice_ms: float,
+        foreground_voice_ms: float,
         voice_ratio: float,
         endpoint_reason: str,
         pre_roll_ms: float,
@@ -458,9 +475,15 @@ class EndpointProcessor(FrameProcessor):
                 transcription = Transcription(
                     await self.speech.transcribe(pcm, sample_rate, channels)
                 )
+            short_candidate = foreground_voice_ms <= self.settings.short_foreground_voice_ms
+            decoder_confidence_floor = (
+                self.settings.short_minimum_average_log_probability
+                if short_candidate
+                else self.settings.minimum_average_log_probability
+            )
             assessment = assess_transcription(
                 transcription,
-                minimum_average_log_probability=(self.settings.minimum_average_log_probability),
+                minimum_average_log_probability=decoder_confidence_floor,
                 maximum_no_speech_probability=(self.settings.maximum_no_speech_probability),
                 maximum_compression_ratio=self.settings.maximum_compression_ratio,
             )
@@ -476,6 +499,7 @@ class EndpointProcessor(FrameProcessor):
                         endpoint_reason=endpoint_reason,
                         audio_ms=len(pcm) / (2 * channels * sample_rate) * 1000,
                         voice_ms=voice_ms,
+                        foreground_voice_ms=foreground_voice_ms,
                         voice_ratio=voice_ratio,
                         pre_roll_ms=pre_roll_ms,
                         trailing_silence_ms=trailing_silence_ms,
@@ -485,7 +509,8 @@ class EndpointProcessor(FrameProcessor):
                 "voice turn phase complete phase=transcription duration_ms={} audio_ms={} "
                 "accepted={} reason={} voice_ms={} voice_ratio={} speech_windows={} "
                 "maximum_speech_probability={} segment_count={} average_log_probability={} "
-                "maximum_no_speech_probability={} maximum_compression_ratio={}",
+                "maximum_no_speech_probability={} maximum_compression_ratio={} "
+                "foreground_voice_ms={} decoder_confidence_floor={} short_candidate={}",
                 round((monotonic() - started_at) * 1000, 2),
                 round(len(pcm) / (2 * channels * sample_rate) * 1000, 2),
                 assessment.accepted,
@@ -506,11 +531,16 @@ class EndpointProcessor(FrameProcessor):
                 round(assessment.maximum_compression_ratio, 4)
                 if assessment.maximum_compression_ratio is not None
                 else None,
+                round(foreground_voice_ms, 2),
+                decoder_confidence_floor,
+                short_candidate,
             )
             if self.voice is not None and not self.paused:
                 if assessment.accepted:
                     await self.voice.handle_transcript(transcription.text)
-                elif assessment.reason in {"low_log_probability", "decoder_disagreement"}:
+                elif assessment.reason == "decoder_disagreement" or (
+                    assessment.reason == "low_log_probability" and not short_candidate
+                ):
                     await self.voice.request_clarification(assessment.reason)
         except asyncio.CancelledError:
             raise

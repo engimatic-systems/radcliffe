@@ -672,10 +672,14 @@ Subminimum bursts reset after the normal silence window, and sparse
 maximum-duration candidates are rejected by voice occupancy before STT.
 Remaining local candidates pass a speech-likeness model and then a
 decoder-evidence policy using segment no-speech probability, average log
-probability, compression ratio, and finite-value checks. Rejected candidates
-create no `USER` envelope or model call. The policy is based on acoustic and
-decoder evidence, never a blacklist of transcript phrases, and logs only
-aggregate evidence without retaining phone microphone audio.
+probability, compression ratio, and finite-value checks. Short foreground
+candidates use a stricter average-log-probability floor than longer speech so
+low-confidence room artifacts remain content-free and silent, while deliberate
+short commands and acknowledgements still pass when decoder evidence is
+strong. Rejected candidates create no `USER` envelope or model call. The
+policy is based on acoustic and decoder evidence, never a blacklist of
+transcript phrases, and logs only aggregate evidence without retaining phone
+microphone audio.
 
 ### Pi Agent Core adapter
 

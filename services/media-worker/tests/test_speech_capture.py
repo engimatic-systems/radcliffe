@@ -82,7 +82,7 @@ def test_capture_requires_owner_identity_and_private_bounded_files(tmp_path) -> 
         1,
         transcription,
         assess_transcription(transcription),
-        EndpointCaptureEvidence("silence", 100, 80, 0.8, 20, 20),
+        EndpointCaptureEvidence("silence", 100, 80, 70, 0.8, 20, 20),
     )
 
     assert metadata_path == output / "first-turn-speaker.json"
@@ -99,6 +99,7 @@ def test_capture_requires_owner_identity_and_private_bounded_files(tmp_path) -> 
     assert metadata["expected"] == "Please turn on the kitchen lights."
     assert metadata["actual"] == transcription.text
     assert metadata["transport"]["track_subscription_to_first_frame_ms"] is not None
+    assert metadata["endpoint"]["foreground_voice_ms"] == 70
     assert metadata["endpoint"]["pre_roll_ms"] == 20
     assert capture.remaining == 1
 
@@ -118,7 +119,7 @@ def test_capture_rejects_audio_over_thirty_seconds(tmp_path) -> None:
             1,
             transcription,
             assess_transcription(transcription),
-            EndpointCaptureEvidence("maximum_utterance", 30_001, 1000, 0.5, 0, 0),
+            EndpointCaptureEvidence("maximum_utterance", 30_001, 1000, 900, 0.5, 0, 0),
         )
 
 
@@ -155,7 +156,7 @@ def test_capture_files_are_not_group_or_world_readable(tmp_path) -> None:
         1,
         transcription,
         assess_transcription(transcription),
-        EndpointCaptureEvidence("silence", 10, 10, 1, 0, 0),
+        EndpointCaptureEvidence("silence", 10, 10, 8, 1, 0, 0),
     )
 
     assert path is not None

@@ -126,6 +126,7 @@ class EndpointCaptureEvidence:
     endpoint_reason: str
     audio_ms: float
     voice_ms: float
+    foreground_voice_ms: float | None
     voice_ratio: float
     pre_roll_ms: float
     trailing_silence_ms: float
@@ -254,6 +255,9 @@ class SpeechCapture:
                 "reason": endpoint.endpoint_reason,
                 "audio_ms": round(endpoint.audio_ms, 2),
                 "voice_ms": round(endpoint.voice_ms, 2),
+                "foreground_voice_ms": round(endpoint.foreground_voice_ms, 2)
+                if endpoint.foreground_voice_ms is not None
+                else None,
                 "voice_ratio": round(endpoint.voice_ratio, 4),
                 "pre_roll_ms": round(endpoint.pre_roll_ms, 2),
                 "trailing_silence_ms": round(endpoint.trailing_silence_ms, 2),
