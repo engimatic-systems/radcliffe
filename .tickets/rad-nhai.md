@@ -2,7 +2,7 @@
 id: rad-nhai
 status: closed
 deps: [rad-7h1e]
-links: []
+links: [rad-ncdz, rad-l386]
 created: 2026-07-18T00:47:41Z
 type: feature
 priority: 1

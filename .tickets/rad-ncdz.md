@@ -2,7 +2,7 @@
 id: rad-ncdz
 status: open
 deps: [rad-l1jc]
-links: [rad-l1jc, rad-lezo]
+links: [rad-l1jc, rad-lezo, rad-nhai, rad-l386]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 0
