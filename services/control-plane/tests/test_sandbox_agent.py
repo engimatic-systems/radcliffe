@@ -6,7 +6,9 @@ import pytest
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
+    HAIKU_MODEL_ID,
     SYSTEM_PROMPT,
+    AnthropicAgent,
     DockerSandbox,
     OllamaAgent,
     PrivateTranscript,
@@ -121,6 +123,63 @@ def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
     }
 
 
+def test_anthropic_job_model_is_pinned_bounded_and_forces_one_tool(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                }
+            ).encode()
+
+    def open_request(request, *, timeout):
+        captured.update(json.loads(request.data))
+        captured["timeout"] = timeout
+        captured["api_key"] = request.get_header("X-api-key")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    agent = AnthropicAgent(api_key="fake-key", budget_usd=0.25)
+
+    message = agent.chat(
+        [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "do work"},
+        ]
+    )
+
+    assert captured["model"] == HAIKU_MODEL_ID
+    assert captured["max_tokens"] == 1024
+    assert captured["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    assert captured["api_key"] == "fake-key"
+    assert message["tool_calls"] == [
+        {
+            "id": "toolu_1",
+            "function": {
+                "name": "run_shell",
+                "arguments": {"command": "true", "purpose": "testing"},
+            },
+        }
+    ]
+    assert agent.spent_usd == pytest.approx(0.0002)
+
+
 def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> None:
     attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
     artifact_workspace = attempt_workspace / "files"
@@ -160,7 +219,7 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
         assert run_agent(
             start_frame(),
             sandbox=sandbox,  # type: ignore[arg-type]
-            ollama=ollama,
+            agent=ollama,
             transcript=transcript,
             max_steps=3,
             result_workspace=attempt_workspace,
@@ -198,13 +257,103 @@ def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) ->
         assert not run_agent(
             start_frame(),
             sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
-            ollama=ScriptedOllama([{"role": "assistant", "content": "no tool"}]),
+            agent=ScriptedOllama([{"role": "assistant", "content": "no tool"}]),
             transcript=transcript,
             max_steps=1,
         )
     finally:
         transcript.close()
-    assert json.loads(capsys.readouterr().out)["detailCode"] == "resource_exhausted"
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "step_limit_exhausted"
+
+
+def test_agent_fails_semantically_unsuccessful_work_with_a_promoted_reason(
+    tmp_path,
+    capsys,
+) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+    sandbox = FakeSandbox(artifact_workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call(
+                "run_shell",
+                {"command": "curl blocked.example", "purpose": "downloading"},
+            ),
+            tool_call(
+                "fail_job",
+                {
+                    "summary": (
+                        "The requested source could not be acquired after a grounded attempt."
+                    ),
+                    "reasonCode": "source_unavailable",
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=2,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(frame["kind"], frame["detailCode"]) for frame in frames] == [
+        ("progress", "downloading"),
+        ("failed", "source_unavailable"),
+    ]
+    result = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert result is not None
+    assert "could not be acquired" in result.summary
+
+
+def test_agent_does_not_execute_an_identical_failed_command_twice(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+
+    class FailedSandbox(FakeSandbox):
+        def execute(self, command: str, *, timeout_seconds: int) -> tuple[int, str, bool]:
+            self.commands.append((command, timeout_seconds))
+            return 1, "failed", False
+
+    sandbox = FailedSandbox(workspace)
+    repeated = tool_call(
+        "run_shell",
+        {"command": "curl bad.example", "purpose": "downloading"},
+    )
+    agent = ScriptedOllama(
+        [
+            repeated,
+            repeated,
+            tool_call(
+                "fail_job",
+                {"summary": "The source stayed unavailable.", "reasonCode": "source_unavailable"},
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=3,
+        )
+    finally:
+        transcript.close()
+
+    assert sandbox.commands == [("curl bad.example", 60)]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["detailCode"] == (
+        "source_unavailable"
+    )
 
 
 def test_agent_sequences_and_repairs_the_observed_batched_fibonacci_calls(tmp_path, capsys) -> None:
@@ -283,7 +432,7 @@ def test_agent_sequences_and_repairs_the_observed_batched_fibonacci_calls(tmp_pa
         assert run_agent(
             start_frame(),
             sandbox=sandbox,  # type: ignore[arg-type]
-            ollama=ollama,
+            agent=ollama,
             transcript=transcript,
             max_steps=3,
             result_workspace=attempt_workspace,
@@ -319,7 +468,7 @@ def test_agent_retries_invalid_arguments_then_reports_a_specific_failure(tmp_pat
         assert not run_agent(
             start_frame(),
             sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
-            ollama=ScriptedOllama([invalid, invalid, invalid]),
+            agent=ScriptedOllama([invalid, invalid, invalid]),
             transcript=transcript,
             max_steps=3,
         )

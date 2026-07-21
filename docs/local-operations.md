@@ -1,16 +1,15 @@
 # Radcliffe local operations
 
-This runbook operates the private single-owner macOS profile without enabling
-cloud providers. The local Ollama, Whisper, and TTS configuration remains the
-default; having funded provider keys in `var/.env` does not authorize a paid
-request.
+This runbook operates the private single-owner macOS profile. Deterministic
+development keeps cloud providers disabled, while every operator/user acceptance
+run explicitly activates pinned Haiku for both foreground conversation and
+background jobs. Qwen is retained only as a deprecated development selector.
 
-The installed LaunchAgent calls `scripts/run-local-sidecar.sh`, which forces
-Ollama and removes cloud credentials even if live-debug settings are present.
-Cloud testing uses the separate, manually started
-`scripts/run-live-sidecar.sh` path, never an operations fallback. Its explicit
-opt-in, disclosure, budgets, and paid-smoke gate are documented in the root
-README and sidecar README.
+`make services-install-local` installs the deprecated local-only sidecar and can
+be used for deterministic development. It must not be used for user acceptance.
+`make services-install-user-test` installs the separate pinned Haiku runner and
+an owner-visible, non-secret cloud opt-in in the LaunchAgent; provider credentials
+remain only in protected `var/.env`.
 
 ## Install and manage services
 
@@ -18,13 +17,14 @@ Keep `var/.env` mode `0600`, then install the versioned LaunchAgents:
 
 ```sh
 make services-install-local
+make services-install-user-test  # required for operator/user acceptance
 ```
 
 The installer validates the workspace and protected environment, atomically
 writes owner-only plists under `~/Library/LaunchAgents`, reloads services in
 dependency order, and is safe to run again. Plists contain executable and log
-paths only—never environment values, provider keys, bootstrap/internal tokens,
-or LiveKit signing secrets.
+paths plus the non-secret profile opt-in only—never provider keys,
+bootstrap/internal tokens, or LiveKit signing secrets.
 
 The default make target includes the fixed-room compatibility worker used by
 the legacy `radcliffe-demo` room. Server-generated Android conversations use

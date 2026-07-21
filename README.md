@@ -108,11 +108,13 @@ Private job instructions and worker transcripts remain in the job context;
 conversation-facing events contain bounded lifecycle metadata and promoted
 entity or artifact references only.
 
-Background execution remains opt-in. The local deployment uses the repository's
-Colima/Docker sandbox plus a credential-free loopback-Ollama broker; the control
-plane runs it with a scrubbed environment and private per-attempt workspace,
+Background execution remains opt-in. Operator/user acceptance uses the repository's
+Colima/Docker sandbox plus a pinned Haiku broker on the trusted host; the control
+plane gives that broker only the explicitly approved Anthropic credential and a
+private per-attempt workspace,
 streams job context on stdin, and accepts only bounded JSON-line lifecycle
-frames. Deployment details, containment, and limits are documented in
+frames. Model-selected commands remain inside a credential-free container. Deployment details,
+containment, and limits are documented in
 [`services/control-plane/README.md`](services/control-plane/README.md#opt-in-executor-process).
 
 The local simulation is the fast reviewer entry point. The external deployment
@@ -120,6 +122,10 @@ and Pixel run are the acceptance authority for WebRTC, acoustic latency, and
 foreground-service behavior.
 
 ### Local privacy profile
+
+This profile is retained as a deprecated, explicit development path. Qwen output
+is not accepted as operator/user-test evidence; deterministic tests should use
+fakes, and all physical acceptance uses the Haiku profile below.
 
 The LAN launcher defaults are:
 
@@ -177,6 +183,20 @@ gated `make smoke-haiku-paid` records only provider, model, token usage, and
 estimated cost under `artifacts/cloud-haiku-smoke/`. It will not run without
 both the normal cloud opt-in and the one-run approval phrase documented in the
 script. Ordinary tests use fakes and make no Anthropic calls.
+
+For an operator/user acceptance run, activate and verify the persistent managed
+profile with:
+
+```sh
+make services-install-user-test
+make check-background-jobs-local
+```
+
+The first command pins the foreground LaunchAgent to Haiku. The second rejects
+the handoff unless both the foreground sidecar and background job broker are
+pinned to `claude-haiku-4-5-20251001`; it never makes a paid model request.
+The Qwen broker remains available only through an explicit deprecated
+`--provider ollama` development selector.
 
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with

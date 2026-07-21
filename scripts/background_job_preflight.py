@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from radcliffe_domain.store import EventStore
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CONTROL_CAPABILITIES = frozenset({"background_jobs_v1", "promoted_job_results_v1"})
 REQUIRED_SIDECAR_TOOLS = frozenset({"run_job", "manage_job"})
+REQUIRED_USER_TEST_MODEL = "claude-haiku-4-5-20251001"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +101,53 @@ def executor_check(payload: object) -> Check:
     return Check("job_executor", "failed", "job_executor_unavailable")
 
 
+def foreground_model_check(payload: object) -> Check:
+    body = payload if isinstance(payload, dict) else {}
+    ready = (
+        body.get("provider") == "anthropic"
+        and body.get("model_id") == REQUIRED_USER_TEST_MODEL
+        and body.get("data_boundary") == "cloud_anthropic"
+    )
+    return Check(
+        "foreground_model",
+        "ok" if ready else "failed",
+        "haiku_user_test_profile" if ready else "foreground_model_not_haiku",
+    )
+
+
+def job_model_ready(environment: Mapping[str, str]) -> bool:
+    try:
+        command = shlex.split(environment.get("RADCLIFFE_JOB_EXECUTOR_COMMAND", ""))
+        provider_index = command.index("--provider")
+        model_index = command.index("--model")
+        command_ready = (
+            command[provider_index + 1] == "anthropic"
+            and command[model_index + 1] == REQUIRED_USER_TEST_MODEL
+        )
+    except (ValueError, IndexError):
+        command_ready = False
+    return (
+        environment.get("RADCLIFFE_JOB_MODEL_PROVIDER") == "anthropic"
+        and environment.get("RADCLIFFE_JOB_ALLOW_CLOUD_MODELS") == "1"
+        and bool(environment.get("RADCLIFFE_ANTHROPIC_API_KEY"))
+        and command_ready
+    )
+
+
+def background_model_check(payload: object, configuration_ready: bool) -> Check:
+    body = payload if isinstance(payload, dict) else {}
+    ready = (
+        configuration_ready
+        and body.get("background_model_provider") == "anthropic"
+        and body.get("background_model_id") == REQUIRED_USER_TEST_MODEL
+    )
+    return Check(
+        "background_model",
+        "ok" if ready else "failed",
+        "haiku_job_profile" if ready else "background_model_not_haiku",
+    )
+
+
 def validate_live(
     *,
     expected_revision: str,
@@ -107,6 +156,7 @@ def validate_live(
     sidecar_health: object,
     image_available: bool,
     synthetic_smoke: bool,
+    job_model_ready: bool,
 ) -> tuple[Check, ...]:
     return (
         deployment_check(
@@ -122,7 +172,9 @@ def validate_live(
             required_capabilities=REQUIRED_SIDECAR_TOOLS,
             nested_tools=True,
         ),
+        foreground_model_check(sidecar_health),
         executor_check(control_readiness),
+        background_model_check(control_health, job_model_ready),
         Check(
             "sandbox_image",
             "ok" if image_available else "failed",
@@ -244,8 +296,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             sidecar_health=sidecar_health,
             image_available=True,
             synthetic_smoke=True,
+            job_model_ready=job_model_ready(os.environ),
         )
-        if all(check.status == "ok" for check in deployment[:3]):
+        if all(check.status == "ok" for check in deployment[:5]):
             break
         if time.monotonic() >= deadline:
             break
@@ -257,6 +310,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         sidecar_health=sidecar_health,
         image_available=image_available(os.environ),
         synthetic_smoke=asyncio.run(synthetic_executor_smoke()),
+        job_model_ready=job_model_ready(os.environ),
     )
     report = {
         "schema": "radcliffe-background-job-preflight-v1",

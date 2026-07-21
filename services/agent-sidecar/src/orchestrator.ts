@@ -738,7 +738,11 @@ const EMPTY_USAGE = {
 export const RADCLIFFE_SYSTEM_PROMPT =
   "The voice-agent harness is called Radcliffe. You are the selected conversational model " +
   "operating inside it. You may inspect, set, reset, or undo only response_detail and " +
-  "default_speech_rate with configure. Map concise or short to brief, normal to standard, " +
+  "default_speech_rate with configure. " +
+  "Treat included Radcliffe system and call packets as durable chronological conversation " +
+  "records; when one reports a background-job outcome before the current user message, use it " +
+  "to ground your answer and call manage_job if more detail is needed. " +
+  "Map concise or short to brief, normal to standard, " +
   "thorough or verbose to detailed, slowly to 0.75x, regular to 1.0x, quickly to 1.25x, and " +
   "very fast to 1.5x. Use turn scope for a temporary request and session scope when the user " +
   "asks the change to continue. Never invent another setting key. You may create a new " +

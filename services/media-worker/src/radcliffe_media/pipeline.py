@@ -23,6 +23,8 @@ from radcliffe_domain.configuration import (
 )
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_ANNOUNCEMENT_EVENT,
+    BACKGROUND_JOB_OUTCOME_EVENT,
     BACKGROUND_JOB_REFERENCE_EVENT,
     CONFIGURATION_EVENT,
     PROVIDER_BUDGET_EVENT,
@@ -80,6 +82,21 @@ _SPOKEN_OUTPUT_CATEGORIES = frozenset(
     }
 )
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
+
+_JOB_OUTCOME_EXPLANATIONS = {
+    "completed": "A promoted result may be available through manage_job status.",
+    "executor_failed": "The trusted job executor stopped before it produced a result.",
+    "budget_exhausted": "The job exhausted its approved model budget before producing a result.",
+    "runtime_exhausted": "The job exceeded its runtime limit before producing a result.",
+    "resource_exhausted": "The job exhausted a bounded resource before producing a result.",
+    "step_limit_exhausted": "The job agent exhausted its allowed steps without producing a result.",
+    "policy_denied": "The job was blocked by the sandbox policy.",
+    "source_unavailable": "The requested source could not be acquired in the job sandbox.",
+    "task_failed": "The job agent could not complete the requested objective.",
+    "tool_arguments_invalid": "The job agent repeatedly produced invalid tool arguments.",
+    "model_no_action": "The job model repeatedly failed to choose an available action.",
+    "model_unavailable": "No approved background job model was configured.",
+}
 
 
 class JobAnnouncement(StrEnum):
@@ -527,6 +544,9 @@ class VoicePipeline:
         event_id: str,
         announcement: JobAnnouncement,
         *,
+        job_id: str,
+        status: str,
+        detail_code: str,
         foreground_quiet: Callable[[], bool],
         claim: Callable[[], Awaitable[bool]],
         release: Callable[[], Awaitable[bool]],
@@ -580,6 +600,13 @@ class VoicePipeline:
                     source=SourceKind.SYSTEM,
                     wait_for_playback=True,
                 )
+                await self._persist_job_announcement(
+                    event_id=event_id,
+                    job_id=job_id,
+                    status=status,
+                    detail_code=detail_code,
+                    announcement=announcement,
+                )
                 async with self._coordinator:
                     self._assert_owner(turn, operation)
                     previous = self.engine.state
@@ -613,6 +640,68 @@ class VoicePipeline:
                 async with self._coordinator:
                     if self._active_turn is turn:
                         self._active_turn = None
+
+    async def _persist_job_announcement(
+        self,
+        *,
+        event_id: str,
+        job_id: str,
+        status: str,
+        detail_code: str,
+        announcement: JobAnnouncement,
+    ) -> None:
+        if _JOB_ID.fullmatch(job_id) is None:
+            raise ValueError("background job announcement has an invalid job ID")
+        event_digest = hashlib.sha256(event_id.encode()).hexdigest()
+        spoken_message_id = f"job-announcement:{event_digest}"
+        outcome_message_id = f"job-outcome:{event_digest}"
+        explanation = _JOB_OUTCOME_EXPLANATIONS.get(
+            detail_code,
+            "Inspect the job status before explaining this outcome.",
+        )
+        metadata = {
+            "radcliffe.job.id": job_id,
+            "radcliffe.job.status": status,
+            "radcliffe.job.detail_code": detail_code,
+            "radcliffe.job.event_id": event_id,
+        }
+        spoken: MessageEnvelope | None = None
+        async with self._append_lock:
+            replay = await self.store.replay(self.engine.session_id)
+            existing = {item.message_id: item for item in replay}
+            spoken = existing.get(spoken_message_id)
+            if spoken is None:
+                spoken = MessageEnvelope.text(
+                    session_id=self.engine.session_id,
+                    sequence=await self.store.next_sequence(self.engine.session_id),
+                    source=SourceKind.SYSTEM,
+                    text=announcement.value,
+                    metadata={
+                        **metadata,
+                        TURN_EVENT_METADATA: BACKGROUND_JOB_ANNOUNCEMENT_EVENT,
+                    },
+                    message_id=spoken_message_id,
+                )
+                await self.store.append(spoken)
+            if outcome_message_id not in existing:
+                outcome = MessageEnvelope.text(
+                    session_id=self.engine.session_id,
+                    sequence=await self.store.next_sequence(self.engine.session_id),
+                    source=SourceKind.CALL,
+                    text=(
+                        f"Internal background job outcome for {job_id}: {status}. {explanation} "
+                        "Use this exact job ID with manage_job when the user asks about this job; "
+                        "never quote the ID aloud."
+                    ),
+                    metadata={
+                        **metadata,
+                        TURN_EVENT_METADATA: BACKGROUND_JOB_OUTCOME_EVENT,
+                    },
+                    message_id=outcome_message_id,
+                )
+                await self.store.append(outcome)
+        if self.events is not None and spoken is not None:
+            await self.events.message(spoken)
 
     async def _finish_job_announcement(self, turn: _ActiveTurn, reason: str) -> None:
         try:

@@ -4,6 +4,11 @@ Copy every Android APK produced for testing to `/Users/ravd/agent-share/radcliff
 
 Before sharing any network service with the user, run the Tailscale CLI to inspect the current Serve configuration and choose an available permitted port.
 
+Use the pinned Haiku profile for every operator or user acceptance test, including both the
+foreground conversational sidecar and the background job model. Treat Qwen as a deprecated,
+explicit development-only path; do not use it as user-test evidence unless the user reverses
+this instruction.
+
 ## Conversation data
 
 - Treat Radcliffe conversation text and stored conversation envelopes as available for agent

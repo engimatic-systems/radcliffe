@@ -75,6 +75,7 @@ from radcliffe_domain.jobs import (
     JobStore,
 )
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_OUTCOME_EVENT,
     BACKGROUND_JOB_REFERENCE_EVENT,
     CONTEXT_PROJECTION_VERSION,
     TURN_DISPOSITION_EVENT,
@@ -104,6 +105,7 @@ from radcliffe_control.context_usage import (
     SidecarContextUsageClient,
 )
 from radcliffe_control.job_executor import (
+    JobExecutorConfigurationError,
     JobExecutorSupervisor,
     JobLauncher,
     JsonLineJobLauncher,
@@ -232,6 +234,8 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "starting"]
     build_revision: str
     capabilities: tuple[str, ...]
+    background_model_provider: Literal["stub", "anthropic", "ollama"]
+    background_model_id: str
 
 
 class SidecarContextUsageResponse(BaseModel):
@@ -727,6 +731,7 @@ def _job_event(event: JobEventRecord) -> JobEventResponse:
 def _job_tool_response(
     result: JobMutationResult,
     promoted_result: PromotedJobResult | None = None,
+    latest_event: JobEventRecord | None = None,
 ) -> ToolCallResponse:
     summary = _job_summary(result.record)
     payload: dict[str, object] = {
@@ -772,6 +777,13 @@ def _job_tool_response(
                 for finding in promoted_result.findings
             ]
         payload["result"] = promoted_payload
+    if latest_event is not None:
+        payload["latestEvent"] = {
+            "kind": latest_event.kind.value,
+            "status": latest_event.status.value,
+            "detailCode": latest_event.detail_code,
+            "revision": latest_event.revision,
+        }
     model_content = json.dumps(
         payload,
         sort_keys=True,
@@ -787,6 +799,8 @@ def _job_tool_response(
             "artifactCount": str(len(promoted_result.artifacts) if promoted_result else 0),
             "sourceCount": str(len(promoted_result.sources) if promoted_result else 0),
             "findingCount": str(len(promoted_result.findings) if promoted_result else 0),
+            "latestEventKind": latest_event.kind.value if latest_event else "",
+            "latestDetailCode": latest_event.detail_code if latest_event else "",
         },
     )
 
@@ -906,9 +920,11 @@ async def _execute_manage_job_tool(
             job_id=record.job_id,
             attempt=record.attempt,
         )
+        events = await active.jobs.events(record.job_id)
         return _job_tool_response(
             JobMutationResult(record=record, replayed=False),
             promoted_result,
+            events[-1] if events else None,
         )
     if arguments.operation == "follow_up":
         assert arguments.instruction is not None
@@ -1656,11 +1672,34 @@ def create_app(
             )
         job_executor: JobExecutorSupervisor | None = None
         if settings.job_executor_enabled:
-            active_job_launcher = job_launcher or JsonLineJobLauncher(
-                command=tuple(shlex.split(settings.job_executor_command)),
-                workspace_root=settings.job_workspace_root,
-                max_output_bytes=settings.job_executor_max_output_bytes,
-            )
+            if job_launcher is not None:
+                active_job_launcher = job_launcher
+            else:
+                command = tuple(shlex.split(settings.job_executor_command))
+                try:
+                    provider_index = command.index("--provider")
+                    configured_provider = command[provider_index + 1]
+                except (ValueError, IndexError) as error:
+                    raise JobExecutorConfigurationError(
+                        "job executor command must select an explicit model provider"
+                    ) from error
+                if configured_provider != settings.job_model_provider:
+                    raise JobExecutorConfigurationError(
+                        "job executor command provider does not match protected settings"
+                    )
+                provider_environment: dict[str, str] = {}
+                if settings.job_model_provider == "anthropic":
+                    if not settings.job_allow_cloud_models or not settings.anthropic_api_key:
+                        raise JobExecutorConfigurationError(
+                            "Anthropic background jobs require explicit cloud approval and a key"
+                        )
+                    provider_environment["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+                active_job_launcher = JsonLineJobLauncher(
+                    command=command,
+                    workspace_root=settings.job_workspace_root,
+                    max_output_bytes=settings.job_executor_max_output_bytes,
+                    provider_environment=provider_environment,
+                )
             job_executor = JobExecutorSupervisor(
                 store=jobs,
                 launcher=active_job_launcher,
@@ -1775,6 +1814,14 @@ def create_app(
             status="ok" if runtime is not None else "starting",
             build_revision=settings.build_revision,
             capabilities=("background_jobs_v1", "promoted_job_results_v1"),
+            background_model_provider=settings.job_model_provider,
+            background_model_id=(
+                "claude-haiku-4-5-20251001"
+                if settings.job_model_provider == "anthropic"
+                else "qwen3:8b"
+                if settings.job_model_provider == "ollama"
+                else ""
+            ),
         )
 
     @app.get("/readyz", response_model=ReadinessResponse)
@@ -2153,7 +2200,11 @@ def create_app(
                 cursor = envelope.sequence
                 if envelope.sensitivity is not Sensitivity.SECRET and envelope.metadata.get(
                     TURN_EVENT_METADATA
-                ) not in {TURN_DISPOSITION_EVENT, BACKGROUND_JOB_REFERENCE_EVENT}:
+                ) not in {
+                    TURN_DISPOSITION_EVENT,
+                    BACKGROUND_JOB_REFERENCE_EVENT,
+                    BACKGROUND_JOB_OUTCOME_EVENT,
+                }:
                     visible.append(envelope)
                 if len(visible) > limit:
                     break

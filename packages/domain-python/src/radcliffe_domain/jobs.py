@@ -86,8 +86,13 @@ _EXECUTOR_DETAIL_CODES = {
             "budget_exhausted",
             "runtime_exhausted",
             "resource_exhausted",
+            "step_limit_exhausted",
             "policy_denied",
+            "source_unavailable",
+            "task_failed",
             "tool_arguments_invalid",
+            "model_no_action",
+            "model_unavailable",
         }
     ),
     JobEventKind.CANCELLED: frozenset(

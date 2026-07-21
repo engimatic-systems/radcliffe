@@ -37,6 +37,8 @@ def test_health(tmp_path) -> None:
             "status": "ok",
             "build_revision": "development",
             "capabilities": ["background_jobs_v1", "promoted_job_results_v1"],
+            "background_model_provider": "stub",
+            "background_model_id": "",
         }
 
 

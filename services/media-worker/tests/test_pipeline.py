@@ -1822,7 +1822,7 @@ async def test_punctuation_poor_output_streams_before_model_completion(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_job_announcement_uses_the_foreground_owner_without_entering_context(
+async def test_job_announcement_enters_context_before_the_next_user_turn(
     tmp_path,
 ) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
@@ -1849,6 +1849,9 @@ async def test_job_announcement_uses_the_foreground_owner_without_entering_conte
     outcome = await pipeline.announce_job(
         "job-event:job-1:3",
         JobAnnouncement.COMPLETE,
+        job_id="job-1",
+        status="succeeded",
+        detail_code="completed",
         foreground_quiet=lambda: True,
         claim=claim,
         release=release,
@@ -1858,7 +1861,31 @@ async def test_job_announcement_uses_the_foreground_owner_without_entering_conte
     assert claimed == [True]
     assert tts.inputs == ["Your background job is complete."]
     assert pipeline.engine.state is ConversationState.LISTENING
-    assert await store.replay("s1") == ()
+    replay = await store.replay("s1")
+    assert [item.source for item in replay] == [SourceKind.SYSTEM, SourceKind.CALL]
+    assert replay[0].content.inline_text == "Your background job is complete."
+    assert "job-1: succeeded" in (replay[1].content.inline_text or "")
+    assert all(packet.include for packet in context_replay(replay))
+
+    class RecordingOrchestrator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def turn(self, request, cancelled=None):
+            del cancelled
+            self.requests.append(request)
+            yield SidecarEvent("model_complete", {"text": "I can inspect it."})
+            yield SidecarEvent("complete", {})
+
+    recording = RecordingOrchestrator()
+    pipeline.orchestrator = recording
+    await pipeline.handle_transcript("What happened?")
+    packets = recording.requests[0]["packets"]
+    included = [packet for packet in packets if packet["include"]]
+    assert [packet["source"] for packet in included[-3:]] == ["system", "call", "user"]
+    assert included[-3]["content"] == "Your background job is complete."
+    assert "job-1: succeeded" in included[-2]["content"]
+    assert included[-1]["content"] == "What happened?"
 
 
 @pytest.mark.asyncio
@@ -1887,6 +1914,9 @@ async def test_job_announcement_rechecks_user_speech_after_claim(tmp_path) -> No
     outcome = await pipeline.announce_job(
         "job-event:job-1:3",
         JobAnnouncement.COMPLETE,
+        job_id="job-1",
+        status="succeeded",
+        detail_code="completed",
         foreground_quiet=lambda: quiet[0],
         claim=claim,
         release=release,
@@ -1921,6 +1951,9 @@ async def test_barge_in_interrupts_job_announcement_without_stale_audio(tmp_path
         pipeline.announce_job(
             "job-event:job-1:3",
             JobAnnouncement.COMPLETE,
+            job_id="job-1",
+            status="succeeded",
+            detail_code="completed",
             foreground_quiet=lambda: True,
             claim=claim,
             release=release,
@@ -1934,6 +1967,7 @@ async def test_barge_in_interrupts_job_announcement_without_stale_audio(tmp_path
     assert publisher.flushed
     assert pipeline.engine.state is ConversationState.LISTENING
     assert pipeline.notification_foreground_available()
+    assert await store.replay("s1") == ()
 
 
 @pytest.mark.asyncio

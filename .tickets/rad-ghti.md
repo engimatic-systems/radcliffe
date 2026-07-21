@@ -51,3 +51,7 @@ Five consecutive real local-provider turns now pass through the black-box LiveKi
 **2026-07-15T03:43:46Z**
 
 2026-07-14 repeated local-provider evidence remains within budget after adding long-pause and exact-source scenarios. Latest full external run: ordinary/three exact turns 2.170-2.473s, replacement 2.245s, source audio 2.857s, tap acknowledgement 8ms, speech-barge acknowledgement 206ms; all checks passed in artifacts/voice-conformance/20260715T034110Z/report.json.
+
+**2026-07-21T14:51:53Z**
+
+Deferred physical observation from 2026-07-21 session ses_ece6459346fbe944ae5be96736984b1c: the final user envelope began mid-thought ('needs to be supplied...'), so the preceding words were not persisted. Per the user, do not prioritize this endpointing/transcription truncation until the background-job lifecycle plumbing is fixed.

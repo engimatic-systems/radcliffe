@@ -3,6 +3,7 @@
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	check-background-jobs-local check-job-egress-local build-job-sandbox-local \
 	services-install-local services-status-local services-restart-local \
+	services-install-user-test \
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
 	benchmark-stt-local benchmark-private-stt-local demo build-voice-dashboard \
@@ -77,6 +78,10 @@ check-job-egress-local:
 
 services-install-local:
 	uv run python scripts/radcliffe_services.py install --include-compat-worker
+
+services-install-user-test:
+	uv run python scripts/radcliffe_services.py install --include-compat-worker \
+		--sidecar-profile live-haiku-4.5
 
 services-status-local:
 	uv run python scripts/radcliffe_services.py status --include-compat-worker

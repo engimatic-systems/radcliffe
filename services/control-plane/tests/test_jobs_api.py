@@ -487,7 +487,14 @@ def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
                 }
             ],
         }
+        assert content["latestEvent"] == {
+            "kind": "succeeded",
+            "status": "succeeded",
+            "detailCode": "completed",
+            "revision": 3,
+        }
         assert status.json()["details"]["artifactCount"] == "1"
+        assert status.json()["details"]["latestDetailCode"] == "completed"
         assert private_instruction not in status.text
         assert private_transcript not in status.text
 

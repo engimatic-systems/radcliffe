@@ -102,8 +102,11 @@ RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/private-job-workspaces
 The command string is split into an argv without a shell. The wrapper is the
 user-owned containment boundary (for example a disposable VM or container);
 the control-plane adapter does not pretend that a scrubbed host subprocess is
-an OS sandbox. It passes no Radcliffe, provider, LiveKit, GitHub, or host-home
-credential. Each attempt receives a mode-0700 working directory used as its
+an OS sandbox. By default it passes no Radcliffe, provider, LiveKit, GitHub, or
+host-home credential. In the explicit Haiku user-test profile, the trusted host
+broker receives only `ANTHROPIC_API_KEY`; that value is never placed in model
+arguments, transcripts, or the disposable command container. Each attempt
+receives a mode-0700 working directory used as its
 `HOME`, private temporary/XDG roots, and a mode-0600 `executor.jsonl`
 transcript. The primary instruction and stable-ID follow-ups travel as JSON
 lines over stdin, never argv or environment.
@@ -118,9 +121,9 @@ process group; committed user cancellation wins over a late success. A
 control-plane restart terminates owned processes and lets their durable leases
 expire for an explicit recovered attempt.
 
-The repository's local implementation uses the pinned
-`infra/job-sandbox/Containerfile` image on Colima/Docker and a credential-free
-host broker backed by loopback Ollama. Build the image with
+The repository's user-test implementation uses the pinned
+`infra/job-sandbox/Containerfile` image on Colima/Docker and a trusted host
+broker backed by pinned Haiku. Build the image with
 `make build-job-sandbox-local`, then set the protected local profile to the
 resulting image and full wrapper argv:
 
@@ -129,20 +132,24 @@ RADCLIFFE_JOB_EXECUTOR_ENABLED=1
 RADCLIFFE_JOB_DOCKER_BIN=/absolute/path/to/docker
 RADCLIFFE_JOB_DOCKER_HOST=unix:///absolute/path/to/colima/docker.sock
 RADCLIFFE_JOB_SANDBOX_IMAGE=radcliffe-job-sandbox:<revision>
-RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sandbox_agent --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --ollama-url http://127.0.0.1:11434 --model qwen3:8b'
+RADCLIFFE_JOB_MODEL_PROVIDER=anthropic
+RADCLIFFE_JOB_ALLOW_CLOUD_MODELS=1
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sandbox_agent --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-haiku-4-5-20251001 --max-model-cost-usd 0.25'
 RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/radcliffe/var/jobs
 ```
 
 The private macOS launcher reads these non-secret machine-specific values from
 ignored, mode-0600 `var/job-executor.env` when present; application and provider
-secrets remain in `var/.env`.
+secrets remain in `var/.env`. Qwen remains available only as the deprecated,
+explicit `--provider ollama --model qwen3:8b` development path and cannot pass
+the phone/user-test preflight.
 
 After building or changing the image, run `make check-job-egress-local`. The
 content-free smoke verifies proxied curl, wget, HTTPS Git, Python, pip, and npm
 access; rejection of direct, RFC 1918, tailnet, and cloud-metadata access; and
 removal of both containers and the per-job network.
 
-The broker itself receives no application/provider credentials. Each
+The model-selected command container receives no application/provider credentials. Each
 model-selected command runs in a new container with Docker's default seccomp
 boundary, all Linux capabilities dropped, `no-new-privileges`, PID/CPU/memory,
 file-size and descriptor limits, and only that attempt's private workspace bind

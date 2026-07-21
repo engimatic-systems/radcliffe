@@ -1241,6 +1241,33 @@ describe("PiAgentOrchestrator", () => {
     expect(converted[0]?.content).toContain("[Radcliffe text_source from demo.md]");
   });
 
+  it("preserves harness job speech and outcome ahead of the next user message", () => {
+    const converted = convertRadcliffeContext([
+      {
+        role: "radcliffe",
+        packet: packet("announcement", "A background job failed.", {
+          role: "system",
+          source: "system",
+        }),
+      },
+      {
+        role: "radcliffe",
+        packet: packet(
+          "outcome",
+          "Internal background job outcome for job-1: failed. The job agent exhausted its allowed steps.",
+          { role: "tool", source: "call" },
+        ),
+      },
+      { role: "radcliffe", packet: packet("user", "Do you know why?") },
+    ]);
+
+    expect(converted.map((message) => message.content)).toEqual([
+      "[Radcliffe system]\nA background job failed.",
+      "[Radcliffe call]\nInternal background job outcome for job-1: failed. The job agent exhausted its allowed steps.",
+      "[Radcliffe user]\nDo you know why?",
+    ]);
+  });
+
   it("rejects overflow before invoking the model provider", async () => {
     const faux = createFauxCore({ provider: "radcliffe-overflow-test" });
     faux.setResponses([fauxAssistantMessage("must not run")]);

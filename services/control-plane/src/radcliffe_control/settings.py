@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,6 +39,9 @@ class Settings(BaseSettings):
     worker_log_directory: Path = Path("var/workers")
     job_executor_enabled: bool = False
     job_executor_command: str = ""
+    job_model_provider: Literal["stub", "anthropic", "ollama"] = "stub"
+    job_allow_cloud_models: bool = False
+    anthropic_api_key: str = Field(default="", repr=False)
     job_workspace_root: Path = Path("var/jobs")
     job_executor_max_concurrency: int = Field(default=2, ge=1, le=8)
     job_executor_poll_seconds: float = Field(default=0.25, ge=0.05, le=30)

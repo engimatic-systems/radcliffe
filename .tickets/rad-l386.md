@@ -1,8 +1,8 @@
 ---
 id: rad-l386
-status: open
+status: in_progress
 deps: []
-links: [rad-nhai, rad-ncdz]
+links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7]
 created: 2026-07-21T14:12:34Z
 type: bug
 priority: 0
@@ -32,3 +32,7 @@ A deterministic replay of the observed fetch-then-read conversation never sends 
 **2026-07-21T14:15:02Z**
 
 Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker services with the pinned live Haiku profile (anthropic/claude-haiku-4-5-20251001). Content-free readiness is green, the original phone session remains active with its managed worker running, and two bounded provider requests completed with zero held budget. The diagnostic request returned the requested smoke phrase but omitted only its final period; provider integration, usage accounting, and stream completion all succeeded. The fetch/read acceptance itself remains open for the operator retry.
+
+**2026-07-21T14:51:53Z**
+
+2026-07-21 second physical trace ses_ece6459346fbe944ae5be96736984b1c exposed two additional causes. The foreground sidecar was Haiku, but the background executor was still Qwen. Its Hacker News attempt used an obsolete HTML selector, then malformed or incomplete API pipelines, repeated identical failures, emitted eight no-action responses, and exhausted 24 steps. The Marginal Revolution attempt also called finish_job with an explicitly failed summary, incorrectly producing succeeded status. The fix must pin Haiku for the job broker, block identical failed commands/no-action loops, and provide a typed unsuccessful completion with a durable summary.

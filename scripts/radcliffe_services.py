@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
+SIDECAR_PROFILES = {
+    "local-ollama": ("scripts/run-local-sidecar.sh", {}),
+    "live-haiku-4.5": (
+        "scripts/run-live-sidecar.sh",
+        {"RADCLIFFE_ALLOW_CLOUD_MODELS": "1"},
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,10 +82,17 @@ def selected_services(include_compat_worker: bool) -> tuple[ServiceDefinition, .
     return SERVICES if include_compat_worker else SERVICES[:2]
 
 
-def build_plist(root: Path, service: ServiceDefinition) -> dict[str, Any]:
-    runner = root / service.runner
+def build_plist(
+    root: Path,
+    service: ServiceDefinition,
+    sidecar_profile: str = "local-ollama",
+) -> dict[str, Any]:
+    runner_name, profile_environment = (
+        SIDECAR_PROFILES[sidecar_profile] if service.name == "sidecar" else (service.runner, {})
+    )
+    runner = root / runner_name
     log = root / service.log
-    return {
+    payload: dict[str, Any] = {
         "Label": service.label,
         "ProgramArguments": [str(runner)],
         "WorkingDirectory": str(root),
@@ -90,9 +104,12 @@ def build_plist(root: Path, service: ServiceDefinition) -> dict[str, Any]:
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
     }
+    if profile_environment:
+        payload["EnvironmentVariables"] = profile_environment
+    return payload
 
 
-def validate_workspace(root: Path) -> None:
+def validate_workspace(root: Path, sidecar_profile: str = "local-ollama") -> None:
     if not root.is_absolute() or not (root / "pyproject.toml").is_file():
         raise RuntimeError("Radcliffe workspace root is invalid")
     environment = root / "var/.env"
@@ -101,7 +118,10 @@ def validate_workspace(root: Path) -> None:
     if environment.stat().st_mode & 0o077:
         raise RuntimeError("protected var/.env must not be accessible by group or others")
     for service in SERVICES:
-        runner = root / service.runner
+        runner_name = (
+            SIDECAR_PROFILES[sidecar_profile][0] if service.name == "sidecar" else service.runner
+        )
+        runner = root / runner_name
         if not runner.is_file() or not os.access(runner, os.X_OK):
             raise RuntimeError(f"service runner is missing or not executable: {service.name}")
 
@@ -128,19 +148,21 @@ class ServiceManager:
         root: Path,
         launch_agents: Path,
         uid: int,
+        sidecar_profile: str = "local-ollama",
         command_runner: CommandRunner = subprocess.run,
     ) -> None:
         self.root = root.resolve()
         self.launch_agents = launch_agents
         self.domain = f"gui/{uid}"
+        self.sidecar_profile = sidecar_profile
         self.command_runner = command_runner
 
     def install(self, services: Sequence[ServiceDefinition]) -> None:
-        validate_workspace(self.root)
+        validate_workspace(self.root, self.sidecar_profile)
         for service in services:
             (self.root / service.log).parent.mkdir(parents=True, exist_ok=True)
             path = self._plist_path(service)
-            write_plist(path, build_plist(self.root, service))
+            write_plist(path, build_plist(self.root, service, self.sidecar_profile))
         self._reload(services)
 
     def uninstall(self, services: Sequence[ServiceDefinition]) -> None:
@@ -263,6 +285,12 @@ def parser() -> argparse.ArgumentParser:
         help="also manage the legacy fixed-room compatibility worker",
     )
     result.add_argument("--json", action="store_true", help="emit machine-readable status")
+    result.add_argument(
+        "--sidecar-profile",
+        choices=tuple(SIDECAR_PROFILES),
+        default="local-ollama",
+        help="profile written when installing the sidecar LaunchAgent",
+    )
     result.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     result.add_argument(
         "--launch-agents",
@@ -282,6 +310,7 @@ def main() -> int:
         root=arguments.root,
         launch_agents=arguments.launch_agents,
         uid=os.getuid(),
+        sidecar_profile=arguments.sidecar_profile,
     )
     if arguments.command == "status":
         print(render_status(manager.statuses(services), arguments.json))
