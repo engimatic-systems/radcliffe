@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  classifyDeliveryIntent,
   CONFIGURE_PARAMETERS,
   convertRadcliffeContext,
   explicitJobManagementOperation,
@@ -13,9 +14,11 @@ import {
   MANAGE_SESSION_PARAMETERS,
   modelContextFromRequest,
   PiAgentOrchestrator,
+  prepareConfigureArguments,
   prepareManageJobArguments,
   prepareManageSessionArguments,
   prepareRunJobArguments,
+  prepareReadSourceArguments,
   READ_JOB_SOURCE_PARAMETERS,
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
@@ -199,7 +202,7 @@ describe("PiAgentOrchestrator", () => {
       generation: 1,
       callId: "call-1",
       toolName: "read_source",
-      arguments: { path: "demo.md", rate: "fast" },
+      arguments: { path: "demo.md", rate: "1.25x" },
     });
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["tool_start", "tool_update", "tool_end", "model_complete"]),
@@ -212,20 +215,13 @@ describe("PiAgentOrchestrator", () => {
   it("routes a typed allowlisted configuration change with exact turn identity", async () => {
     const faux = createFauxCore({ provider: "radcliffe-configuration-test" });
     faux.setResponses([
-      fauxAssistantMessage(
-        fauxToolCall(
-          "configure",
-          {
-            operation: "set",
-            key: "default_speech_rate",
-            scope: "session",
-            value: "1.25x",
-          },
-          { id: "configure-1" },
-        ),
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("Future speech will use the faster pace."),
+      (context) => {
+        const toolNames = (context.tools ?? []).map((candidate) => candidate.name);
+        expect(toolNames).not.toContain("configure");
+        expect(toolNames).not.toContain("read_source");
+        expect(context.systemPrompt).toContain("already applied for this session");
+        return fauxAssistantMessage("Future speech will use the faster pace.");
+      },
     ]);
     const tool = vi.fn(async () => ({
       modelContent:
@@ -258,9 +254,93 @@ describe("PiAgentOrchestrator", () => {
           value: "1.25x",
         },
       }),
-      expect.anything(),
-      expect.any(Function),
+      undefined,
     );
+  });
+
+  it.each([
+    ["Count slowly from 1 to 60", { rate: "0.75x", scope: "turn", sourceRead: false }],
+    ["Answer faster this time", { rate: "1.25x", scope: "turn", sourceRead: false }],
+    [
+      "Speak at 0.75x for this session",
+      { rate: "0.75x", scope: "session", sourceRead: false },
+    ],
+    [
+      "Use the normal speech rate from now on",
+      { rate: "1.0x", scope: "session", sourceRead: false },
+    ],
+    ["Read demo.md slowly", { rate: "0.75x", scope: "turn", sourceRead: true }],
+  ])("classifies delivery intent: %s", (text, expected) => {
+    expect(classifyDeliveryIntent(text)).toEqual(expected);
+  });
+
+  it("leaves ordinary mentions of speed out of delivery routing", () => {
+    expect(classifyDeliveryIntent("The faster algorithm won the benchmark.")).toBeUndefined();
+  });
+
+  it("normalizes weak-model speech rate aliases before schema validation", () => {
+    expect(
+      prepareConfigureArguments({
+        operation: "set",
+        key: "default_speech_rate",
+        scope: "turn",
+        value: "slowly",
+      }),
+    ).toEqual({
+      operation: "set",
+      key: "default_speech_rate",
+      scope: "turn",
+      value: "0.75x",
+    });
+    expect(prepareReadSourceArguments({ path: "demo.md", rate: 1.5 })).toEqual({
+      path: "demo.md",
+      rate: "1.5x",
+    });
+  });
+
+  it("emits one redacted recoverable diagnostic for a malformed model tool call", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-invalid-tool-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "configure",
+          {
+            operation: "set",
+            key: "default_speech_rate",
+            scope: "turn",
+            value: "private-invalid-rate",
+          },
+          { id: "bad-configure" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I kept the current rate."),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn();
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Change a setting")]), (event) => {
+      events.push(event);
+    });
+
+    expect(tool).not.toHaveBeenCalled();
+    const failure = events.find(
+      (event) => event.type === "tool_end" && event.callId === "bad-configure",
+    );
+    expect(failure).toMatchObject({
+      type: "tool_end",
+      isError: true,
+      result: {
+        details: {
+          errorCode: "invalid_arguments",
+          field: "value",
+          recoverable: true,
+          toolName: "configure",
+        },
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain("private-invalid-rate");
   });
 
   it("routes conversation lifecycle actions with the exact turn identity", async () => {
@@ -905,7 +985,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "read_job_source",
-        arguments: { reference: "Scaling Laws", rate: "fast" },
+        arguments: { reference: "Scaling Laws", rate: "1.25x" },
       }),
       expect.anything(),
       expect.any(Function),

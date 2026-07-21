@@ -16,6 +16,7 @@ import type {
   ContextPacket,
   ContextUsage,
   SidecarEvent,
+  SpeechRate,
   ToolExecutionRequest,
   ToolExecutor,
   TurnRequest,
@@ -54,6 +55,14 @@ type ConfigureArguments = Extract<
   ToolExecutionRequest,
   { toolName: "configure" }
 >["arguments"];
+type ReadSourceArguments = Extract<
+  ToolExecutionRequest,
+  { toolName: "read_source" }
+>["arguments"];
+type ReadJobSourceArguments = Extract<
+  ToolExecutionRequest,
+  { toolName: "read_job_source" }
+>["arguments"];
 type ManageSessionArguments = Extract<
   ToolExecutionRequest,
   { toolName: "manage_session" }
@@ -80,13 +89,89 @@ const JOB_NOTIFICATION_POLICIES = [
 const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
 
+export interface DeliveryIntent {
+  rate: SpeechRate;
+  scope: "turn" | "session";
+  sourceRead: boolean;
+}
+
+interface DeliveryPreparation {
+  intent: DeliveryIntent;
+  applied: boolean;
+}
+
+const SPEECH_RATE_ALIASES = new Map<string, SpeechRate>([
+  ["0.75", "0.75x"],
+  ["0.75x", "0.75x"],
+  ["slow", "0.75x"],
+  ["slowly", "0.75x"],
+  ["slower", "0.75x"],
+  ["1", "1.0x"],
+  ["1.0", "1.0x"],
+  ["1x", "1.0x"],
+  ["1.0x", "1.0x"],
+  ["normal", "1.0x"],
+  ["normally", "1.0x"],
+  ["regular", "1.0x"],
+  ["default", "1.0x"],
+  ["1.25", "1.25x"],
+  ["1.25x", "1.25x"],
+  ["fast", "1.25x"],
+  ["faster", "1.25x"],
+  ["quick", "1.25x"],
+  ["quickly", "1.25x"],
+  ["1.5", "1.5x"],
+  ["1.5x", "1.5x"],
+  ["very fast", "1.5x"],
+  ["very_fast", "1.5x"],
+  ["fastest", "1.5x"],
+]);
+
+function invalidToolArgument(toolName: string, field: string): Error {
+  return new Error(`tool_argument_invalid:${toolName}:${field}`);
+}
+
+export function normalizeSpeechRate(value: unknown): SpeechRate | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return SPEECH_RATE_ALIASES.get(String(value));
+  }
+  if (typeof value !== "string") return undefined;
+  return SPEECH_RATE_ALIASES.get(value.trim().toLowerCase().replace(/\s+/g, " "));
+}
+
+export function classifyDeliveryIntent(text: string): DeliveryIntent | undefined {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  const rateMatch = normalized.match(
+    /\b(0\.75x?|1(?:\.0)?x?|1\.25x?|1\.5x?|very[_ ]fast|fastest|faster|fast|quickly|quick|slower|slowly|slow|normally|normal|regular|default)\b/,
+  );
+  const rate = normalizeSpeechRate(rateMatch?.[1]);
+  if (!rate) return undefined;
+  if (
+    !/\b(?:speak|say|talk|answer|respond|reply|count|read|recite|deliver|pace|rate)\b/.test(
+      normalized,
+    ) &&
+    !/\b(?:slow down|speed up)\b/.test(normalized)
+  ) {
+    return undefined;
+  }
+  const sourceRead =
+    /\b(?:read|recite)\b/.test(normalized) &&
+    (/\b(?:source|file|document|markdown|path)\b/.test(normalized) ||
+      /(?:\.md\b|\bdot m d\b)/.test(normalized));
+  const persistent =
+    /\b(?:for (?:this|the) session|session default|default (?:speech )?(?:pace|rate)|from now on|going forward|until i change|keep (?:speaking|talking)|always)\b/.test(
+      normalized,
+    );
+  return { rate, scope: persistent ? "session" : "turn", sourceRead };
+}
+
 function stringEnum(values: readonly string[]) {
   return Type.String({ enum: [...values] });
 }
 
 function argumentRecord(value: unknown, toolName: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${toolName} arguments must be an object`);
+    throw invalidToolArgument(toolName, "arguments");
   }
   return value as Record<string, unknown>;
 }
@@ -121,14 +206,19 @@ function isMember<T extends string>(values: readonly T[], value: unknown): value
 }
 
 export function prepareConfigureArguments(value: unknown): ConfigureArguments {
-  const item = normalizeOperationAlias(argumentRecord(value, "configure"), ["inspect"]);
+  const item = {
+    ...normalizeOperationAlias(argumentRecord(value, "configure"), ["inspect"]),
+  };
+  if (item.key === "default_speech_rate" && item.operation === "set") {
+    item.value = normalizeSpeechRate(item.value);
+  }
   if (
     !exactKeys(item, ["operation", "key"], ["scope", "value", "undoMutationId"]) ||
     !isMember(CONFIGURATION_OPERATIONS, item.operation) ||
     !isMember(CONFIGURATION_KEYS, item.key) ||
     (item.scope !== undefined && !isMember(CONFIGURATION_SCOPES, item.scope))
   ) {
-    throw new Error("configure arguments do not match the registered setting contract");
+    throw invalidToolArgument("configure", "operation_or_key");
   }
   if (item.operation === "set") {
     const validValue =
@@ -136,10 +226,10 @@ export function prepareConfigureArguments(value: unknown): ConfigureArguments {
         ? isMember(RESPONSE_DETAILS, item.value)
         : isMember(SPEECH_RATES, item.value);
     if (!validValue || item.undoMutationId !== undefined) {
-      throw new Error("configure set requires one valid value for its selected key");
+      throw invalidToolArgument("configure", "value");
     }
   } else if (item.value !== undefined) {
-    throw new Error("only configure set accepts a value");
+    throw invalidToolArgument("configure", "value");
   }
   if (
     item.operation === "undo"
@@ -148,9 +238,91 @@ export function prepareConfigureArguments(value: unknown): ConfigureArguments {
         item.undoMutationId.length > 128
       : item.undoMutationId !== undefined
   ) {
-    throw new Error("configure undo requires exactly one valid undoMutationId");
+    throw invalidToolArgument("configure", "undoMutationId");
   }
   return item as ConfigureArguments;
+}
+
+function prepareSourceRateArguments(
+  value: unknown,
+  toolName: "read_source" | "read_job_source",
+  identityField: "path" | "reference",
+): Record<string, unknown> {
+  const item = { ...argumentRecord(value, toolName) };
+  if (!exactKeys(item, [identityField], ["rate"])) {
+    throw invalidToolArgument(toolName, "arguments");
+  }
+  if (
+    typeof item[identityField] !== "string" ||
+    item[identityField].length < 1 ||
+    item[identityField].length > (identityField === "path" ? 4096 : 300)
+  ) {
+    throw invalidToolArgument(toolName, identityField);
+  }
+  if (item.rate !== undefined) {
+    const normalized = normalizeSpeechRate(item.rate);
+    if (!normalized) throw invalidToolArgument(toolName, "rate");
+    item.rate = normalized;
+  }
+  return item;
+}
+
+export function prepareReadSourceArguments(value: unknown): ReadSourceArguments {
+  return prepareSourceRateArguments(value, "read_source", "path") as ReadSourceArguments;
+}
+
+export function prepareReadJobSourceArguments(value: unknown): ReadJobSourceArguments {
+  return prepareSourceRateArguments(
+    value,
+    "read_job_source",
+    "reference",
+  ) as ReadJobSourceArguments;
+}
+
+function toolResultText(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const content = (value as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      return (block as { text: string }).text;
+    }
+  }
+  return undefined;
+}
+
+export function sanitizeToolFailure(toolName: string, value: unknown): unknown {
+  const message = toolResultText(value);
+  const match = message?.match(/^tool_argument_invalid:([a-z_]+):([a-z_]+)$/);
+  if (match?.[1] === toolName) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "The tool arguments were invalid. Correct the named field and retry.",
+        },
+      ],
+      details: {
+        errorCode: "invalid_arguments",
+        field: match[2],
+        recoverable: true,
+        toolName,
+      },
+    };
+  }
+  return {
+    content: [{ type: "text", text: "The tool could not be completed." }],
+    details: {
+      errorCode: "execution_failed",
+      recoverable: false,
+      toolName,
+    },
+  };
 }
 
 export function prepareManageSessionArguments(value: unknown): ManageSessionArguments {
@@ -379,18 +551,21 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
+  "Markdown filenames with list_sources and read one with read_source. " +
   "When a completed job status returns findings, cite their promoted source titles or locators and " +
   "explicitly label every finding whose inference flag is true. Never detach a finding from its " +
   "source entity IDs. " +
-  "Markdown filenames with list_sources and read " +
-  "one with read_source. If the user identifies a source informally or the exact authorized path " +
+  "If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
   "Use read_job_source when the user asks to read a named source promoted by a completed " +
   "background job. Pass its human title or entity ID; an ambiguous title must be clarified, never " +
   "guessed. " +
-  "Set read_source rate only when the user explicitly requests a delivery speed. " +
+  "Use read_source only when the user explicitly asks for a named source, file, document, or path. " +
+  "Never use read_source to deliver a generated answer, a count, or other transient response. " +
+  "Set a source rate only when the user explicitly requests a delivery speed. A request about this " +
+  "answer or this turn is temporary; a request for this session or from now on persists. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
@@ -400,36 +575,27 @@ export const LIST_SOURCES_PARAMETERS = Type.Object({}, { additionalProperties: f
 export const READ_SOURCE_DESCRIPTION =
   "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
   "Normalize spoken filename punctuation before passing the path. An explicitly requested speech " +
-  "rate may be slow, normal, fast, very_fast, or a numeric multiplier from 0.75 through 1.5.";
-export const READ_SOURCE_PARAMETERS = Type.Object({
-  path: Type.String({ minLength: 1, maxLength: 4096 }),
-  rate: Type.Optional(
-    Type.Union([
-      Type.Literal("slow"),
-      Type.Literal("normal"),
-      Type.Literal("fast"),
-      Type.Literal("very_fast"),
-      Type.Number({ minimum: 0.75, maximum: 1.5 }),
-    ]),
+  "rate must be one of 0.75x, 1.0x, 1.25x, or 1.5x.";
+export const READ_SOURCE_PARAMETERS = Type.Unsafe<ReadSourceArguments>(
+  Type.Object(
+    {
+      path: Type.String({ minLength: 1, maxLength: 4096 }),
+      rate: Type.Optional(stringEnum(SPEECH_RATES)),
+    },
+    { additionalProperties: false },
   ),
-});
+);
 export const READ_JOB_SOURCE_DESCRIPTION =
   "Read one canonical Markdown source promoted by a completed background job. Resolve it by its " +
   "human title or exact entity ID within this conversation; ambiguous references fail closed.";
-export const READ_JOB_SOURCE_PARAMETERS = Type.Object(
-  {
-    reference: Type.String({ minLength: 1, maxLength: 300 }),
-    rate: Type.Optional(
-      Type.Union([
-        Type.Literal("slow"),
-        Type.Literal("normal"),
-        Type.Literal("fast"),
-        Type.Literal("very_fast"),
-        Type.Number({ minimum: 0.75, maximum: 1.5 }),
-      ]),
-    ),
-  },
-  { additionalProperties: false },
+export const READ_JOB_SOURCE_PARAMETERS = Type.Unsafe<ReadJobSourceArguments>(
+  Type.Object(
+    {
+      reference: Type.String({ minLength: 1, maxLength: 300 }),
+      rate: Type.Optional(stringEnum(SPEECH_RATES)),
+    },
+    { additionalProperties: false },
+  ),
 );
 export const CONFIGURE_DESCRIPTION =
   "Inspect, set, reset, or undo one registered Radcliffe setting. Only response_detail and " +
@@ -527,14 +693,19 @@ export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
   });
 }
 
-function systemPrompt(request: TurnRequest): string {
+function systemPrompt(request: TurnRequest, delivery?: DeliveryPreparation): string {
   return (
     RADCLIFFE_SYSTEM_PROMPT +
     (request.responseDetail === "brief"
       ? " Keep this response brief."
       : request.responseDetail === "detailed"
         ? " Give a detailed response."
-        : " Use standard response detail.")
+        : " Use standard response detail.") +
+    (delivery
+      ? delivery.applied
+        ? ` The requested ${delivery.intent.rate} speech rate is already applied for this ${delivery.intent.scope}. Answer directly and do not call configure or a source-reading tool for it.`
+        : " The requested speech rate could not be applied. Answer directly without claiming the rate changed."
+      : "")
   );
 }
 
@@ -616,10 +787,75 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const packets = request.packets.filter((packet) => packet.include);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
+    const deliveryIntent =
+      current.source === "user" ? classifyDeliveryIntent(current.content) : undefined;
     const jobOperation =
       current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
+    let deliveryPreparation: DeliveryPreparation | undefined;
+    if (deliveryIntent && !deliveryIntent.sourceRead) {
+      const callId = `delivery-rate:${request.requestId}`;
+      const parameters: ConfigureArguments = {
+        operation: "set",
+        key: "default_speech_rate",
+        scope: deliveryIntent.scope,
+        value: deliveryIntent.rate,
+      };
+      await emit({
+        type: "tool_start",
+        requestId: request.requestId,
+        callId,
+        toolName: "configure",
+        arguments: parameters,
+      });
+      try {
+        const result = await this.executeTool(
+          {
+            sessionId: request.sessionId,
+            generation: request.generation,
+            operationId: request.operationId!,
+            cancellationId: request.cancellationId!,
+            traceId: request.traceId!,
+            turnId,
+            callId,
+            idempotencyKey: `${request.requestId}:${callId}`,
+            toolName: "configure",
+            arguments: parameters,
+          },
+          signal,
+        );
+        deliveryPreparation = { intent: deliveryIntent, applied: true };
+        await emit({
+          type: "tool_end",
+          requestId: request.requestId,
+          callId,
+          toolName: "configure",
+          isError: false,
+          result: {
+            content: [{ type: "text", text: result.modelContent }],
+            details: result.details,
+          },
+        });
+      } catch {
+        deliveryPreparation = { intent: deliveryIntent, applied: false };
+        await emit({
+          type: "tool_end",
+          requestId: request.requestId,
+          callId,
+          toolName: "configure",
+          isError: true,
+          result: {
+            content: [{ type: "text", text: "The speech rate could not be applied." }],
+            details: {
+              errorCode: "delivery_configuration_failed",
+              recoverable: false,
+              toolName: "configure",
+            },
+          },
+        });
+      }
+    }
     let modelText = "";
     let groundedJobCall = false;
     let groundedJobDetails: Record<string, unknown> | undefined;
@@ -669,13 +905,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       label: "Read source",
       description: READ_SOURCE_DESCRIPTION,
       parameters: READ_SOURCE_PARAMETERS,
+      prepareArguments: prepareReadSourceArguments,
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
-        params: {
-          path: string;
-          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
-        },
+        params: ReadSourceArguments,
         toolSignal?: AbortSignal,
         onUpdate?: (value: {
           content: Array<{ type: "text"; text: string }>;
@@ -711,13 +945,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       label: "Read background job source",
       description: READ_JOB_SOURCE_DESCRIPTION,
       parameters: READ_JOB_SOURCE_PARAMETERS,
+      prepareArguments: prepareReadJobSourceArguments,
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
-        params: {
-          reference: string;
-          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
-        },
+        params: ReadJobSourceArguments,
         toolSignal?: AbortSignal,
         onUpdate?: (value: {
           content: Array<{ type: "text"; text: string }>;
@@ -913,12 +1145,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       packet,
     }));
     const turnStream = this.streamFnForTurn?.(request) ?? this.streamFn;
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: systemPrompt(request),
-        model: this.model,
-        thinkingLevel: "off",
-        tools: [
+    const tools = deliveryIntent
+      ? deliveryIntent.sourceRead
+        ? [listSources, readSource, readJobSource, manageSession, runJob, manageJob]
+        : [manageSession, runJob, manageJob]
+      : [
           listSources,
           readSource,
           readJobSource,
@@ -926,7 +1157,13 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           manageSession,
           runJob,
           manageJob,
-        ],
+        ];
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: systemPrompt(request, deliveryPreparation),
+        model: this.model,
+        thinkingLevel: "off",
+        tools,
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,
@@ -1018,7 +1255,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-          result: event.result,
+          result: event.isError
+            ? sanitizeToolFailure(event.toolName, event.result)
+            : event.result,
         });
       }
     });

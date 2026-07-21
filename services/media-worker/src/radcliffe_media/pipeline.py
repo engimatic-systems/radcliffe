@@ -677,15 +677,32 @@ class VoicePipeline:
                     if isinstance(raw_tool_name, str) and raw_tool_name in _REGISTERED_TOOL_NAMES
                     else "unknown"
                 )
+                result = event.payload.get("result")
+                result_details = result.get("details") if isinstance(result, dict) else None
+                recoverable = (
+                    isinstance(result_details, dict)
+                    and result_details.get("recoverable") is True
+                    and result_details.get("errorCode") == "invalid_arguments"
+                )
+                raw_field = result_details.get("field") if recoverable else None
+                field = (
+                    raw_field
+                    if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
+                    else "unknown"
+                )
+                metadata = {
+                    TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+                    TURN_ID_METADATA: turn.turn_id,
+                    "radcliffe.tool.name": tool_name,
+                    "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
+                }
+                if recoverable:
+                    metadata["radcliffe.tool.error_code"] = "invalid_arguments"
+                    metadata["radcliffe.tool.invalid_field"] = field
                 await self._append_text(
                     SourceKind.SYSTEM,
-                    "Tool call failed",
-                    {
-                        TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
-                        TURN_ID_METADATA: turn.turn_id,
-                        "radcliffe.tool.name": tool_name,
-                        "radcliffe.tool.outcome": "failed",
-                    },
+                    "Tool arguments rejected" if recoverable else "Tool call failed",
+                    metadata,
                 )
                 self.telemetry.emit(
                     component="media_worker",

@@ -299,6 +299,30 @@ class FailedToolEventOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class RecoverableToolEventOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "toolName": "configure",
+                "isError": True,
+                "result": {
+                    "content": [{"type": "text", "text": "redacted correction hint"}],
+                    "details": {
+                        "errorCode": "invalid_arguments",
+                        "field": "value",
+                        "recoverable": True,
+                        "toolName": "configure",
+                    },
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "I kept the current rate."})
+        yield SidecarEvent("model_complete", {"text": "I kept the current rate."})
+        yield SidecarEvent("complete", {})
+
+
 class BackgroundJobReferenceOrchestrator:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
@@ -927,6 +951,35 @@ async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry
     assert "private-job-id" not in telemetry
     assert '"event":"tool_call"' in telemetry
     assert '"outcome":"failed"' in telemetry
+
+
+@pytest.mark.asyncio
+async def test_recoverable_tool_rejection_avoids_generic_failure_message(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        RecoverableToolEventOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Speak slowly")
+
+    history = await store.replay("s1")
+    audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
+    assert audit.content.inline_text == "Tool arguments rejected"
+    assert audit.metadata["radcliffe.tool.name"] == "configure"
+    assert audit.metadata["radcliffe.tool.outcome"] == "rejected"
+    assert audit.metadata["radcliffe.tool.error_code"] == "invalid_arguments"
+    assert audit.metadata["radcliffe.tool.invalid_field"] == "value"
+    assert not context_replay((audit,))[0].include
+    assert all(message.content.inline_text != "Tool call failed" for message in events.messages)
+    assert b"redacted correction hint" not in (tmp_path / "events.sqlite3").read_bytes()
 
 
 @pytest.mark.asyncio
