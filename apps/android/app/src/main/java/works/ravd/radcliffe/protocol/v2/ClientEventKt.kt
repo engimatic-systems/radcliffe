@@ -213,6 +213,30 @@ public object ClientEventKt {
     public fun hasAgentControlCancellation(): kotlin.Boolean {
       return _builder.hasAgentControlCancellation()
     }
+
+    /**
+     * `.radcliffe.v2.JobCommand job_command = 9;`
+     */
+    public var jobCommand: works.ravd.radcliffe.protocol.v2.JobCommand
+      @kotlin.jvm.JvmName("getJobCommand")
+        get() = _builder.jobCommand
+      @kotlin.jvm.JvmName("setJobCommand")
+        set(value) {
+        _builder.jobCommand = value
+      }
+    /**
+     * `.radcliffe.v2.JobCommand job_command = 9;`
+     */
+    public fun clearJobCommand() {
+      _builder.clearJobCommand()
+    }
+    /**
+     * `.radcliffe.v2.JobCommand job_command = 9;`
+     * @return Whether the jobCommand field is set.
+     */
+    public fun hasJobCommand(): kotlin.Boolean {
+      return _builder.hasJobCommand()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ClientEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -245,3 +269,6 @@ public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.agentControlCon
 
 public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.agentControlCancellationOrNull: works.ravd.radcliffe.protocol.v2.AgentControlCancellation?
   get() = if (hasAgentControlCancellation()) getAgentControlCancellation() else null
+
+public val works.ravd.radcliffe.protocol.v2.ClientEventOrBuilder.jobCommandOrNull: works.ravd.radcliffe.protocol.v2.JobCommand?
+  get() = if (hasJobCommand()) getJobCommand() else null

@@ -36,6 +36,15 @@ field is minor-compatible; changing an existing ID, confirmation policy,
 idempotency meaning, target meaning, or scope precedence requires a new field
 or Protocol v3.
 
+## Background jobs
+
+`JobCommand` carries a bounded client lifecycle command, while `JobEvent` is the
+privacy-minimized server projection. The event includes job/session IDs,
+revision, status, notification policy, priority, a stable detail code, and
+promoted entity/artifact IDs. It deliberately has no job instruction,
+follow-up text, raw output, worker transcript, or generic message-content
+field. Exact revisions allow deterministic replay after reconnect or restart.
+
 ## Compatibility policy
 
 - `protocol_version` is `2`. An endpoint rejects an unsupported major version

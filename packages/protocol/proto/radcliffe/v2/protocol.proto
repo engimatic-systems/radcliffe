@@ -136,6 +136,46 @@ enum ResponseDetail {
   RESPONSE_DETAIL_DETAILED = 3;
 }
 
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_QUEUED = 1;
+  JOB_STATUS_RUNNING = 2;
+  JOB_STATUS_WAITING = 3;
+  JOB_STATUS_SUCCEEDED = 4;
+  JOB_STATUS_FAILED = 5;
+  JOB_STATUS_CANCELLED = 6;
+}
+
+enum JobNotificationPolicy {
+  JOB_NOTIFICATION_POLICY_UNSPECIFIED = 0;
+  JOB_NOTIFICATION_POLICY_IMMEDIATE = 1;
+  JOB_NOTIFICATION_POLICY_NEXT_SAFE_PAUSE = 2;
+  JOB_NOTIFICATION_POLICY_SILENT = 3;
+  JOB_NOTIFICATION_POLICY_USER_WAITING = 4;
+}
+
+enum JobEventKind {
+  JOB_EVENT_KIND_UNSPECIFIED = 0;
+  JOB_EVENT_KIND_ACCEPTED = 1;
+  JOB_EVENT_KIND_STARTED = 2;
+  JOB_EVENT_KIND_LEASE_RECOVERED = 3;
+  JOB_EVENT_KIND_PROGRESS = 4;
+  JOB_EVENT_KIND_WAITING = 5;
+  JOB_EVENT_KIND_FOLLOW_UP_ADDED = 6;
+  JOB_EVENT_KIND_PRIORITY_CHANGED = 7;
+  JOB_EVENT_KIND_CANCELLATION_REQUESTED = 8;
+  JOB_EVENT_KIND_CANCELLED = 9;
+  JOB_EVENT_KIND_SUCCEEDED = 10;
+  JOB_EVENT_KIND_FAILED = 11;
+}
+
+enum JobCommandKind {
+  JOB_COMMAND_KIND_UNSPECIFIED = 0;
+  JOB_COMMAND_KIND_FOLLOW_UP = 1;
+  JOB_COMMAND_KIND_SET_PRIORITY = 2;
+  JOB_COMMAND_KIND_CANCEL = 3;
+}
+
 message ContentRef {
   string mime_type = 1;
   uint64 byte_length = 2;
@@ -365,6 +405,40 @@ message AgentControlActionResult {
   bool retryable = 12;
 }
 
+message JobRef {
+  string job_id = 1;
+  string session_id = 2;
+  uint64 revision = 3;
+  JobStatus status = 4;
+}
+
+message JobCommand {
+  uint32 schema_version = 1;
+  string command_id = 2;
+  JobRef job = 3;
+  JobCommandKind kind = 4;
+  string idempotency_key = 5;
+  string follow_up = 6;
+  uint32 priority = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+
+// Conversation-facing job events deliberately contain lifecycle metadata and
+// promoted entity/artifact references, never the private job instruction,
+// follow-up text, command output, or worker transcript.
+message JobEvent {
+  uint32 schema_version = 1;
+  string event_id = 2;
+  JobRef job = 3;
+  JobEventKind kind = 4;
+  JobNotificationPolicy notification_policy = 5;
+  uint32 priority = 6;
+  string detail_code = 7;
+  repeated string entity_ids = 8;
+  repeated string artifact_ids = 9;
+  google.protobuf.Timestamp occurred_at = 10;
+}
+
 message Reconnect {
   string request_id = 1;
   string session_id = 2;
@@ -406,6 +480,7 @@ message ClientEvent {
     MessageEnvelope message = 6;
     AgentControlConfirmation agent_control_confirmation = 7;
     AgentControlCancellation agent_control_cancellation = 8;
+    JobCommand job_command = 9;
   }
 }
 
@@ -421,5 +496,6 @@ message ServerEvent {
     PlaybackSegment playback_segment = 8;
     AgentControlActionRequest agent_control_request = 9;
     AgentControlActionResult agent_control_result = 10;
+    JobEvent job_event = 11;
   }
 }
