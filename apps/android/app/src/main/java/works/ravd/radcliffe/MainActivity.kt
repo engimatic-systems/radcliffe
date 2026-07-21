@@ -129,9 +129,6 @@ class MainActivity : ComponentActivity() {
         }
         var configurationInFlight by remember { mutableStateOf(false) }
         var configurationNotice by remember { mutableStateOf<String?>(null) }
-        var lastConfigurationMutation by remember {
-            mutableStateOf<ConfigurationMutationResult?>(null)
-        }
         var jobCommandInFlight by remember { mutableStateOf<String?>(null) }
         var jobNotice by remember { mutableStateOf<String?>(null) }
 
@@ -369,7 +366,6 @@ class MainActivity : ComponentActivity() {
                     configurationValues = configurationValues
                         .filterNot { it.key == result.effective.key } + result.effective
                     configurationValues = configurationValues.sortedBy { it.key }
-                    lastConfigurationMutation = if (operation == "undo") null else result
                     BehaviorConfigurationModel.update(
                         ConfigurationUpdate(
                             key = result.effective.key,
@@ -774,7 +770,6 @@ class MainActivity : ComponentActivity() {
                     ),
                     configurationInFlight = configurationInFlight,
                     configurationNotice = configurationNotice,
-                    lastConfigurationMutation = lastConfigurationMutation,
                     jobCommandInFlight = jobCommandInFlight,
                     jobNotice = jobNotice,
                     onDiagnostics = { diagnosticsVisible = !diagnosticsVisible },
@@ -796,13 +791,6 @@ class MainActivity : ComponentActivity() {
                     },
                     onConfigurationSet = { key, value ->
                         mutateBehavior("set", key, value)
-                    },
-                    onConfigurationUndo = { mutation ->
-                        mutateBehavior(
-                            "undo",
-                            mutation.effective.key,
-                            undoMutationId = mutation.mutationId,
-                        )
                     },
                     onJobFollowUp = { job, instruction ->
                         commandJob(job, "follow_up", instruction = instruction)
@@ -893,7 +881,6 @@ class MainActivity : ComponentActivity() {
         configurationValues: List<RegisteredConfiguration>,
         configurationInFlight: Boolean,
         configurationNotice: String?,
-        lastConfigurationMutation: ConfigurationMutationResult?,
         jobCommandInFlight: String?,
         jobNotice: String?,
         onDiagnostics: () -> Unit,
@@ -901,7 +888,6 @@ class MainActivity : ComponentActivity() {
         onExport: (ConversationExportFormat) -> Unit,
         onArchive: () -> Unit,
         onConfigurationSet: (String, String) -> Unit,
-        onConfigurationUndo: (ConfigurationMutationResult) -> Unit,
         onJobFollowUp: (BackgroundJobSummary, String) -> Unit,
         onJobPriority: (BackgroundJobSummary, Int) -> Unit,
         onJobCancel: (BackgroundJobSummary) -> Unit,
@@ -967,9 +953,7 @@ class MainActivity : ComponentActivity() {
             values = configurationValues,
             mutationInFlight = configurationInFlight,
             notice = configurationNotice,
-            lastMutation = lastConfigurationMutation,
             onSet = onConfigurationSet,
-            onUndo = onConfigurationUndo,
         )
         operationNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         exportNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -1042,9 +1026,7 @@ class MainActivity : ComponentActivity() {
         values: List<RegisteredConfiguration>,
         mutationInFlight: Boolean,
         notice: String?,
-        lastMutation: ConfigurationMutationResult?,
         onSet: (String, String) -> Unit,
-        onUndo: (ConfigurationMutationResult) -> Unit,
     ) {
         val controls = configurationCycleControls(values, mutationInFlight)
         if (controls.isEmpty() && notice == null) {
@@ -1065,16 +1047,10 @@ class MainActivity : ComponentActivity() {
                             .heightIn(min = 48.dp)
                             .semantics { contentDescription = control.accessibilityLabel },
                     ) {
-                        Text("${control.label} ${control.displayValue}")
+                        Text(control.displayValue)
                     }
                 }
             }
-        }
-        lastMutation?.let { mutation ->
-            TextButton(
-                onClick = { onUndo(mutation) },
-                enabled = !mutationInFlight,
-            ) { Text("Undo behavior change") }
         }
         notice?.let {
             Text(
