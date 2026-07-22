@@ -86,6 +86,7 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("raw URLs");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("explicitly requests exact delivery");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("provider's structured tool channel");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Follow the schema exactly");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Never print XML");
   });
 
@@ -123,6 +124,11 @@ describe("PiAgentOrchestrator", () => {
     expect(containsTextualToolProtocol("<function_calls>\n<invoke name=\"run_job\">"))
       .toBe(true);
     expect(containsTextualToolProtocol("I'll use <invoke name=\"run_job\"> now.")).toBe(true);
+    expect(
+      containsTextualToolProtocol(
+        "I'll launch it.\n```\nrun_job\njob_type: download\ntarget_url: https://example.test\n```",
+      ),
+    ).toBe(true);
     expect(containsTextualToolProtocol("The phrase function call is ordinary prose.")).toBe(false);
   });
 
@@ -162,9 +168,8 @@ describe("PiAgentOrchestrator", () => {
   it("discards textual tool markup and retries through the structured channel", async () => {
     const faux = createFauxCore({ provider: "radcliffe-tool-protocol-test" });
     const leaked =
-      "I'll start it now.\n<function_calls>\n<invoke name=\"run_job\">\n" +
-      "<parameter name=\"instruction\">Download the page</parameter>\n</invoke>\n" +
-      "</function_calls>";
+      "I'll launch it now.\n```\nrun_job\njob_type: download\n" +
+      "target_url: https://example.test/page\noutput_format: markdown\n```";
     faux.setResponses([
       fauxAssistantMessage(leaked),
       fauxAssistantMessage(
@@ -193,8 +198,8 @@ describe("PiAgentOrchestrator", () => {
     const rendered = JSON.stringify(
       events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
     );
-    expect(rendered).not.toContain("function_calls");
-    expect(rendered).not.toContain("<invoke");
+    expect(rendered).not.toContain("run_job");
+    expect(rendered).not.toContain("job_type");
     expect(events).toContainEqual({
       type: "model_complete",
       requestId: "request-1",

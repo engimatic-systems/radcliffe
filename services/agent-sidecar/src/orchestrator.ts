@@ -90,7 +90,7 @@ const JOB_NOTIFICATION_POLICIES = [
 const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel", "retry"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
 const TEXTUAL_TOOL_PROTOCOL =
-  /<\/?(?:function_calls?|invoke|parameter|tool_calls?|tool_call)\b/i;
+  /<\/?(?:function_calls?|invoke|parameter|tool_calls?|tool_call)\b|```[^\n]*\n\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\b|(?:^|\n)\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\s*(?:\(|\n\s*(?:\{|[A-Za-z_][\w-]*\s*:))|"(?:name|tool|tool_name)"\s*:\s*"(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)"/i;
 
 export interface DeliveryIntent {
   rate: SpeechRate;
@@ -807,7 +807,8 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "end the current conversation with manage_session. Never guess between returned choices and " +
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
-  "continues. Tool invocations must use the provider's structured tool channel. Never print XML, JSON, " +
+  "continues. Follow the schema exactly for every tool call, including required field names and " +
+  "value types. Tool invocations must use the provider's structured tool channel. Never print XML, JSON, " +
   "function tags, invoke tags, parameter tags, or a textual imitation of a tool call. " +
   "Call job tools without a preamble. For each successful run_job or manage_job mutation, first " +
   "describe the job tool action " +
@@ -1567,7 +1568,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
                   type: "text",
                   text:
                     "Your previous response used textual tool syntax, so it was discarded. " +
-                    "Retry now using only the provider's structured tool channel. Do not " +
+                    "Retry now using only the provider's structured tool channel. Follow the " +
+                    "schema exactly. Do not " +
                     "describe, print, or imitate the tool call.",
                 },
               ],
