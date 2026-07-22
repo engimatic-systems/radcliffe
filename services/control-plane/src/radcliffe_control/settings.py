@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     worker_log_directory: Path = Path("var/workers")
     job_executor_enabled: bool = False
     job_executor_command: str = ""
+    job_executor_backend: Literal["custom-loop", "claude-agent-sdk"] = "custom-loop"
     job_model_provider: Literal["stub", "anthropic", "ollama"] = "stub"
+    job_model_id: str = Field(default="", pattern=r"^[A-Za-z0-9._:-]{0,128}$")
     job_allow_cloud_models: bool = False
     anthropic_api_key: str = Field(default="", repr=False)
     job_workspace_root: Path = Path("var/jobs")

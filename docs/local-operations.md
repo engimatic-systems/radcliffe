@@ -2,8 +2,9 @@
 
 This runbook operates the private single-owner macOS profile. Deterministic
 development keeps cloud providers disabled, while every operator/user acceptance
-run explicitly activates pinned Haiku for both foreground conversation and
-background jobs. Qwen is retained only as a deprecated development selector.
+run explicitly activates pinned Haiku for foreground conversation and an approved,
+locally pinned Anthropic background executor. Qwen is retained only as a deprecated
+development selector.
 
 `make services-install-local` installs the deprecated local-only sidecar and can
 be used for deterministic development. It must not be used for user acceptance.

@@ -235,6 +235,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "starting"]
     build_revision: str
     capabilities: tuple[str, ...]
+    background_executor_backend: Literal["custom-loop", "claude-agent-sdk"]
     background_model_provider: Literal["stub", "anthropic", "ollama"]
     background_model_id: str
 
@@ -1697,6 +1698,15 @@ def create_app(
                 active_job_launcher = job_launcher
             else:
                 command = tuple(shlex.split(settings.job_executor_command))
+                configured_backend = (
+                    "claude-agent-sdk"
+                    if "radcliffe_control.agent_sdk_executor" in command
+                    else "custom-loop"
+                )
+                if configured_backend != settings.job_executor_backend:
+                    raise JobExecutorConfigurationError(
+                        "job executor command backend does not match protected settings"
+                    )
                 try:
                     provider_index = command.index("--provider")
                     configured_provider = command[provider_index + 1]
@@ -1707,6 +1717,24 @@ def create_app(
                 if configured_provider != settings.job_model_provider:
                     raise JobExecutorConfigurationError(
                         "job executor command provider does not match protected settings"
+                    )
+                try:
+                    model_index = command.index("--model")
+                    configured_model = command[model_index + 1]
+                except (ValueError, IndexError) as error:
+                    raise JobExecutorConfigurationError(
+                        "job executor command must select an explicit model"
+                    ) from error
+                expected_model = settings.job_model_id or (
+                    "claude-haiku-4-5-20251001"
+                    if settings.job_model_provider == "anthropic"
+                    else "qwen3:8b"
+                    if settings.job_model_provider == "ollama"
+                    else ""
+                )
+                if configured_model != expected_model:
+                    raise JobExecutorConfigurationError(
+                        "job executor command model does not match protected settings"
                     )
                 provider_environment: dict[str, str] = {}
                 if settings.job_model_provider == "anthropic":
@@ -1835,13 +1863,17 @@ def create_app(
             status="ok" if runtime is not None else "starting",
             build_revision=settings.build_revision,
             capabilities=("background_jobs_v1", "promoted_job_results_v1"),
+            background_executor_backend=settings.job_executor_backend,
             background_model_provider=settings.job_model_provider,
             background_model_id=(
-                "claude-haiku-4-5-20251001"
-                if settings.job_model_provider == "anthropic"
-                else "qwen3:8b"
-                if settings.job_model_provider == "ollama"
-                else ""
+                settings.job_model_id
+                or (
+                    "claude-haiku-4-5-20251001"
+                    if settings.job_model_provider == "anthropic"
+                    else "qwen3:8b"
+                    if settings.job_model_provider == "ollama"
+                    else ""
+                )
             ),
         )
 

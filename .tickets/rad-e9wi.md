@@ -2,7 +2,7 @@
 id: rad-e9wi
 status: in_progress
 deps: []
-links: [rad-25m0, rad-rnt5]
+links: [rad-25m0, rad-rnt5, rad-u96k]
 created: 2026-07-22T02:55:49Z
 type: bug
 priority: 0

@@ -109,7 +109,7 @@ conversation-facing events contain bounded lifecycle metadata and promoted
 entity or artifact references only.
 
 Background execution remains opt-in. Operator/user acceptance uses the repository's
-Colima/Docker sandbox plus a pinned Haiku broker on the trusted host; the control
+Colima/Docker sandbox plus a locally selected Anthropic broker on the trusted host; the control
 plane gives that broker only the explicitly approved Anthropic credential and a
 private per-attempt workspace,
 streams job context on stdin, and accepts only bounded JSON-line lifecycle
@@ -196,8 +196,9 @@ make check-background-jobs-local
 ```
 
 The first command pins the foreground LaunchAgent to Haiku. The second rejects
-the handoff unless both the foreground sidecar and background job broker are
-pinned to `claude-haiku-4-5-20251001`; it never makes a paid model request.
+the handoff unless the foreground sidecar is pinned to Haiku and the background broker's
+locally configured Anthropic model, backend, and sandbox image agree with its command; it never
+makes a paid model request.
 The Qwen broker remains available only through an explicit deprecated
 `--provider ollama` development selector.
 

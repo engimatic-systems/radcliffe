@@ -19,6 +19,7 @@ def healthy_payloads(revision: str):
             "status": "ok",
             "build_revision": revision,
             "capabilities": ["background_jobs_v1", "promoted_job_results_v1"],
+            "background_executor_backend": "custom-loop",
             "background_model_provider": "anthropic",
             "background_model_id": "claude-haiku-4-5-20251001",
         },
@@ -97,7 +98,7 @@ def test_preflight_rejects_qwen_in_either_user_test_model_role() -> None:
     checks = PREFLIGHT.validate_live(expected_revision="a" * 40, **payloads)
 
     assert codes(checks)["foreground_model"] == "foreground_model_not_haiku"
-    assert codes(checks)["background_model"] == "background_model_not_haiku"
+    assert codes(checks)["background_model"] == "background_model_not_approved"
 
 
 def test_job_model_readiness_rejects_a_stale_embedded_sandbox_image() -> None:
@@ -117,6 +118,46 @@ def test_job_model_readiness_rejects_a_stale_embedded_sandbox_image() -> None:
         "RADCLIFFE_JOB_EXECUTOR_COMMAND"
     ].replace(":current", ":stale")
     assert not PREFLIGHT.job_model_ready(environment)
+
+
+def test_job_model_readiness_accepts_a_locally_pinned_agent_sdk_profile() -> None:
+    environment = {
+        "RADCLIFFE_JOB_EXECUTOR_COMMAND": (
+            "python -m radcliffe_control.agent_sdk_executor --provider anthropic "
+            "--model claude-sonnet-4-6 --image radcliffe-job-sandbox:current"
+        ),
+        "RADCLIFFE_JOB_EXECUTOR_BACKEND": "claude-agent-sdk",
+        "RADCLIFFE_JOB_SANDBOX_IMAGE": "radcliffe-job-sandbox:current",
+        "RADCLIFFE_JOB_MODEL_PROVIDER": "anthropic",
+        "RADCLIFFE_JOB_MODEL_ID": "claude-sonnet-4-6",
+        "RADCLIFFE_JOB_ALLOW_CLOUD_MODELS": "1",
+        "RADCLIFFE_ANTHROPIC_API_KEY": "test-only",
+    }
+
+    assert PREFLIGHT.job_model_ready(environment)
+
+    payloads = healthy_payloads("a" * 40)
+    payloads["control_health"]["background_executor_backend"] = "claude-agent-sdk"
+    payloads["control_health"]["background_model_id"] = "claude-sonnet-4-6"
+    checks = PREFLIGHT.validate_live(
+        expected_revision="a" * 40,
+        expected_background_model="claude-sonnet-4-6",
+        expected_background_backend="claude-agent-sdk",
+        **payloads,
+    )
+    assert codes(checks)["background_model"] == "approved_job_profile"
+
+
+def test_preflight_rejects_a_stale_deployed_background_profile() -> None:
+    payloads = healthy_payloads("a" * 40)
+    checks = PREFLIGHT.validate_live(
+        expected_revision="a" * 40,
+        expected_background_model="claude-sonnet-4-6",
+        expected_background_backend="claude-agent-sdk",
+        **payloads,
+    )
+
+    assert codes(checks)["background_model"] == "background_model_not_approved"
 
 
 def test_synthetic_preflight_job_uses_the_real_process_contract_without_a_provider() -> None:
