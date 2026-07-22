@@ -9,7 +9,9 @@ import {
   classifyDeliveryIntent,
   classifyExactOutputIntent,
   CONFIGURE_PARAMETERS,
+  containsTextualToolProtocol,
   convertRadcliffeContext,
+  explicitJobLaunchIntent,
   explicitJobManagementOperation,
   finalizeExactOutput,
   MANAGE_JOB_PARAMETERS,
@@ -83,6 +85,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Optimize ordinary responses for listening");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("raw URLs");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("explicitly requests exact delivery");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("provider's structured tool channel");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Never print XML");
   });
 
   it("identifies Radcliffe as the harness without assigning the model that identity", () => {
@@ -110,6 +114,16 @@ describe("PiAgentOrchestrator", () => {
     expect(explicitJobManagementOperation("How can I retry that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("How can I cancel that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("Stop talking about it.")).toBeUndefined();
+  });
+
+  it("recognizes explicit job launches and textual tool protocol", () => {
+    expect(explicitJobLaunchIntent("Start a background job to download the page.")).toBe(true);
+    expect(explicitJobLaunchIntent("Kick off a batchground task for this.")).toBe(true);
+    expect(explicitJobLaunchIntent("How can I start a background job?")).toBe(false);
+    expect(containsTextualToolProtocol("<function_calls>\n<invoke name=\"run_job\">"))
+      .toBe(true);
+    expect(containsTextualToolProtocol("I'll use <invoke name=\"run_job\"> now.")).toBe(true);
+    expect(containsTextualToolProtocol("The phrase function call is ordinary prose.")).toBe(false);
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {
@@ -143,6 +157,94 @@ describe("PiAgentOrchestrator", () => {
     );
     expect(events.at(-1)).toEqual({ type: "complete", requestId: "request-1" });
     expect(tool).not.toHaveBeenCalled();
+  });
+
+  it("discards textual tool markup and retries through the structured channel", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-tool-protocol-test" });
+    const leaked =
+      "I'll start it now.\n<function_calls>\n<invoke name=\"run_job\">\n" +
+      "<parameter name=\"instruction\">Download the page</parameter>\n</invoke>\n" +
+      "</function_calls>";
+    faux.setResponses([
+      fauxAssistantMessage(leaked),
+      fauxAssistantMessage(
+        fauxToolCall("run_job", { instruction: "Download the page" }, { id: "retry-run-job" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"queued"}',
+      details: { jobId: "job-1" },
+    }));
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Download the requested page for me.")]), (event) => {
+      events.push(event);
+    });
+
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "retry-run-job" }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    const rendered = JSON.stringify(
+      events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
+    );
+    expect(rendered).not.toContain("function_calls");
+    expect(rendered).not.toContain("<invoke");
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I started it.",
+    });
+  });
+
+  it("forces a structured run_job call for an explicit background-job launch", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-required-run-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("run_job", { instruction: "Download the page" }, { id: "run-job-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const orchestrator = new PiAgentOrchestrator(
+      model,
+      stream,
+      vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } })),
+    );
+
+    await orchestrator.run(
+      request([packet("user-1", "Start a background job to download the page.")]),
+      () => undefined,
+    );
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+  });
+
+  it("preserves textual tool tags when the user explicitly requests them verbatim", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-tool-tag-test" });
+    faux.setResponses([fauxAssistantMessage("I would normally paraphrase this.")]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(
+      request([packet("exact-tag", 'Repeat exactly: "<function_calls>"')]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(events.filter((event) => event.type === "model_delta")).toEqual([
+      { type: "model_delta", requestId: "request-1", text: "<function_calls>" },
+    ]);
   });
 
   it("keeps machine detail in display text while emitting a speakable alternative", async () => {

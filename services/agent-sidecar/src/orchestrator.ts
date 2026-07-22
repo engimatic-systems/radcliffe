@@ -89,6 +89,8 @@ const JOB_NOTIFICATION_POLICIES = [
 ] as const;
 const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel", "retry"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
+const TEXTUAL_TOOL_PROTOCOL =
+  /<\/?(?:function_calls?|invoke|parameter|tool_calls?|tool_call)\b/i;
 
 export interface DeliveryIntent {
   rate: SpeechRate;
@@ -690,16 +692,35 @@ export function explicitJobManagementOperation(text: string): JobManagementOpera
   return undefined;
 }
 
-function requiredManageJobStream(base: StreamFn): StreamFn {
+export function explicitJobLaunchIntent(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized || /\b(?:how (?:can|could|do|would) i|tell me how|explain how)\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\b(?:start|launch|create|run|kick off|spin up)\b.{0,48}\b(?:background|batchground)\s+(?:job|task|work)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:background|batchground)\s+(?:job|task)\b.{0,48}\b(?:start|launch|create|run)\b/.test(
+      normalized,
+    )
+  );
+}
+
+export function containsTextualToolProtocol(text: string): boolean {
+  return TEXTUAL_TOOL_PROTOCOL.test(text);
+}
+
+function requiredToolStream(base: StreamFn, toolName: "manage_job" | "run_job"): StreamFn {
   let firstRequest = true;
   return (model, context, options) => {
     if (!firstRequest) return base(model, context, options);
     firstRequest = false;
     const toolChoice =
       model.api === "anthropic-messages"
-        ? { type: "tool", name: "manage_job" }
+        ? { type: "tool", name: toolName }
         : model.api === "openai-completions"
-          ? { type: "function", function: { name: "manage_job" } }
+          ? { type: "function", function: { name: toolName } }
           : undefined;
     if (!toolChoice) return base(model, context, options);
     return base(model, context, { ...options, toolChoice } as Parameters<StreamFn>[2]);
@@ -786,8 +807,10 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "end the current conversation with manage_session. Never guess between returned choices and " +
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
-  "continues. Call job tools without a preamble. For each successful run_job or manage_job mutation, " +
-  "first describe the job tool action " +
+  "continues. Tool invocations must use the provider's structured tool channel. Never print XML, JSON, " +
+  "function tags, invoke tags, parameter tags, or a textual imitation of a tool call. " +
+  "Call job tools without a preamble. For each successful run_job or manage_job mutation, first " +
+  "describe the job tool action " +
   "in one short sentence using only a few words. Then provide any additional useful context the user " +
   "requested; do not omit it. In that tool-action sentence, never speak or reproduce the job ID, " +
   "status, notification policy, priority, budget, runtime, revision, or serialized tool result. " +
@@ -1090,6 +1113,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const exactOutputIntent = exactOutputFromPackets(packets);
     const jobOperation =
       current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
+    const jobLaunch = current.source === "user" && explicitJobLaunchIntent(current.content);
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
     let deliveryPreparation: DeliveryPreparation | undefined;
@@ -1161,6 +1185,8 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     let groundedJobDetails: Record<string, unknown> | undefined;
     const matchingJobCalls = new Set<string>();
     let providerError: string | undefined;
+    let textualToolProtocolViolation = false;
+    let textualToolProtocolRecoveries = 0;
     const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
       name: "list_sources",
       label: "List sources",
@@ -1460,6 +1486,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
             runJob,
             manageJob,
           ];
+    const controlledStream = jobOperation
+      ? requiredToolStream(turnStream, "manage_job")
+      : jobLaunch
+        ? requiredToolStream(turnStream, "run_job")
+        : turnStream;
     const agent = new Agent({
       initialState: {
         systemPrompt: systemPrompt(request, deliveryPreparation, exactOutputIntent),
@@ -1470,7 +1501,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       },
       convertToLlm: convertRadcliffeContext,
       transformContext: async (messages) => messages,
-      streamFn: jobOperation ? requiredManageJobStream(turnStream) : turnStream,
+      streamFn: controlledStream,
       sessionId: request.sessionId,
       toolExecution: "sequential",
     });
@@ -1496,6 +1527,14 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     };
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        const candidate = modelText + event.assistantMessageEvent.delta;
+        if (!exactOutputIntent && containsTextualToolProtocol(candidate)) {
+          textualToolProtocolViolation = true;
+          modelText = "";
+          pendingDisplayText = "";
+          return;
+        }
+        if (textualToolProtocolViolation) return;
         if (
           (!runJobCallSeen || runJobSucceeded) &&
           (!jobOperation || groundedJobCall)
@@ -1511,7 +1550,35 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("");
+        const protocolViolation =
+          !exactOutputIntent &&
+          (textualToolProtocolViolation || containsTextualToolProtocol(complete));
+        if (protocolViolation) {
+          const hasNativeToolCall = event.message.content.some((block) => block.type === "toolCall");
+          modelText = "";
+          pendingDisplayText = "";
+          textualToolProtocolViolation = false;
+          if (!hasNativeToolCall && textualToolProtocolRecoveries < 1) {
+            textualToolProtocolRecoveries += 1;
+            agent.followUp({
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Your previous response used textual tool syntax, so it was discarded. " +
+                    "Retry now using only the provider's structured tool channel. Do not " +
+                    "describe, print, or imitate the tool call.",
+                },
+              ],
+              timestamp: Date.now(),
+            });
+          } else if (!hasNativeToolCall) {
+            providerError = "model repeatedly emitted textual tool protocol";
+          }
+        }
         if (
+          !protocolViolation &&
           complete &&
           (!runJobCallSeen || runJobSucceeded) &&
           (!jobOperation || groundedJobCall)
@@ -1521,7 +1588,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         if (event.message.stopReason === "error") {
           providerError = event.message.errorMessage ?? "model provider failed";
         }
-        if (!exactOutputIntent && pendingDisplayText) {
+        if (!protocolViolation && !exactOutputIntent && pendingDisplayText) {
           await emitSpeechSegments(true);
         }
         await emit({
