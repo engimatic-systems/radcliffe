@@ -32,3 +32,7 @@ Implemented pinned Trafilatura 2.1.0 extraction, bounded query-relevant/stratifi
 **2026-07-22T02:34:11Z**
 
 Deployment hardening: the first preflight run exposed that RADCLIFFE_JOB_SANDBOX_IMAGE and the image embedded in RADCLIFFE_JOB_EXECUTOR_COMMAND could drift while readiness still reported green. Runtime config was corrected before restart; the preflight now requires both values to match, with a deterministic stale-image regression. Full Python gates pass with 357 tests (1 skipped).
+
+**2026-07-22T02:36:46Z**
+
+Final deployed Haiku 4.5 smoke on revision 58dff0a used preview_page exactly once against the public Gettysburg page, then read the saved extraction, wrote and verified report.md, and finished with a promoted artifact and source. The bounded result contained 5 chunks / 2,241 preview characters versus 12,277 extracted characters from 18,599 downloaded bytes. Four model responses cost /bin/zsh.017651 cumulatively under a deliberately tighter /bin/zsh.05 smoke cap; no sandbox container or network remained afterward.
