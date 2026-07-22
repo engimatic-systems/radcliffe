@@ -8,6 +8,7 @@ from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
     HAIKU_MODEL_ID,
+    PREVIEW_OUTPUT_LIMIT,
     SYSTEM_PROMPT,
     AnthropicAgent,
     DockerSandbox,
@@ -58,6 +59,30 @@ class FakeSandbox:
         self.workspace.joinpath("report.md").write_text("verified result\n")
         return 0, "private shell output", False
 
+    def preview_page(
+        self,
+        url: str,
+        query: str,
+        *,
+        timeout_seconds: int = 60,
+    ) -> tuple[int, str, bool]:
+        self.commands.append((f"preview:{url}:{query}", timeout_seconds))
+        return (
+            0,
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "untrusted": True,
+                    "title": "Example",
+                    "htmlPath": "pages/example.html",
+                    "textPath": "pages/example.txt",
+                    "preview": "Relevant sentence one. ... Relevant sentence two.",
+                },
+                separators=(",", ":"),
+            ),
+            False,
+        )
+
 
 class ScriptedOllama(OllamaAgent):
     def __init__(self, messages: list[dict[str, object]]) -> None:
@@ -92,7 +117,8 @@ def tool_batch(*calls: tuple[str, dict[str, object]]) -> dict[str, object]:
 
 
 def test_command_output_limit_leaves_room_for_the_bounded_model_context() -> None:
-    assert COMMAND_OUTPUT_LIMIT == 24 * 1024
+    assert COMMAND_OUTPUT_LIMIT == 8 * 1024
+    assert PREVIEW_OUTPUT_LIMIT == 8 * 1024
 
 
 def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
@@ -180,6 +206,63 @@ def test_anthropic_job_model_is_pinned_bounded_and_forces_one_tool(monkeypatch) 
         }
     ]
     assert agent.spent_usd == pytest.approx(0.0002)
+    assert message["usage"] == {
+        "inputTokens": 100,
+        "outputTokens": 20,
+        "cacheWriteTokens": 0,
+        "cacheReadTokens": 0,
+        "costUsd": pytest.approx(0.0002),
+        "cumulativeCostUsd": pytest.approx(0.0002),
+    }
+
+
+def test_agent_previews_a_page_without_putting_raw_html_in_model_context(
+    tmp_path,
+    capsys,
+) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+    sandbox = FakeSandbox(workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call(
+                "preview_page",
+                {
+                    "url": "https://example.test/bancroft",
+                    "query": "Bancroft Gettysburg",
+                },
+            ),
+            tool_call("run_shell", {"command": "create report", "purpose": "coding"}),
+            tool_call(
+                "finish_job",
+                {
+                    "summary": "Downloaded and checked the requested copy.",
+                    "artifactPaths": ["report.md"],
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=3,
+            result_workspace=workspace,
+        )
+    finally:
+        transcript.close()
+
+    assert sandbox.commands[0] == (
+        "preview:https://example.test/bancroft:Bancroft Gettysburg",
+        60,
+    )
+    assert "<html" not in json.dumps(agent.contexts)
+    assert "pages/example.html" in json.dumps(agent.contexts)
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [frame["detailCode"] for frame in frames] == ["searching", "coding", "completed"]
 
 
 def test_anthropic_job_model_retries_rate_limits_without_recording_response_body(
@@ -747,6 +830,34 @@ def test_docker_sandbox_passes_multiline_commands_as_an_opaque_argument(tmp_path
     )
     assert local.returncode == 0
     assert workspace.joinpath("report.md").read_text() == "first line\nsecond line\n"
+
+
+def test_docker_sandbox_passes_preview_url_and_query_as_opaque_arguments(tmp_path) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    calls: list[list[str]] = []
+
+    def capture(arguments, *, timeout=30, check=True):
+        del timeout, check
+        calls.append(list(arguments))
+        return subprocess.CompletedProcess(arguments, 0, b'{"preview":"bounded"}\n', b"")
+
+    sandbox._run = capture  # type: ignore[method-assign]
+
+    url = "https://example.test/page?q=$(not-executed)"
+    query = "Bancroft; $(also-not-executed)"
+    assert sandbox.preview_page(url, query) == (0, '{"preview":"bounded"}', False)
+    invocation = calls[-1]
+    assert invocation[-4:] == ["--url", url, "--query", query]
+    assert invocation[-1] == query
 
 
 def test_docker_sandbox_cleans_partial_start_when_proxy_is_unavailable(tmp_path) -> None:

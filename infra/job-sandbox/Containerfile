@@ -16,7 +16,11 @@ RUN apt-get update \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
+RUN python -m pip install --no-cache-dir trafilatura==2.1.0
+
 COPY services/control-plane/src/radcliffe_control/job_egress_proxy.py \
     /opt/radcliffe/job_egress_proxy.py
+COPY services/control-plane/src/radcliffe_control/page_preview.py \
+    /opt/radcliffe/page_preview.py
 
 WORKDIR /workspace
