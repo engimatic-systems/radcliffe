@@ -155,8 +155,12 @@ def preview_chunks(text: str, query: str, *, count: int = PREVIEW_CHUNKS) -> tup
     if terms:
         scored: list[tuple[int, int]] = []
         for start in range(last_start + 1):
-            candidate = " ".join(values[start : start + SENTENCES_PER_CHUNK]).casefold()
-            score = sum(candidate.count(term) for term in terms)
+            window = values[start : start + SENTENCES_PER_CHUNK]
+            candidate = " ".join(window).casefold()
+            first_sentence = window[0].casefold()
+            score = sum(candidate.count(term) for term in terms) + 2 * sum(
+                first_sentence.count(term) for term in terms
+            )
             if score:
                 scored.append((score, start))
         for _score, start in sorted(scored, key=lambda item: (-item[0], item[1])):

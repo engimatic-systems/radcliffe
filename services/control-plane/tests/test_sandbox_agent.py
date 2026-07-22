@@ -9,6 +9,7 @@ from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
     HAIKU_MODEL_ID,
     PREVIEW_OUTPUT_LIMIT,
+    SANDBOX_FILE_SIZE_LIMIT,
     SYSTEM_PROMPT,
     AnthropicAgent,
     DockerSandbox,
@@ -27,6 +28,12 @@ def test_background_prompt_keeps_radcliffe_as_the_harness_not_the_model() -> Non
     assert "selected Unix job model" in normalized
     assert "set inference true" in normalized
     assert "paths of every source" in normalized
+    assert "Follow the schema exactly" in normalized
+    assert "Do not add a preface, historical note" in normalized
+    assert "never reconstruct missing text from model memory" in normalized
+    assert "Never cite a generated output as its own evidence" in normalized
+    assert "After one check proves" in normalized
+    assert "call finish_job immediately" in normalized
     assert "You are Radcliffe" not in normalized
     assert "Radcliffe's background Unix job agent" not in normalized
 
@@ -119,6 +126,7 @@ def tool_batch(*calls: tuple[str, dict[str, object]]) -> dict[str, object]:
 def test_command_output_limit_leaves_room_for_the_bounded_model_context() -> None:
     assert COMMAND_OUTPUT_LIMIT == 8 * 1024
     assert PREVIEW_OUTPUT_LIMIT == 8 * 1024
+    assert SANDBOX_FILE_SIZE_LIMIT == 64 * 1024 * 1024
 
 
 def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
@@ -791,6 +799,7 @@ def test_docker_sandbox_mounts_only_attempt_workspace_and_uses_internal_network(
         sandbox.proxy_name,
     ] in calls
     assert "--cap-drop" in job_create and "ALL" in job_create
+    assert "fsize=67108864:67108864" in job_create
     assert not any(
         "TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_create
     )

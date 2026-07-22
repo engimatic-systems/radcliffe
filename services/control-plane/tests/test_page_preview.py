@@ -69,6 +69,25 @@ def test_build_preview_saves_full_page_and_returns_only_extracted_passages(
     assert len(json.dumps(result)) < page_preview.MAX_PREVIEW_CHARS + 1_000
 
 
+def test_relevant_match_starts_the_chunk_instead_of_being_truncated_at_its_end() -> None:
+    long_noise = "Background material " + "irrelevant words " * 80 + "."
+    text = " ".join(
+        (
+            long_noise,
+            long_noise,
+            "The full text of the Gettysburg Address follows.",
+            "Four score and seven years ago begins the address.",
+            "Now we are engaged in a great civil war continues it.",
+        )
+    )
+
+    chunks = page_preview.preview_chunks(text, "Gettysburg Address full text")
+    relevant = next(chunk for chunk in chunks if "full text" in chunk)
+
+    assert relevant.startswith("The full text")
+    assert "Four score and seven years ago" in relevant
+
+
 @pytest.mark.parametrize(
     "value",
     [
