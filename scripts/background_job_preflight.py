@@ -120,9 +120,13 @@ def job_model_ready(environment: Mapping[str, str]) -> bool:
         command = shlex.split(environment.get("RADCLIFFE_JOB_EXECUTOR_COMMAND", ""))
         provider_index = command.index("--provider")
         model_index = command.index("--model")
+        image_index = command.index("--image")
+        configured_image = environment.get("RADCLIFFE_JOB_SANDBOX_IMAGE", "")
         command_ready = (
             command[provider_index + 1] == "anthropic"
             and command[model_index + 1] == REQUIRED_USER_TEST_MODEL
+            and bool(configured_image)
+            and command[image_index + 1] == configured_image
         )
     except (ValueError, IndexError):
         command_ready = False

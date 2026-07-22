@@ -100,5 +100,24 @@ def test_preflight_rejects_qwen_in_either_user_test_model_role() -> None:
     assert codes(checks)["background_model"] == "background_model_not_haiku"
 
 
+def test_job_model_readiness_rejects_a_stale_embedded_sandbox_image() -> None:
+    environment = {
+        "RADCLIFFE_JOB_EXECUTOR_COMMAND": (
+            "python -m radcliffe_control.sandbox_agent --provider anthropic "
+            "--model claude-haiku-4-5-20251001 --image radcliffe-job-sandbox:current"
+        ),
+        "RADCLIFFE_JOB_SANDBOX_IMAGE": "radcliffe-job-sandbox:current",
+        "RADCLIFFE_JOB_MODEL_PROVIDER": "anthropic",
+        "RADCLIFFE_JOB_ALLOW_CLOUD_MODELS": "1",
+        "RADCLIFFE_ANTHROPIC_API_KEY": "test-only",
+    }
+    assert PREFLIGHT.job_model_ready(environment)
+
+    environment["RADCLIFFE_JOB_EXECUTOR_COMMAND"] = environment[
+        "RADCLIFFE_JOB_EXECUTOR_COMMAND"
+    ].replace(":current", ":stale")
+    assert not PREFLIGHT.job_model_ready(environment)
+
+
 def test_synthetic_preflight_job_uses_the_real_process_contract_without_a_provider() -> None:
     assert asyncio.run(PREFLIGHT.synthetic_executor_smoke())
