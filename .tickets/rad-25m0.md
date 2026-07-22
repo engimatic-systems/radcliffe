@@ -36,3 +36,7 @@ Implemented provider-native run_job forcing for explicit background launches plu
 **2026-07-22T03:00:26Z**
 
 Regression coverage now uses the exact fenced form observed on the phone (run_job plus YAML-like job_type/target_url fields). The sidecar quarantines it before model_delta/model_complete, queues one retry, and the retry invokes exactly one native run_job call. The foreground system prompt and corrective retry both contain 'Follow the schema exactly'.
+
+**2026-07-22T13:43:49Z**
+
+Newest two phone sessions isolated a schema-lifecycle root cause, not another missing syntax regex. Requests that mentioned later verbatim delivery were falsely classified as immediate exact-output; the orchestrator then removed every native tool schema and bypassed textual-protocol quarantine. Changed the invariant so all seven schemas are attached on the first and every exact-output provider request, while provider toolChoice=none separately prevents execution for a true literal response. Exact-output classification now requires an identifiable literal or sequence. Plain 'run a job' and 'start a new job' requests now force native run_job. Regression coverage uses both observed phone phrasings, verifies schemas on the first turn, quarantines run_job(...) before speech, and confirms structured Anthropic tool choice. Sidecar suite: 105 passing; TypeScript check and build pass.

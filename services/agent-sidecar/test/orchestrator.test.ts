@@ -119,8 +119,11 @@ describe("PiAgentOrchestrator", () => {
 
   it("recognizes explicit job launches and textual tool protocol", () => {
     expect(explicitJobLaunchIntent("Start a background job to download the page.")).toBe(true);
+    expect(explicitJobLaunchIntent("Run a job that downloads the first result.")).toBe(true);
+    expect(explicitJobLaunchIntent("Start a new job and save it to disk.")).toBe(true);
     expect(explicitJobLaunchIntent("Kick off a batchground task for this.")).toBe(true);
     expect(explicitJobLaunchIntent("How can I start a background job?")).toBe(false);
+    expect(explicitJobLaunchIntent("Tell me how to run a job.")).toBe(false);
     expect(containsTextualToolProtocol("<function_calls>\n<invoke name=\"run_job\">"))
       .toBe(true);
     expect(containsTextualToolProtocol("I'll use <invoke name=\"run_job\"> now.")).toBe(true);
@@ -207,6 +210,46 @@ describe("PiAgentOrchestrator", () => {
     });
   });
 
+  it("quarantines a textual tool imitation when later source delivery is requested verbatim", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-verbatim-tool-protocol-test" });
+    const utterance =
+      "Download the first commentary on the Gettysburg Address and then read it to me verbatim.";
+    faux.setResponses([
+      fauxAssistantMessage(
+        'I will download it.\nrun_job(tool_type: "download", resource: "commentary")',
+      ),
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the first commentary on the Gettysburg Address." },
+          { id: "verbatim-retry-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } }));
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", utterance)]), (event) => {
+      events.push(event);
+    });
+
+    expect(classifyExactOutputIntent(utterance)).toBeUndefined();
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "verbatim-retry-run-job" }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(JSON.stringify(events)).not.toContain("tool_type");
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I started it.",
+    });
+  });
+
   it("forces a structured run_job call for an explicit background-job launch", async () => {
     const faux = createFauxCore({ provider: "radcliffe-required-run-job-test" });
     faux.setResponses([
@@ -232,6 +275,46 @@ describe("PiAgentOrchestrator", () => {
     expect(stream.mock.calls[0]?.[2]).toMatchObject({
       toolChoice: { type: "tool", name: "run_job" },
     });
+    expect(stream.mock.calls[0]?.[1].tools?.map((tool) => tool.name)).toEqual(
+      RADCLIFFE_TOOL_NAMES,
+    );
+  });
+
+  it("keeps every schema available when a first-turn job request mentions later verbatim delivery", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-first-turn-schema-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the first commentary and save it to disk." },
+          { id: "run-job-first-turn" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const tool = vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } }));
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+    const utterance =
+      "Start a new job that downloads the first piece of commentary, save it to disk, " +
+      "and after it is done I will have you read it verbatim.";
+
+    await orchestrator.run(request([packet("first-user", utterance)]), () => undefined);
+
+    expect(classifyExactOutputIntent(utterance)).toBeUndefined();
+    expect(stream.mock.calls[0]?.[1].tools?.map((candidate) => candidate.name)).toEqual(
+      RADCLIFFE_TOOL_NAMES,
+    );
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "run-job-first-turn" }),
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("preserves textual tool tags when the user explicitly requests them verbatim", async () => {
@@ -481,6 +564,36 @@ describe("PiAgentOrchestrator", () => {
     expect(events.filter((event) => event.type === "model_delta")).toEqual([
       { type: "model_delta", requestId: "request-1", text: literal },
     ]);
+  });
+
+  it("retains startup schemas while disabling tool execution for true exact output", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-schema-test" });
+    faux.setResponses([
+      (context) => {
+        expect(context.tools?.map((candidate) => candidate.name)).toEqual(RADCLIFFE_TOOL_NAMES);
+        return fauxAssistantMessage("I would normally add a preamble.");
+      },
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const tool = vi.fn();
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+
+    await orchestrator.run(
+      request([packet("exact-url", "Repeat exactly https://example.test/a?q=1")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({ toolChoice: "none" });
+    expect(tool).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "https://example.test/a?q=1",
+    });
   });
 
   it.each([

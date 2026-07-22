@@ -297,7 +297,7 @@ export function classifyExactOutputIntent(
   if (quoted) return { kind: "literal", literal: quoted };
   const afterColon = normalized.match(/:\s*([^\n]{1,4000})$/s)?.[1];
   if (afterColon) return { kind: "literal", literal: trimCapturedLiteral(afterColon) };
-  return { kind: "literal" };
+  return undefined;
 }
 
 function expectedNumericItems(intent: ExactOutputIntent): number[] {
@@ -701,6 +701,9 @@ export function explicitJobLaunchIntent(text: string): boolean {
     /\b(?:start|launch|create|run|kick off|spin up)\b.{0,48}\b(?:background|batchground)\s+(?:job|task|work)\b/.test(
       normalized,
     ) ||
+    /\b(?:start|launch|create|run|kick off|spin up)\b.{0,24}\b(?:a\s+)?(?:new\s+)?(?:job|task)\b/.test(
+      normalized,
+    ) ||
     /\b(?:background|batchground)\s+(?:job|task)\b.{0,48}\b(?:start|launch|create|run)\b/.test(
       normalized,
     )
@@ -725,6 +728,14 @@ function requiredToolStream(base: StreamFn, toolName: "manage_job" | "run_job"):
     if (!toolChoice) return base(model, context, options);
     return base(model, context, { ...options, toolChoice } as Parameters<StreamFn>[2]);
   };
+}
+
+function toolDisabledStream(base: StreamFn): StreamFn {
+  return (model, context, options) =>
+    base(model, context, {
+      ...options,
+      toolChoice: "none",
+    } as Parameters<StreamFn>[2]);
 }
 
 function toolResultDetails(value: unknown): Record<string, unknown> | undefined {
@@ -1472,26 +1483,29 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       packet,
     }));
     const turnStream = this.streamFnForTurn?.(request) ?? this.streamFn;
+    const allTools = [
+      listSources,
+      readSource,
+      readJobSource,
+      configure,
+      manageSession,
+      runJob,
+      manageJob,
+    ];
     const tools = exactOutputIntent
-      ? []
+      ? allTools
       : deliveryIntent
         ? deliveryIntent.sourceRead
           ? [listSources, readSource, readJobSource, manageSession, runJob, manageJob]
           : [manageSession, runJob, manageJob]
-        : [
-            listSources,
-            readSource,
-            readJobSource,
-            configure,
-            manageSession,
-            runJob,
-            manageJob,
-          ];
-    const controlledStream = jobOperation
-      ? requiredToolStream(turnStream, "manage_job")
-      : jobLaunch
-        ? requiredToolStream(turnStream, "run_job")
-        : turnStream;
+        : allTools;
+    const controlledStream = exactOutputIntent
+      ? toolDisabledStream(turnStream)
+      : jobOperation
+        ? requiredToolStream(turnStream, "manage_job")
+        : jobLaunch
+          ? requiredToolStream(turnStream, "run_job")
+          : turnStream;
     const agent = new Agent({
       initialState: {
         systemPrompt: systemPrompt(request, deliveryPreparation, exactOutputIntent),
