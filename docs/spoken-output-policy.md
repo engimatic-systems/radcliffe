@@ -46,11 +46,14 @@ and export, but automatically reading it through a screen reader would recreate 
 experience. Follow-up `rad-c2tv` adds an Android/TalkBack affordance that announces availability and
 offers an intentional exact-reading action.
 
-Completed turns retain the full original display response. Interrupted partial turns currently use
-completed spoken bytes as their durability boundary; mapping those bytes back to differently sized
-display text requires playback-aware paired segment bookkeeping. Follow-up `rad-2e0w` owns that
-broader interruption-safe mapping so this change does not persist model detail that was never
-delivered.
+Completed turns retain the full original display response. Each streaming display/spoken pair is
+also mapped onto one or more model playback segments. The final playback segment in a pair owns its
+display text, so an interruption or failure persists that raw display text only after every spoken
+chunk in the pair reaches a durable completed boundary. This remains correct when the spoken
+alternative is longer or shorter than its display counterpart. A queued but unacknowledged Android
+segment owns no durable display text; later stale flush acknowledgements cannot add it after the
+turn is closed. Partial-envelope length metadata and telemetry contain counts and category names,
+never matched content.
 
 ## Evaluation
 

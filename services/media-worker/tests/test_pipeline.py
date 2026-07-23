@@ -152,6 +152,52 @@ class PauseAtSecondBoundaryPublisher(FakePublisher):
         self.flush_count += 1
 
 
+class BlockSecondModelPublisher(FakePublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_boundary_started = asyncio.Event()
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        del wait_for_playback
+        self.segment_ids.append(segment_id)
+        self.audio.append(pcm_audio)
+        if len(self.segment_ids) == 2:
+            self.second_boundary_started.set()
+            await asyncio.Event().wait()
+        return len(pcm_audio)
+
+
+class FailSecondModelBoundaryOncePublisher(FakePublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        if len(self.segment_ids) == 1 and not self.failed:
+            del wait_for_playback
+            self.failed = True
+            self.segment_ids.append(segment_id)
+            self.audio.append(pcm_audio)
+            raise RuntimeError("deterministic second-boundary failure")
+        return await super().publish(
+            segment_id,
+            pcm_audio,
+            wait_for_playback=wait_for_playback,
+        )
+
+
 class FakeEvents:
     def __init__(self) -> None:
         self.messages = []
@@ -244,6 +290,28 @@ class SpokenAlternativeOrchestrator:
             },
         )
         yield SidecarEvent("model_complete", {"text": self.display})
+        yield SidecarEvent("complete", {})
+
+
+class SplitSpokenAlternativeOrchestrator:
+    def __init__(self, pairs: tuple[tuple[str, str], ...]) -> None:
+        self.pairs = pairs
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        for display, spoken in self.pairs:
+            yield SidecarEvent(
+                "model_delta",
+                {
+                    "text": display,
+                    "spokenText": spoken,
+                    "spokenCategories": ["identifier"],
+                },
+            )
+        yield SidecarEvent(
+            "model_complete",
+            {"text": "".join(display for display, _spoken in self.pairs)},
+        )
         yield SidecarEvent("complete", {})
 
 
@@ -863,6 +931,205 @@ async def test_spoken_alternative_preserves_visual_detail_without_speaking_it(tm
     assert "job_0123456789abcdef" not in telemetry
     assert "/srv/radcliffe/output/report.json" not in telemetry
     assert "https://" not in telemetry
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    (
+        (
+            (
+                "The internal identifier job_0123456789abcdef is visible. ",
+                "The identifier is shown. ",
+            ),
+            (
+                "Next. ",
+                "A deliberately longer alternative is available in the conversation.",
+            ),
+        ),
+        (
+            (
+                "Brief detail. ",
+                "A deliberately longer first alternative is shown in the conversation. ",
+            ),
+            (
+                "The path /srv/radcliffe/private/report.json is visible. ",
+                "The path is shown.",
+            ),
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_barge_in_persists_only_display_pair_with_completed_spoken_boundary(
+    tmp_path,
+    pairs,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    publisher = BlockSecondModelPublisher()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SplitSpokenAlternativeOrchestrator(pairs),
+        FakeSynthesizer(),
+        publisher,
+        FakeEvents(),
+        telemetry=TelemetrySink(telemetry_path, strict=True),
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Show two split-channel details"))
+    await asyncio.wait_for(publisher.second_boundary_started.wait(), timeout=1)
+    await pipeline.barge_in(
+        verifier="silero",
+        evidence_duration_ms=390,
+    )
+    await asyncio.wait_for(turn, timeout=1)
+
+    model = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert model.content.inline_text == pairs[0][0]
+    assert model.metadata["radcliffe.partial"] == "true"
+    assert model.metadata["radcliffe.rendered_chars"] == str(len(pairs[0][1]))
+    assert model.metadata["radcliffe.rendered_display_chars"] == str(len(pairs[0][0]))
+    assert pairs[0][1] not in model.content.inline_text
+    assert pairs[1][0] not in model.content.inline_text
+    assert pairs[1][1] not in model.content.inline_text
+    telemetry = telemetry_path.read_text()
+    assert telemetry.count('"event":"spoken_output"') == 2
+    assert all(value not in telemetry for pair in pairs for value in pair)
+
+
+@pytest.mark.asyncio
+async def test_failed_split_channel_playback_keeps_raw_prefix_and_retry_keeps_full_raw_text(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    pairs = (
+        (
+            "The internal identifier job_0123456789abcdef is visible. ",
+            "The identifier is shown. ",
+        ),
+        (
+            "Next. ",
+            "A deliberately longer alternative is available in the conversation.",
+        ),
+    )
+    publisher = FailSecondModelBoundaryOncePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SplitSpokenAlternativeOrchestrator(pairs),
+        FakeSynthesizer(),
+        publisher,
+        FakeEvents(),
+    )
+    await pipeline.start()
+
+    with pytest.raises(RuntimeError, match="second-boundary"):
+        await pipeline.handle_transcript("Render the split-channel response")
+    await pipeline.handle_transcript("Retry the response")
+
+    models = [item for item in await store.replay("s1") if item.source is SourceKind.MODEL]
+    assert [item.content.inline_text for item in models] == [
+        pairs[0][0],
+        "".join(display for display, _spoken in pairs),
+    ]
+    assert models[0].metadata["radcliffe.partial"] == "true"
+    assert "radcliffe.partial" not in models[1].metadata
+    assert all(
+        spoken not in item.content.inline_text for item in models for _display, spoken in pairs
+    )
+
+
+@pytest.mark.asyncio
+async def test_device_playback_boundary_selects_raw_display_pair_after_barge_in(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    pairs = (
+        (
+            "The internal identifier job_0123456789abcdef is visible. ",
+            "The identifier is shown. ",
+        ),
+        (
+            "Next. ",
+            "A deliberately longer alternative is available in the conversation.",
+        ),
+    )
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SplitSpokenAlternativeOrchestrator(pairs),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Queue two split-channel details"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    for _ in range(100):
+        if len(events.playback_segments) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 2
+    first = events.playback_segments[0]
+    operation, playback_id, segment_id, boundary_index, duration_ms, *_ = first
+    for suffix, status, position_ms, boundary in (
+        ("started", PlaybackStatus.STARTED, 0, boundary_index),
+        ("completed", PlaybackStatus.COMPLETED, duration_ms, boundary_index + 1),
+    ):
+        assert await pipeline.playback_acknowledgement(
+            PlaybackAcknowledgement(
+                acknowledgement_id=f"first-{suffix}",
+                operation=operation,
+                segment_id=segment_id,
+                status=status,
+                position_ms=position_ms,
+                boundary_index=boundary,
+                occurred_at=datetime.now(UTC),
+                playback_id=playback_id,
+            )
+        )
+    second = events.playback_segments[1]
+    operation, playback_id, segment_id, boundary_index, _duration_ms, *_ = second
+    assert await pipeline.playback_acknowledgement(
+        PlaybackAcknowledgement(
+            acknowledgement_id="second-started",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.STARTED,
+            position_ms=0,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        )
+    )
+
+    await pipeline.barge_in(verifier="silero", evidence_duration_ms=410)
+    await asyncio.wait_for(turn, timeout=1)
+
+    model = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert model.content.inline_text == pairs[0][0]
+    assert model.metadata["radcliffe.partial"] == "true"
+    assert await pipeline.playback_acknowledgement(
+        PlaybackAcknowledgement(
+            acknowledgement_id="second-flushed",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.FLUSHED,
+            position_ms=0,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        )
+    )
+    unchanged = [item for item in await store.replay("s1") if item.source is SourceKind.MODEL]
+    assert [item.content.inline_text for item in unchanged] == [pairs[0][0]]
 
 
 @pytest.mark.asyncio
@@ -2082,10 +2349,11 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
             break
         await asyncio.sleep(0)
     assert len(events.playback_segments) == 2
-    await asyncio.wait_for(events.model_persisted.wait(), timeout=1)
     await asyncio.sleep(0)
 
     assert not turn.done()
+    assert not events.model_persisted.is_set()
+    assert all(item.source is not SourceKind.MODEL for item in await store.replay("s1"))
     assert pipeline.engine.state is ConversationState.SPEAKING
     assert pipeline.foreground_turn_active()
     assert not pipeline.notification_foreground_available()
@@ -2110,6 +2378,7 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
             )
 
     await asyncio.wait_for(turn, timeout=1)
+    assert events.model_persisted.is_set()
     assert pipeline.engine.state is ConversationState.LISTENING
     assert not pipeline.foreground_turn_active()
     assert pipeline.notification_foreground_available()
@@ -2145,7 +2414,6 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
             break
         await asyncio.sleep(0)
     assert len(events.playback_segments) == 2
-    await asyncio.wait_for(events.model_persisted.wait(), timeout=1)
     await asyncio.sleep(0)
     old_generation = events.playback_segments[0][0].generation
 
@@ -2163,6 +2431,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
     assert pipeline.engine.state is ConversationState.LISTENING
     assert pipeline.engine.generation == old_generation + 1
     assert any(reason == "interrupted" for _, _, _, reason, _ in events.states)
+    assert all(item.source is not SourceKind.MODEL for item in await store.replay("s1"))
 
     operation, playback_id, segment_id, boundary_index, *_ = events.playback_segments[0]
     with pytest.raises(StaleOperationError, match="nonterminal"):
@@ -2203,6 +2472,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
             )
         ]
     assert statuses == ["flushed", "flushed"]
+    assert all(item.source is not SourceKind.MODEL for item in await store.replay("s1"))
     telemetry = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
     correlated = [item for item in telemetry if item["operation"] == operation.operation_id]
     assert any(
