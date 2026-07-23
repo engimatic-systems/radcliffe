@@ -317,11 +317,17 @@ class VoiceSessionService : MediaSessionService() {
             }
             SessionModel.message(
                 DisplayMessage(
-                    message.messageId,
-                    kind,
-                    message.content.inlineText,
-                    message.provenance.displayName.ifBlank { null },
-                    message.metadataMap["radcliffe.delivery.summary"],
+                    id = message.messageId,
+                    kind = kind,
+                    text = message.content.inlineText,
+                    provenance = message.provenance.displayName.ifBlank { null },
+                    deliveryLabel = message.metadataMap["radcliffe.delivery.summary"],
+                    technicalDetailCategories = technicalDetailCategories(
+                        kind,
+                        message.metadataMap["radcliffe.spoken_output.categories"]
+                            ?.split(",")
+                            .orEmpty(),
+                    ),
                 ),
             )
         }

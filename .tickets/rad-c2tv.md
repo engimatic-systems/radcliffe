@@ -1,6 +1,6 @@
 ---
 id: rad-c2tv
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-21T04:04:49Z

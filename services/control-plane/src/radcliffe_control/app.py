@@ -60,7 +60,7 @@ from radcliffe_domain.devices import (
     DeviceRegistry,
     credential_digest,
 )
-from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity
+from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity, SourceKind
 from radcliffe_domain.jobs import (
     JobConflictError,
     JobError,
@@ -133,11 +133,38 @@ from radcliffe_control.workers import (
 )
 
 logger = logging.getLogger(__name__)
+_SPOKEN_OUTPUT_CATEGORIES = frozenset(
+    {
+        "hash",
+        "identifier",
+        "url",
+        "path",
+        "timestamp",
+        "stack_trace",
+        "serialized_data",
+        "long_number",
+        "code",
+        "citation",
+        "repeated_punctuation",
+        "acronym_metadata",
+    }
+)
 
 
 def _to_camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.title() for part in rest)
+
+
+def _technical_detail_categories(envelope: MessageEnvelope) -> tuple[str, ...]:
+    if envelope.source is not SourceKind.MODEL:
+        return ()
+    return tuple(
+        sorted(
+            set(envelope.metadata.get("radcliffe.spoken_output.categories", "").split(","))
+            & _SPOKEN_OUTPUT_CATEGORIES
+        )
+    )
 
 
 class SessionRequest(BaseModel):
@@ -288,6 +315,7 @@ class SessionMessageResponse(BaseModel):
     text: str | None
     provenance_label: str | None
     delivery_label: str | None
+    technical_detail_categories: tuple[str, ...]
 
 
 class SessionMessageListResponse(BaseModel):
@@ -2471,6 +2499,7 @@ def create_app(
                         envelope.provenance.display_name or envelope.provenance.locator or None
                     ),
                     delivery_label=render_projection(envelope).delivery_summary,
+                    technical_detail_categories=_technical_detail_categories(envelope),
                 )
                 for envelope in items
             ),

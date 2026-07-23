@@ -389,7 +389,10 @@ def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -
                 sequence=3,
                 source=SourceKind.MODEL,
                 text="First answer",
-                metadata={"radcliffe.delivery.rate.0": "1.25x"},
+                metadata={
+                    "radcliffe.delivery.rate.0": "1.25x",
+                    "radcliffe.spoken_output.categories": "identifier,path,private-value",
+                },
                 provenance=Provenance(display_name="Local model"),
                 message_id="model-1",
             ),
@@ -430,6 +433,7 @@ def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -
                     "text": "First question",
                     "provenance_label": None,
                     "delivery_label": None,
+                    "technical_detail_categories": [],
                 }
             ],
             "next_after": 1,
@@ -442,6 +446,10 @@ def test_session_timeline_is_chronological_paginated_and_secret_safe(tmp_path) -
         assert [item["message_id"] for item in second.json()["items"]] == ["model-1"]
         assert second.json()["items"][0]["provenance_label"] == "Local model"
         assert second.json()["items"][0]["delivery_label"] == "Fast (1.25×)"
+        assert second.json()["items"][0]["technical_detail_categories"] == [
+            "identifier",
+            "path",
+        ]
         assert second.json()["next_after"] is None
         assert "provider-secret" not in second.text
         assert "internal interrupted-turn audit" not in second.text
