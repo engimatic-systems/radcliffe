@@ -301,6 +301,11 @@ class JobExecutorSupervisor:
                         "jobId": claim.record.job_id,
                         "attempt": claim.record.attempt,
                         "instruction": claim.instruction,
+                        "userMessage": claim.user_message,
+                        "relatedLinks": [
+                            {"label": item.label, "locator": item.locator}
+                            for item in claim.related_links
+                        ],
                         "followUps": [
                             {"id": item.follow_up_id, "instruction": item.instruction}
                             for item in claim.follow_ups

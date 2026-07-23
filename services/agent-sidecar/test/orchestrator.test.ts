@@ -947,6 +947,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "run_job",
+        userMessage: "Run a Fibonacci job",
         arguments: {
           instruction: "Create and test a Fibonacci script.",
           maxRuntimeSeconds: 30,
@@ -1008,6 +1009,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "run_job",
+        userMessage: "Research this while we talk",
         arguments: {
           instruction: "Search six months of private lab papers",
           notificationPolicy: "next_safe_pause",
@@ -1035,6 +1037,51 @@ describe("PiAgentOrchestrator", () => {
         events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
       ),
     ).not.toContain("job-1");
+  });
+
+  it("sends one exact current-turn user message without prior user turns", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-current-turn-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the exact source selected by the user." },
+          { id: "current-turn-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"queued"}',
+      details: { jobId: "job-1" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([
+        packet("old-user", "An unrelated older request.", {
+          annotations: [["radcliffe.turn_id", "turn-old"]],
+        }),
+        packet("fragment-one", "Use the Bancroft version exactly.", {
+          annotations: [["radcliffe.turn_id", "turn-current"]],
+        }),
+        packet("fragment-two", "Run that as a background job.", {
+          annotations: [["radcliffe.turn_id", "turn-current"]],
+        }),
+      ]),
+      () => undefined,
+    );
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        userMessage: "Use the Bancroft version exactly.\nRun that as a background job.",
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(JSON.stringify(tool.mock.calls)).not.toContain("unrelated older request");
   });
 
   it("keeps a failed background-job acceptance brief and truthful", async () => {
@@ -1285,6 +1332,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "manage_job",
+        userMessage: scenario.requestText,
         arguments: scenario.arguments,
       }),
       expect.anything(),

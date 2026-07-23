@@ -5,10 +5,12 @@ from radcliffe_control.job_results import (
     PromotedArtifact,
     PromotedFinding,
     PromotedJobResult,
+    PromotedRelatedLink,
     PromotedSource,
     read_promoted_result,
     read_promoted_source,
     read_promoted_sources,
+    read_workspace_related_links,
     write_promoted_result,
 )
 
@@ -38,6 +40,21 @@ def test_promoted_result_round_trips_as_owner_only_file(tmp_path) -> None:
 
     assert target.stat().st_mode & 0o777 == 0o600
     assert read_promoted_result(root, job_id="job-1", attempt=1) == result()
+
+
+def test_private_page_link_manifests_promote_bounded_related_links(tmp_path) -> None:
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    pages.joinpath("page-one.links.json").write_text(
+        '{"schemaVersion":1,"links":['
+        '{"label":"Second story","locator":"https://example.test/second"},'
+        '{"label":"Duplicate","locator":"https://example.test/second"},'
+        '{"label":"Unsafe","locator":"file:///etc/passwd"}]}'
+    )
+
+    assert read_workspace_related_links(tmp_path) == (
+        PromotedRelatedLink(label="Second story", locator="https://example.test/second"),
+    )
 
 
 def test_promoted_result_reader_fails_closed_on_links_mismatch_and_oversize(tmp_path) -> None:

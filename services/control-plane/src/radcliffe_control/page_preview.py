@@ -8,8 +8,9 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from trafilatura import bare_extraction, html2txt
 
@@ -19,6 +20,7 @@ MAX_PREVIEW_CHARS = 3_600
 MAX_CHUNK_CHARS = 680
 PREVIEW_CHUNKS = 5
 SENTENCES_PER_CHUNK = 3
+MAX_RELATED_LINKS = 100
 USER_AGENT = "RadcliffePagePreview/1.0"
 STOP_WORDS = frozenset(
     {
@@ -43,6 +45,55 @@ class PreviewError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() != "a" or self._href is not None:
+            return
+        href = next((value for name, value in attrs if name.casefold() == "href"), None)
+        if href:
+            self._href = href
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() != "a" or self._href is None:
+            return
+        self.links.append((self._href, "".join(self._text)))
+        self._href = None
+        self._text = []
+
+
+def related_links(html: str, base_url: str) -> tuple[dict[str, str], ...]:
+    parser = _LinkParser()
+    parser.feed(html)
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_locator, raw_label in parser.links:
+        label = re.sub(r"\s+", " ", raw_label).strip()
+        if not label:
+            continue
+        try:
+            locator = normalized_public_url(urljoin(base_url, raw_locator))
+        except PreviewError:
+            continue
+        if locator in seen:
+            continue
+        seen.add(locator)
+        result.append({"label": label[:300], "locator": locator[:2_048]})
+        if len(result) >= MAX_RELATED_LINKS:
+            break
+    return tuple(result)
 
 
 def normalized_public_url(value: str) -> str:
@@ -209,12 +260,28 @@ def build_preview(url: str, query: str, workspace: Path) -> dict[str, object]:
     pages.mkdir(mode=0o700, exist_ok=True)
     html_relative = f"pages/page-{digest}.html"
     text_relative = f"pages/page-{digest}.txt"
+    links_relative = f"pages/page-{digest}.links.json"
     html_path = workspace.resolve() / html_relative
     text_path = workspace.resolve() / text_relative
+    links_path = workspace.resolve() / links_relative
     if not html_path.exists():
         _write_private(html_path, encoded)
     if not text_path.exists():
         _write_private(text_path, extracted.encode())
+    links = related_links(html, final_url) if media_type != "text/plain" else ()
+    if not links_path.exists():
+        _write_private(
+            links_path,
+            (
+                json.dumps(
+                    {"schemaVersion": 1, "sourceUrl": final_url, "links": links},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode(),
+        )
     chunks = preview_chunks(extracted, query)
     return {
         "schemaVersion": 1,
@@ -228,6 +295,7 @@ def build_preview(url: str, query: str, workspace: Path) -> dict[str, object]:
         "textPath": text_relative,
         "preview": "\n\n...\n\n".join(chunks),
         "previewChunks": len(chunks),
+        "relatedLinkCount": len(links),
     }
 
 

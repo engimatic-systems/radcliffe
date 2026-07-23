@@ -14,6 +14,8 @@ ARTICLE = """
   <body>
     <nav>Account Help Subscribe Navigation Noise</nav>
     <article>
+      <a href="/second-story">Second story</a>
+      <a href="https://user:secret@example.test/private">Private link</a>
       <p>Abraham Lincoln wrote several copies of the Gettysburg Address.</p>
       <p>The Bancroft copy was prepared for historian George Bancroft.</p>
       <p>Its provenance distinguishes it from the other manuscript copies.</p>
@@ -66,6 +68,13 @@ def test_build_preview_saves_full_page_and_returns_only_extracted_passages(
     assert "Bancroft" in str(result["preview"])
     assert tmp_path.joinpath(str(result["htmlPath"])).read_bytes() == encoded
     assert "Gettysburg Address" in tmp_path.joinpath(str(result["textPath"])).read_text()
+    assert result["relatedLinkCount"] == 1
+    manifests = list(tmp_path.glob("pages/*.links.json"))
+    assert len(manifests) == 1
+    assert json.loads(manifests[0].read_text())["links"] == [
+        {"label": "Second story", "locator": "https://example.test/second-story"}
+    ]
+    assert "relatedLinks" not in result
     assert len(json.dumps(result)) < page_preview.MAX_PREVIEW_CHARS + 1_000
 
 

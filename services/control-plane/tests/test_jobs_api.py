@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import sqlite3
 import time
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from radcliffe_control.job_results import (
     PromotedArtifact,
     PromotedFinding,
     PromotedJobResult,
+    PromotedRelatedLink,
     PromotedSource,
     write_promoted_result,
 )
@@ -119,6 +121,7 @@ def tool(
             "turnId": f"turn-{call_id}",
             "callId": call_id,
             "idempotencyKey": f"background:{call_id}",
+            "userMessage": f"verbatim user turn for {call_id}",
             "toolName": tool_name,
             "arguments": arguments,
         },
@@ -552,6 +555,71 @@ def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
         assert status.json()["details"]["latestDetailCode"] == "completed"
         assert private_instruction not in status.text
         assert private_transcript not in status.text
+
+
+def test_new_job_snapshots_bounded_links_from_prior_success(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        first = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-headlines",
+            arguments={"instruction": "Collect the Hacker News headlines."},
+        )
+        first_job_id = first.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "headlines-worker", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        workspace = workspace_root / first_job_id / "attempt-1"
+        workspace.mkdir(parents=True)
+        write_promoted_result(
+            workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=first_job_id,
+                summary="Collected the headlines.",
+                relatedLinks=(
+                    PromotedRelatedLink(
+                        label="Second story",
+                        locator="https://example.test/second-story",
+                    ),
+                ),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{first_job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "headlines-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+            },
+        )
+        assert succeeded.status_code == 200
+
+        second = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-second-story",
+            arguments={"instruction": "Download the requested story."},
+        )
+        second_job_id = second.json()["details"]["jobId"]
+
+    with sqlite3.connect(config.database_path) as db:
+        user_message, links_json = db.execute(
+            """SELECT user_message, related_links_json
+            FROM background_job_attempt_contexts WHERE job_id = ? AND attempt = 1""",
+            (second_job_id,),
+        ).fetchone()
+    assert user_message == "verbatim user turn for run-second-story"
+    assert json.loads(links_json) == [
+        {"label": "Second story", "locator": "https://example.test/second-story"}
+    ]
 
 
 def test_unsourced_markdown_job_artifact_is_status_visible_and_readable(tmp_path) -> None:

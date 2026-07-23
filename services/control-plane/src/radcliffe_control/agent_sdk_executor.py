@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from radcliffe_control.job_results import (
     PromotedJobResult,
     generated_artifact_source,
+    read_workspace_related_links,
     write_promoted_result,
 )
 from radcliffe_control.sandbox_agent import (
@@ -371,6 +372,7 @@ class AgentSdkTools:
                 artifacts=artifacts,
                 sources=sources,
                 findings=findings,
+                relatedLinks=read_workspace_related_links(self.workspace),
             )
             write_promoted_result(self.attempt_workspace, result)
         except (OSError, ValueError, ValidationError) as error:
@@ -415,6 +417,7 @@ class AgentSdkTools:
                 artifacts=(),
                 sources=(),
                 findings=(),
+                relatedLinks=read_workspace_related_links(self.workspace),
             )
             write_promoted_result(self.attempt_workspace, result)
         except (OSError, ValueError, ValidationError) as error:
@@ -513,7 +516,14 @@ def _read_prompt(path: Path) -> str:
 
 
 def _prompt(start: StartFrame) -> str:
-    parts = ["User job instruction:\n" + start.instruction]
+    parts = ["Foreground instruction:\n" + start.instruction]
+    if start.user_message:
+        parts.append("Verbatim current user message:\n" + start.user_message)
+    if start.related_links:
+        parts.append(
+            "Related links from prior jobs:\n"
+            + "\n".join(f"- {item.label}: {item.locator}" for item in start.related_links)
+        )
     parts.extend("User follow-up:\n" + item.instruction for item in start.follow_ups)
     return "\n\n".join(parts)
 
@@ -524,6 +534,18 @@ def _message_payload(message: object) -> Mapping[str, object]:
         if isinstance(payload, dict):
             return payload
     return {"type": type(message).__name__}
+
+
+def _initialized_tools(payload: Mapping[str, object]) -> set[str] | None:
+    if payload.get("subtype") != "init":
+        return None
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return set()
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return set()
+    return {item for item in tools if isinstance(item, str)}
 
 
 def _result_failure(result: ResultMessage | None) -> str:
@@ -572,6 +594,7 @@ async def run_agent_sdk(
     )
     custom_names = [f"{MCP_TOOL_PREFIX}{item.name}" for item in sdk_tools]
     available_tools = ["WebSearch", "WebFetch", *custom_names]
+    required_native_tools = {"WebSearch", "WebFetch"}
     options = ClaudeAgentOptions(
         tools=available_tools,
         allowed_tools=available_tools,
@@ -602,7 +625,6 @@ async def run_agent_sdk(
         skills=[],
         plugins=[],
         extra_args={
-            "bare": None,
             "disable-slash-commands": None,
             "no-session-persistence": None,
         },
@@ -622,12 +644,25 @@ async def run_agent_sdk(
     threading.Thread(target=_read_follow_ups, args=(follow_ups,), daemon=True).start()
     last_result: ResultMessage | None = None
     observed_tool_ids: set[str] = set()
+    initialized = False
     try:
         async with client_factory(options) as client:
             await client.query(_prompt(start), session_id=start.job_id)
             while True:
                 async for message in client.receive_response():
-                    transcript.append("sdk_message", _message_payload(message))
+                    payload = _message_payload(message)
+                    transcript.append("sdk_message", payload)
+                    initialized_tools = _initialized_tools(payload)
+                    if initialized_tools is not None:
+                        initialized = True
+                        missing_tools = required_native_tools - initialized_tools
+                        if missing_tools:
+                            transcript.append(
+                                "sdk_tool_contract_error",
+                                {"missingTools": sorted(missing_tools)},
+                            )
+                            event_sink("failed", "executor_failed")
+                            return False
                     if isinstance(message, AssistantMessage):
                         for block in message.content:
                             if not isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
@@ -657,6 +692,10 @@ async def run_agent_sdk(
     except ClaudeSDKError as error:
         transcript.append("sdk_error", {"type": type(error).__name__})
         event_sink("failed", "model_request_failed")
+        return False
+    if not initialized:
+        transcript.append("sdk_tool_contract_error", {"missingInitialization": True})
+        event_sink("failed", "executor_failed")
         return False
     if tools.terminal is not None:
         terminal = tools.terminal

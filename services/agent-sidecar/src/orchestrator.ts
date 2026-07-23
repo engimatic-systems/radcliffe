@@ -1042,12 +1042,21 @@ function exactOutputFromPackets(packets: readonly ContextPacket[]): ExactOutputI
   return classifyExactOutputIntent(current.content, packets.slice(0, -1));
 }
 
+function includedPacketsForRequest(request: TurnRequest): ContextPacket[] {
+  const packets = request.packets.filter((packet) => packet.include);
+  const current = packets.at(-1);
+  if (!request.userMessage || current?.source !== "user") return packets;
+  return [...packets.slice(0, -1), { ...current, content: request.userMessage }];
+}
+
 export function modelContextFromRequest(request: TurnRequest) {
-  const messages: RadcliffeContextMessage[] = request.packets
-    .filter((packet) => packet.include)
-    .map((packet) => ({ role: "radcliffe", packet }));
+  const packets = includedPacketsForRequest(request);
+  const messages: RadcliffeContextMessage[] = packets.map((packet) => ({
+    role: "radcliffe",
+    packet,
+  }));
   return {
-    systemPrompt: systemPrompt(request, undefined, exactOutputFromPackets(request.packets)),
+    systemPrompt: systemPrompt(request, undefined, exactOutputFromPackets(packets)),
     messages: convertRadcliffeContext(messages),
     tools: [
       {
@@ -1117,7 +1126,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         );
       }
     }
-    const packets = request.packets.filter((packet) => packet.include);
+    const packets = includedPacketsForRequest(request);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
     const deliveryIntent =
@@ -1128,6 +1137,17 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const jobLaunch = current.source === "user" && explicitJobLaunchIntent(current.content);
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
+    const userMessage =
+      request.userMessage ??
+      packets
+        .filter(
+          (packet) =>
+            packet.source === "user" &&
+            (Object.fromEntries(packet.annotations)["radcliffe.turn_id"] ?? packet.messageId) ===
+              turnId,
+        )
+        .map((packet) => packet.content)
+        .join("\n");
     let deliveryPreparation: DeliveryPreparation | undefined;
     if (deliveryIntent && !deliveryIntent.sourceRead) {
       const callId = `delivery-rate:${request.requestId}`;
@@ -1424,6 +1444,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "run_job",
+          userMessage,
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {
@@ -1464,6 +1485,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "manage_job",
+          userMessage,
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {

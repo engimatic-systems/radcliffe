@@ -572,6 +572,22 @@ class InterruptibleOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class PendingUserBatchOrchestrator:
+    def __init__(self) -> None:
+        self.first_started = asyncio.Event()
+        self.requests: list[dict[str, object]] = []
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            self.first_started.set()
+            await asyncio.Event().wait()
+        yield SidecarEvent("model_delta", {"text": "I started it."})
+        yield SidecarEvent("model_complete", {"text": "I started it."})
+        yield SidecarEvent("complete", {})
+
+
 class RepeatingInterruptOrchestrator:
     def __init__(self) -> None:
         self.started: asyncio.Queue[str] = asyncio.Queue()
@@ -1676,6 +1692,30 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
     assert len(partial_messages) == 1
     assert partial_messages[0].metadata["radcliffe.partial"] == "true"
     assert partial_messages[0].metadata["radcliffe.rendered_chars"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_unanswered_user_fragments_form_one_current_instruction_batch(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = PendingUserBatchOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    first = asyncio.create_task(pipeline.handle_transcript("Use the Bancroft version exactly."))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+    await pipeline.handle_transcript("Run that as a background job.")
+    await asyncio.wait_for(first, timeout=1)
+
+    assert orchestrator.requests[1]["userMessage"] == (
+        "Use the Bancroft version exactly.\nRun that as a background job."
+    )
 
 
 @pytest.mark.asyncio

@@ -176,6 +176,8 @@ class _ActiveTurn:
     source_envelope: MessageEnvelope | None = None
     next_source_boundary: int = 0
     model_metadata: dict[str, str] = field(default_factory=dict)
+    user_message: str = ""
+    tool_started: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,7 +486,7 @@ class VoicePipeline:
             if submitted is not None:
                 submitted.set()
             return
-        submission = await self._begin_submission()
+        submission, user_message = await self._begin_user_submission(text)
         turn_id = str(uuid4())
         async with self._turn_serial:
             await self._append_text(
@@ -494,7 +496,7 @@ class VoicePipeline:
                 notify=True,
             )
             task = cast(asyncio.Task[None], asyncio.current_task())
-            turn = _ActiveTurn(turn_id, task, asyncio.Event())
+            turn = _ActiveTurn(turn_id, task, asyncio.Event(), user_message=user_message)
             async with self._coordinator:
                 if submission != self._latest_submission:
                     stale = True
@@ -794,6 +796,7 @@ class VoicePipeline:
             "operationId": operation.operation_id,
             "cancellationId": operation.cancellation_id,
             "traceId": operation.trace_id,
+            "userMessage": turn.user_message,
             "responseDetail": await self._effective_configuration(
                 ConfigurationKey.RESPONSE_DETAIL,
                 turn.turn_id,
@@ -809,7 +812,9 @@ class VoicePipeline:
             if turn.cancelled.is_set():
                 break
             self._assert_owner(turn, operation)
-            if event.type == "model_delta" and not source_rendered:
+            if event.type == "tool_start":
+                turn.tool_started = True
+            elif event.type == "model_delta" and not source_rendered:
                 display_delta = _canonical_model_text(str(event.payload.get("text", "")))
                 raw_spoken = event.payload.get("spokenText")
                 spoken_delta = _canonical_model_text(
@@ -1353,6 +1358,23 @@ class VoicePipeline:
             submission = self._latest_submission
         await self._cancel_active("superseded")
         return submission
+
+    async def _begin_user_submission(self, text: str) -> tuple[int, str]:
+        async with self._coordinator:
+            active = self._active_turn
+            if (
+                active is not None
+                and active.user_message
+                and not active.model_text
+                and not active.tool_started
+            ):
+                user_message = active.user_message + "\n" + text
+            else:
+                user_message = text
+            self._latest_submission += 1
+            submission = self._latest_submission
+        await self._cancel_active("superseded")
+        return submission, user_message
 
     async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
         task: asyncio.Task[None] | None = None

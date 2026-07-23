@@ -42,6 +42,7 @@ DATA_TABLES = (
     "background_job_commands",
     "background_job_events",
     "background_job_notification_deliveries",
+    "background_job_attempt_contexts",
 )
 
 

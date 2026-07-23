@@ -9,6 +9,7 @@ from radcliffe_domain.jobs import (
     JobLeaseError,
     JobNotificationDisposition,
     JobNotificationPolicy,
+    JobRelatedLink,
     JobStateError,
     JobStatus,
     JobStore,
@@ -206,9 +207,17 @@ async def test_failed_job_retry_is_idempotent_and_claims_a_fresh_attempt(tmp_pat
         generation=1,
         idempotency_key="accept-1",
         instruction="download and extract headlines",
+        user_message="Get the Hacker News headlines for me.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
     )
     claim = await store.claim_next(lease_owner="worker-1")
     assert claim is not None
+    assert claim.user_message == "Get the Hacker News headlines for me."
+    assert claim.related_links == (
+        JobRelatedLink(label="Second story", locator="https://example.test/second"),
+    )
     failed = await store.publish(
         job_id=accepted.record.job_id,
         lease_owner="worker-1",
@@ -221,11 +230,19 @@ async def test_failed_job_retry_is_idempotent_and_claims_a_fresh_attempt(tmp_pat
         principal_id="owner",
         job_id=accepted.record.job_id,
         idempotency_key="retry-1",
+        user_message="Download the second story from that list.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
     )
     replay = await store.retry(
         principal_id="owner",
         job_id=accepted.record.job_id,
         idempotency_key="retry-1",
+        user_message="Download the second story from that list.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
     )
 
     assert retried.record.status is JobStatus.QUEUED
@@ -234,6 +251,10 @@ async def test_failed_job_retry_is_idempotent_and_claims_a_fresh_attempt(tmp_pat
     assert second_claim is not None
     assert second_claim.record.job_id == accepted.record.job_id
     assert second_claim.record.attempt == 2
+    assert second_claim.user_message == "Download the second story from that list."
+    assert second_claim.related_links == (
+        JobRelatedLink(label="Second story", locator="https://example.test/second"),
+    )
     events = await store.events(accepted.record.job_id)
     assert [(event.kind, event.detail_code) for event in events] == [
         (JobEventKind.ACCEPTED, "accepted"),

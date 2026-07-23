@@ -18,6 +18,7 @@ export interface TurnRequest {
   operationId?: string;
   cancellationId?: string;
   traceId?: string;
+  userMessage?: string;
   responseDetail?: ResponseDetail;
   packets: ContextPacket[];
 }
@@ -157,6 +158,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "run_job";
+      userMessage: string;
       arguments: {
         instruction: string;
         notificationPolicy?: JobNotificationPolicy;
@@ -167,6 +169,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "manage_job";
+      userMessage: string;
       arguments:
         | { operation: "status"; jobId: string }
         | { operation: "follow_up"; jobId: string; instruction: string }

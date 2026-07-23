@@ -28,6 +28,7 @@ from radcliffe_control.job_results import (
     PromotedJobResult,
     PromotedSource,
     generated_artifact_source,
+    read_workspace_related_links,
     write_promoted_result,
 )
 
@@ -80,6 +81,28 @@ class StartLimits(BaseModel):
     max_output_bytes: int = Field(alias="maxOutputBytes", ge=1)
 
 
+class StartRelatedLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=300)
+    locator: str = Field(min_length=1, max_length=2_048)
+
+    @field_validator("locator")
+    @classmethod
+    def valid_public_url_shape(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("related link requires an HTTP or HTTPS URL without credentials")
+        return urlunsplit(
+            (parsed.scheme.lower(), parsed.netloc, parsed.path or "/", parsed.query, "")
+        )
+
+
 class StartFrame(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -88,6 +111,10 @@ class StartFrame(BaseModel):
     job_id: str = Field(alias="jobId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     attempt: int = Field(ge=1)
     instruction: str = Field(min_length=1, max_length=20_000)
+    user_message: str = Field(default="", alias="userMessage", max_length=20_000)
+    related_links: tuple[StartRelatedLink, ...] = Field(
+        default=(), alias="relatedLinks", max_length=100
+    )
     follow_ups: tuple[StartFollowUp, ...] = Field(default=(), alias="followUps", max_length=100)
     limits: StartLimits
 
@@ -1141,9 +1168,17 @@ def run_agent(
 ) -> bool:
     follow_ups: queue.SimpleQueue[FollowUpFrame] = queue.SimpleQueue()
     threading.Thread(target=read_follow_ups, args=(follow_ups,), daemon=True).start()
+    initial_parts = ["Foreground instruction:\n" + start.instruction]
+    if start.user_message:
+        initial_parts.append("Verbatim current user message:\n" + start.user_message)
+    if start.related_links:
+        initial_parts.append(
+            "Related links from prior jobs:\n"
+            + "\n".join(f"- {item.label}: {item.locator}" for item in start.related_links)
+        )
     messages: list[dict[str, object]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": start.instruction},
+        {"role": "user", "content": "\n\n".join(initial_parts)},
     ]
     for initial_follow_up in start.follow_ups:
         messages.append(
@@ -1446,6 +1481,7 @@ def run_agent(
                 artifacts=artifacts,
                 sources=sources,
                 findings=findings,
+                relatedLinks=read_workspace_related_links(sandbox.workspace),
             )
             write_promoted_result(result_workspace or sandbox.workspace, result)
             result_id = hashlib.sha256(
@@ -1489,6 +1525,7 @@ def run_agent(
                 artifacts=(),
                 sources=(),
                 findings=(),
+                relatedLinks=read_workspace_related_links(sandbox.workspace),
             )
             write_promoted_result(result_workspace or sandbox.workspace, result)
             result_id = hashlib.sha256(f"{start.job_id}:{failure.summary}".encode()).hexdigest()[

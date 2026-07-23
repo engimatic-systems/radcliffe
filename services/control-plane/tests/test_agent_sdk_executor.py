@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, SystemMessage
 from radcliffe_control.agent_sdk_executor import (
     MCP_TOOL_PREFIX,
     AgentSdkTools,
@@ -26,6 +26,8 @@ def start_frame(*, budget_usd: float | None = None) -> StartFrame:
             "jobId": "job-agent-sdk-test",
             "attempt": 1,
             "instruction": "Download the first available commentary and save it as Markdown.",
+            "userMessage": "Get the commentary and save the exact result for me.",
+            "relatedLinks": [{"label": "Commentary", "locator": "https://example.test/commentary"}],
             "followUps": [],
             "limits": {
                 "budgetUsd": budget_usd,
@@ -180,7 +182,9 @@ class FakeClient:
     async def query(self, prompt: str, session_id: str = "default") -> None:
         self.prompts.append((prompt, session_id))
 
-    async def receive_response(self) -> AsyncIterator[ResultMessage]:
+    async def receive_response(self) -> AsyncIterator[object]:
+        configured = self.options.tools or []
+        yield SystemMessage(subtype="init", data={"tools": list(configured)})
         yield ResultMessage(
             subtype="success",
             duration_ms=1,
@@ -234,7 +238,6 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
     assert options.setting_sources == []
     assert options.skills == []
     assert options.extra_args == {
-        "bare": None,
         "disable-slash-commands": None,
         "no-session-persistence": None,
     }
@@ -246,4 +249,43 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
     assert "Read" not in options.tools
     assert "Write" not in options.tools
     assert captured[0].prompts[0][1] == "job-agent-sdk-test"
+    assert "Verbatim current user message" in captured[0].prompts[0][0]
+    assert "Get the commentary and save the exact result for me." in captured[0].prompts[0][0]
+    assert "Commentary: https://example.test/commentary" in captured[0].prompts[0][0]
     assert events.items[-1][:2] == ("failed", "model_no_action")
+
+
+@pytest.mark.asyncio
+async def test_sdk_runner_fails_when_runtime_initialization_omits_native_web_tools(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt-1"
+    files = attempt / "files"
+    files.mkdir(parents=True)
+    transcript = PrivateTranscript(attempt)
+    events = CapturingEvents()
+
+    class MissingToolsClient(FakeClient):
+        async def receive_response(self) -> AsyncIterator[object]:
+            yield SystemMessage(subtype="init", data={"tools": []})
+
+    try:
+        succeeded = await run_agent_sdk(
+            start_frame(),
+            sandbox=cast(DockerSandbox, FakeSandbox(files)),
+            attempt_workspace=attempt,
+            transcript=transcript,
+            system_prompt="Finish with tools.",
+            model="claude-sonnet-test",
+            effort="low",
+            max_turns=6,
+            max_budget_usd=0.10,
+            client_factory=lambda options: cast(SdkClient, MissingToolsClient(options)),
+            event_sink=cast(EventSink, events),
+        )
+    finally:
+        transcript.close()
+
+    assert not succeeded
+    assert events.items[-1][:2] == ("failed", "executor_failed")
+    assert "sdk_tool_contract_error" in attempt.joinpath("agent-transcript.jsonl").read_text()

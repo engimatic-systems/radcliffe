@@ -71,7 +71,9 @@ from radcliffe_domain.jobs import (
     JobNotFoundError,
     JobNotificationPolicy,
     JobRecord,
+    JobRelatedLink,
     JobStateError,
+    JobStatus,
     JobStore,
 )
 from radcliffe_domain.projection import (
@@ -423,6 +425,7 @@ class ToolCallRequest(BaseModel):
     turn_id: str | None = Field(default=None, min_length=1, max_length=128)
     call_id: str
     idempotency_key: str
+    user_message: str | None = Field(default=None, max_length=20_000)
     tool_name: Literal[
         "list_sources",
         "read_source",
@@ -459,6 +462,13 @@ class ToolCallRequest(BaseModel):
             self.cancellation_id is None or self.turn_id is None
         ):
             raise ValueError(f"{self.tool_name} requires cancellation_id and turn_id")
+        requires_user_message = self.tool_name == "run_job" or (
+            self.tool_name == "manage_job"
+            and isinstance(self.arguments, ManageJobArguments)
+            and self.arguments.operation == "retry"
+        )
+        if requires_user_message and not self.user_message:
+            raise ValueError(f"{self.tool_name} requires the current user_message")
         return self
 
 
@@ -784,6 +794,11 @@ def _job_tool_response(
                 }
                 for finding in promoted_result.findings
             ]
+        if promoted_result.related_links:
+            promoted_payload["relatedLinks"] = [
+                {"label": item.label, "locator": item.locator}
+                for item in promoted_result.related_links
+            ]
         payload["result"] = promoted_payload
     if latest_event is not None:
         payload["latestEvent"] = {
@@ -902,6 +917,8 @@ async def _execute_run_job_tool(
         generation=request.generation,
         idempotency_key=request.idempotency_key,
         instruction=arguments.instruction,
+        user_message=request.user_message or "",
+        related_links=await _related_links_for_session(active, request.session_id),
         notification_policy=JobNotificationPolicy(arguments.notification_policy),
         priority=arguments.priority,
         budget_microusd=budget_microusd,
@@ -969,8 +986,46 @@ async def _execute_manage_job_tool(
             principal_id=active.settings.owner_id,
             job_id=record.job_id,
             idempotency_key=request.idempotency_key,
+            user_message=request.user_message or "",
+            related_links=await _related_links_for_session(active, request.session_id),
         )
     return _job_tool_response(result)
+
+
+async def _related_links_for_session(
+    active: Runtime,
+    session_id: str,
+) -> tuple[JobRelatedLink, ...]:
+    records = await active.jobs.list_for_session(
+        principal_id=active.settings.owner_id,
+        session_id=session_id,
+        limit=10,
+    )
+    links: list[JobRelatedLink] = []
+    seen: set[str] = set()
+    total_characters = 0
+    for record in records:
+        if record.status is not JobStatus.SUCCEEDED:
+            continue
+        result = read_promoted_result(
+            active.settings.job_workspace_root,
+            job_id=record.job_id,
+            attempt=record.attempt,
+        )
+        if result is None:
+            continue
+        for item in result.related_links:
+            if item.locator in seen:
+                continue
+            size = len(item.label) + len(item.locator)
+            if total_characters + size > 32_000:
+                return tuple(links)
+            links.append(JobRelatedLink(label=item.label, locator=item.locator))
+            seen.add(item.locator)
+            total_characters += size
+            if len(links) >= 100:
+                return tuple(links)
+    return tuple(links)
 
 
 _CONFIGURATION_KEY_TO_PROTO = {
