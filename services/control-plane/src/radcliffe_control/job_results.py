@@ -8,11 +8,14 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 RESULT_FILENAME = "promoted-result.json"
 RESULT_LIMIT_BYTES = 64 * 1024
+RELATED_LINK_MANIFEST_LIMIT_BYTES = 64 * 1024
+MAX_RELATED_LINKS = 100
 
 
 class PromotedArtifact(BaseModel):
@@ -58,6 +61,28 @@ class PromotedFinding(BaseModel):
         return values
 
 
+class PromotedRelatedLink(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    label: str = Field(min_length=1, max_length=300)
+    locator: str = Field(min_length=1, max_length=2_048)
+
+    @field_validator("locator")
+    @classmethod
+    def valid_public_locator(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        if (
+            parsed.scheme.casefold() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("related link locator must be a public HTTP or HTTPS URL")
+        return urlunsplit(
+            (parsed.scheme.casefold(), parsed.netloc, parsed.path or "/", parsed.query, "")
+        )
+
+
 class PromotedJobResult(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -67,6 +92,9 @@ class PromotedJobResult(BaseModel):
     artifacts: tuple[PromotedArtifact, ...] = Field(default=(), max_length=20)
     sources: tuple[PromotedSource, ...] = Field(default=(), max_length=20)
     findings: tuple[PromotedFinding, ...] = Field(default=(), max_length=20)
+    related_links: tuple[PromotedRelatedLink, ...] = Field(
+        default=(), alias="relatedLinks", max_length=MAX_RELATED_LINKS
+    )
 
     @model_validator(mode="after")
     def valid_entity_graph(self) -> PromotedJobResult:
@@ -81,12 +109,78 @@ class PromotedJobResult(BaseModel):
         return self
 
 
+def read_workspace_related_links(workspace: Path) -> tuple[PromotedRelatedLink, ...]:
+    pages = workspace.resolve() / "pages"
+    if pages.is_symlink() or not pages.is_dir():
+        return ()
+    links: list[PromotedRelatedLink] = []
+    seen: set[str] = set()
+    total_characters = 0
+    for manifest in sorted(pages.glob("page-*.links.json")):
+        if manifest.is_symlink():
+            continue
+        try:
+            info = manifest.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > RELATED_LINK_MANIFEST_LIMIT_BYTES:
+                continue
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
+            continue
+        raw_links = payload.get("links")
+        if not isinstance(raw_links, list):
+            continue
+        for raw in raw_links:
+            try:
+                item = PromotedRelatedLink.model_validate(raw)
+            except ValidationError:
+                continue
+            if item.locator in seen:
+                continue
+            size = len(item.label) + len(item.locator)
+            if total_characters + size > 32_000:
+                return tuple(links)
+            seen.add(item.locator)
+            links.append(item)
+            total_characters += size
+            if len(links) >= MAX_RELATED_LINKS:
+                return tuple(links)
+    return tuple(links)
+
+
 @dataclass(frozen=True, slots=True)
 class PromotedSourceFile:
     source: PromotedSource
     root: Path
     path: Path
     canonical_bytes: bytes
+
+
+def generated_artifact_source(
+    job_id: str,
+    artifact: PromotedArtifact,
+) -> PromotedSource | None:
+    if (
+        not artifact.path.casefold().endswith(".md")
+        or artifact.byte_length < 1
+        or artifact.byte_length > 1024 * 1024
+    ):
+        return None
+    name = artifact.path
+    locator = f"radcliffe-job-output:{job_id}:{artifact.path}"
+    digest = hashlib.sha256(
+        (f"{job_id}\0{name}\0{locator}\0{artifact.sha256}").encode()
+    ).hexdigest()[:16]
+    return PromotedSource(
+        entityId=f"source:{digest}",
+        name=name,
+        locator=locator,
+        artifactId=artifact.artifact_id,
+        path=artifact.path,
+        sha256=artifact.sha256,
+        byteLength=artifact.byte_length,
+    )
 
 
 def write_promoted_result(workspace: Path, result: PromotedJobResult) -> Path:
@@ -164,21 +258,63 @@ def read_promoted_source(
     attempt: int,
     entity_id: str,
 ) -> PromotedSourceFile | None:
+    matches = tuple(
+        source
+        for source in read_promoted_sources(
+            workspace_root,
+            job_id=job_id,
+            attempt=attempt,
+        )
+        if source.source.entity_id == entity_id
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def read_promoted_sources(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+) -> tuple[PromotedSourceFile, ...]:
     result = read_promoted_result(workspace_root, job_id=job_id, attempt=attempt)
     if result is None:
-        return None
-    matches = tuple(source for source in result.sources if source.entity_id == entity_id)
-    if len(matches) != 1:
-        return None
-    source = matches[0]
-    artifacts = tuple(
-        artifact
-        for artifact in result.artifacts
-        if artifact.artifact_id == source.artifact_id and artifact.path == source.path
-    )
-    if len(artifacts) != 1:
-        return None
-    artifact = artifacts[0]
+        return ()
+    artifacts_by_identity = {
+        (artifact.artifact_id, artifact.path): artifact for artifact in result.artifacts
+    }
+    sources = list(result.sources)
+    declared_paths = {source.path for source in sources}
+    for artifact in result.artifacts:
+        if artifact.path in declared_paths:
+            continue
+        derived = generated_artifact_source(job_id, artifact)
+        if derived is not None:
+            sources.append(derived)
+    promoted: list[PromotedSourceFile] = []
+    for source in sources:
+        selected_artifact = artifacts_by_identity.get((source.artifact_id, source.path))
+        if selected_artifact is None:
+            continue
+        resolved = _read_promoted_source_file(
+            workspace_root,
+            job_id=job_id,
+            attempt=attempt,
+            source=source,
+            artifact=selected_artifact,
+        )
+        if resolved is not None:
+            promoted.append(resolved)
+    return tuple(promoted)
+
+
+def _read_promoted_source_file(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+    source: PromotedSource,
+    artifact: PromotedArtifact,
+) -> PromotedSourceFile | None:
     if (
         artifact.sha256 != source.sha256
         or artifact.byte_length != source.byte_length

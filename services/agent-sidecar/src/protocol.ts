@@ -18,6 +18,7 @@ export interface TurnRequest {
   operationId?: string;
   cancellationId?: string;
   traceId?: string;
+  userMessage?: string;
   responseDetail?: ResponseDetail;
   packets: ContextPacket[];
 }
@@ -50,7 +51,13 @@ export interface ContextUsage {
 }
 
 export type SidecarEvent =
-  | { type: "model_delta"; requestId: string; text: string }
+  | {
+      type: "model_delta";
+      requestId: string;
+      text: string;
+      spokenText?: string;
+      spokenCategories?: string[];
+    }
   | { type: "model_complete"; requestId: string; text: string }
   | {
       type: "tool_start";
@@ -115,7 +122,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "read_job_source";
-      arguments: { reference: string; rate?: SpeechDeliveryRate };
+      arguments: { reference: string; jobId?: string; rate?: SpeechDeliveryRate };
     })
   | (ToolExecutionRequestBase & {
       toolName: "configure";
@@ -151,6 +158,7 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "run_job";
+      userMessage: string;
       arguments: {
         instruction: string;
         notificationPolicy?: JobNotificationPolicy;
@@ -161,11 +169,12 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "manage_job";
+      userMessage: string;
       arguments:
         | { operation: "status"; jobId: string }
         | { operation: "follow_up"; jobId: string; instruction: string }
         | { operation: "set_priority"; jobId: string; priority: number }
-        | { operation: "cancel"; jobId: string };
+        | { operation: "cancel" | "retry"; jobId: string };
     });
 
 export interface ToolExecutionResult {

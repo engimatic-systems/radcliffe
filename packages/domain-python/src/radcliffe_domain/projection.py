@@ -20,6 +20,8 @@ SESSION_TRANSITION_EVENT = "session_transition"
 PROVIDER_BUDGET_EVENT = "provider_budget_exhausted"
 TOOL_FAILURE_EVENT = "tool_failure"
 BACKGROUND_JOB_REFERENCE_EVENT = "background_job_reference"
+BACKGROUND_JOB_ANNOUNCEMENT_EVENT = "background_job_announcement"
+BACKGROUND_JOB_OUTCOME_EVENT = "background_job_outcome"
 EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 DELIVERY_RATE_METADATA_PREFIX = "radcliffe.delivery.rate."
 DELIVERY_SUMMARY_METADATA = "radcliffe.delivery.summary"
@@ -255,14 +257,12 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
     is_configuration = event == CONFIGURATION_EVENT
     is_session_transition = event == SESSION_TRANSITION_EVENT
     is_provider_budget = event == PROVIDER_BUDGET_EVENT
-    is_tool_failure = event == TOOL_FAILURE_EVENT
     include = (
         envelope.sensitivity is not Sensitivity.SECRET
         and not is_disposition
         and not is_configuration
         and not is_session_transition
         and not is_provider_budget
-        and not is_tool_failure
     )
     text = envelope.content.inline_text or ""
     if envelope.sensitivity is Sensitivity.SECRET:
@@ -275,8 +275,6 @@ def context_projection(envelope: MessageEnvelope) -> ContextPacket:
         text = "[excluded: session transition audit]"
     elif is_provider_budget:
         text = "[excluded: provider budget audit]"
-    elif is_tool_failure:
-        text = "[excluded: tool failure audit]"
     annotations = tuple(
         sorted(
             {

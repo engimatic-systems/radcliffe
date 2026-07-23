@@ -4,7 +4,11 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from radcliffe_control.job_executor import JobExecutorSupervisor, JsonLineJobLauncher
+from radcliffe_control.job_executor import (
+    JobExecutorConfigurationError,
+    JobExecutorSupervisor,
+    JsonLineJobLauncher,
+)
 from radcliffe_domain.catalog import SessionCatalog
 from radcliffe_domain.jobs import JobEventKind, JobStatus, JobStore
 from radcliffe_domain.store import EventStore
@@ -455,3 +459,30 @@ async def test_real_json_line_process_uses_private_workspace_and_scrubbed_enviro
     assert transcript.stat().st_mode & 0o777 == 0o600
     assert "private process instruction" not in transcript.read_text()
     assert "must-not-inherit" not in transcript.read_text()
+
+
+def test_job_launcher_passes_only_an_explicit_provider_key_to_the_trusted_broker(
+    tmp_path,
+) -> None:
+    launcher = JsonLineJobLauncher(
+        command=(sys.executable, "-c", "pass"),
+        workspace_root=tmp_path / "jobs",
+        max_output_bytes=4096,
+        base_environment={
+            "PATH": "/usr/bin",
+            "ANTHROPIC_API_KEY": "must-not-inherit-implicitly",
+            "RADCLIFFE_INTERNAL_TOKEN": "must-not-inherit",
+        },
+        provider_environment={"ANTHROPIC_API_KEY": "explicit-broker-key"},
+    )
+
+    assert launcher.base_environment == {"PATH": "/usr/bin"}
+    assert launcher.provider_environment == {"ANTHROPIC_API_KEY": "explicit-broker-key"}
+
+    with pytest.raises(JobExecutorConfigurationError, match="unsupported"):
+        JsonLineJobLauncher(
+            command=(sys.executable, "-c", "pass"),
+            workspace_root=tmp_path / "other-jobs",
+            max_output_bytes=4096,
+            provider_environment={"RADCLIFFE_INTERNAL_TOKEN": "forbidden"},
+        )

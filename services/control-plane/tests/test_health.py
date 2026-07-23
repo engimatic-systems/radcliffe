@@ -37,7 +37,26 @@ def test_health(tmp_path) -> None:
             "status": "ok",
             "build_revision": "development",
             "capabilities": ["background_jobs_v1", "promoted_job_results_v1"],
+            "background_executor_backend": "custom-loop",
+            "background_model_provider": "stub",
+            "background_model_id": "",
         }
+
+
+def test_health_reports_the_locally_selected_background_backend_and_model(tmp_path) -> None:
+    config = settings(tmp_path).model_copy(
+        update={
+            "job_executor_backend": "claude-agent-sdk",
+            "job_model_provider": "anthropic",
+            "job_model_id": "claude-sonnet-4-6",
+        }
+    )
+    with TestClient(create_app(config)) as client:
+        health = client.get("/healthz").json()
+
+    assert health["background_executor_backend"] == "claude-agent-sdk"
+    assert health["background_model_provider"] == "anthropic"
+    assert health["background_model_id"] == "claude-sonnet-4-6"
 
 
 def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) -> None:

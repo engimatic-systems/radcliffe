@@ -34,10 +34,13 @@ from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.session_actions import SessionActionClient
 from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import (
+    DEFAULT_PARAKEET_MODEL,
     DEFAULT_WHISPER_INITIAL_PROMPT,
     DetailedTranscriber,
     LocalAppleSpeechProvider,
     OpenAISpeechProvider,
+    ParakeetAppleSpeechProvider,
+    PreparableSpeechProvider,
     SpeechProvider,
     Transcription,
     assess_transcription,
@@ -52,16 +55,20 @@ class EndpointSettings:
     pre_roll_ms: float = 600
     foreground_rms_threshold: float = 1200
     barge_in_rms_threshold: float = 1800
+    strong_barge_in_rms_threshold: float = 8000
     minimum_voice_ms: float = 250
     minimum_foreground_voice_ms: float = 160
     barge_in_confirmation_ms: float = 120
+    strong_barge_in_confirmation_ms: float = 400
     barge_in_release_ms: float = 120
     end_silence_ms: float = 900
+    continuation_grace_ms: float = 750
     maximum_unconfirmed_ms: float = 2000
-    maximum_utterance_ms: float = 30000
+    maximum_utterance_ms: float = 120000
     minimum_maximum_voice_ratio: float = 0.05
     minimum_speech_windows: int = 2
     speech_probability: float = 0.5
+    strong_barge_in_minimum_probability: float = 0.15
     minimum_average_log_probability: float = -1.5
     short_foreground_voice_ms: float = 700
     short_minimum_average_log_probability: float = -0.9
@@ -75,11 +82,14 @@ class EndpointSettings:
                 self.pre_roll_ms,
                 self.foreground_rms_threshold,
                 self.barge_in_rms_threshold,
+                self.strong_barge_in_rms_threshold,
                 self.minimum_voice_ms,
                 self.minimum_foreground_voice_ms,
                 self.barge_in_confirmation_ms,
+                self.strong_barge_in_confirmation_ms,
                 self.barge_in_release_ms,
                 self.end_silence_ms,
+                self.continuation_grace_ms,
                 self.maximum_unconfirmed_ms,
                 self.maximum_utterance_ms,
                 self.short_foreground_voice_ms,
@@ -91,6 +101,10 @@ class EndpointSettings:
             raise ValueError("foreground RMS threshold must exceed the candidate threshold")
         if self.barge_in_rms_threshold < self.foreground_rms_threshold:
             raise ValueError("barge-in RMS threshold must not be below the foreground threshold")
+        if self.strong_barge_in_rms_threshold <= self.barge_in_rms_threshold:
+            raise ValueError("strong barge-in RMS threshold must exceed the normal threshold")
+        if self.strong_barge_in_confirmation_ms < self.barge_in_confirmation_ms:
+            raise ValueError("strong barge-in confirmation must not be shorter than normal")
         if self.minimum_foreground_voice_ms > self.maximum_unconfirmed_ms:
             raise ValueError("foreground confirmation must fit inside the unconfirmed timeout")
         if not 0 < self.minimum_maximum_voice_ratio <= 1:
@@ -99,6 +113,8 @@ class EndpointSettings:
             raise ValueError("minimum speech windows must be positive")
         if not 0 < self.speech_probability < 1:
             raise ValueError("speech probability must be between zero and one")
+        if not 0 < self.strong_barge_in_minimum_probability < self.speech_probability:
+            raise ValueError("strong barge-in probability must be below the speech threshold")
         if not 0 <= self.maximum_no_speech_probability <= 1:
             raise ValueError("no-speech probability must be between zero and one")
         if self.maximum_compression_ratio <= 0:
@@ -119,6 +135,9 @@ class EndpointSettings:
                 os.environ.get("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1200")
             ),
             barge_in_rms_threshold=float(os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1800")),
+            strong_barge_in_rms_threshold=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS", "8000")
+            ),
             minimum_voice_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_MIN_VOICE_MS", "250")),
             minimum_foreground_voice_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "160")
@@ -126,15 +145,21 @@ class EndpointSettings:
             barge_in_confirmation_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_CONFIRMATION_MS", "120")
             ),
+            strong_barge_in_confirmation_ms=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS", "400")
+            ),
             barge_in_release_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "120")
             ),
             end_silence_ms=float(os.environ.get("RADCLIFFE_ENDPOINT_SILENCE_MS", "900")),
+            continuation_grace_ms=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_CONTINUATION_GRACE_MS", "750")
+            ),
             maximum_unconfirmed_ms=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2000")
             ),
             maximum_utterance_ms=float(
-                os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "30000")
+                os.environ.get("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "120000")
             ),
             minimum_maximum_voice_ratio=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.05")
@@ -144,6 +169,9 @@ class EndpointSettings:
             ),
             speech_probability=float(
                 os.environ.get("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.5")
+            ),
+            strong_barge_in_minimum_probability=float(
+                os.environ.get("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY", "0.15")
             ),
             minimum_average_log_probability=float(
                 os.environ.get("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-1.5")
@@ -198,15 +226,26 @@ class EndpointProcessor(FrameProcessor):
         self.barge_in_confirmed = False
         self.candidate_pre_roll_ms = 0.0
         self.candidate_participant_id: str | None = None
-        self.turn_task: asyncio.Task[None] | None = None
+        self._turn_tasks: set[asyncio.Task[None]] = set()
+        self._completion_serial = asyncio.Lock()
+        self._last_endpoint_at: float | None = None
+        self.continuation_of_prior_endpoint = False
         self.paused = False
+
+    @property
+    def turn_task(self) -> asyncio.Task[None] | None:
+        active = tuple(task for task in self._turn_tasks if not task.done())
+        return active[-1] if active else None
+
+    def _active_turn_tasks(self) -> tuple[asyncio.Task[None], ...]:
+        return tuple(task for task in self._turn_tasks if not task.done())
 
     def foreground_quiet(self) -> bool:
         return (
             not self.paused
             and not self.speaking
             and not self.buffer
-            and (self.turn_task is None or self.turn_task.done())
+            and not self._active_turn_tasks()
         )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -247,9 +286,14 @@ class EndpointProcessor(FrameProcessor):
             if self.capture is not None:
                 self.capture.candidate_started(frame.user_id)
             voice_active = self.voice is not None and self.voice.foreground_turn_active()
-            self.started_during_active_turn = voice_active or (
-                self.turn_task is not None and not self.turn_task.done()
+            recent_endpoint = (
+                self._last_endpoint_at is not None
+                and (monotonic() - self._last_endpoint_at) * 1000
+                <= self.settings.continuation_grace_ms
             )
+            self.continuation_of_prior_endpoint = recent_endpoint
+            self._last_endpoint_at = None
+            self.started_during_active_turn = voice_active
         if not self.speaking:
             self._remember_idle_audio(frame.audio, frame.sample_rate, frame.num_channels)
             return
@@ -270,6 +314,12 @@ class EndpointProcessor(FrameProcessor):
             if self.barge_in_silence_ms >= self.settings.barge_in_release_ms:
                 self.barge_in_voice_ms = 0
                 self.barge_in_analyzed_voice_ms = 0
+        if (
+            not self.started_during_active_turn
+            and self.voice is not None
+            and self.voice.foreground_turn_active()
+        ):
+            self.started_during_active_turn = True
         if self.started_during_active_turn and not self.barge_in_confirmed:
             await self._maybe_confirm_barge_in(frame.sample_rate, frame.num_channels)
         utterance_ms = len(self.buffer) / (2 * frame.num_channels * frame.sample_rate) * 1000
@@ -340,6 +390,9 @@ class EndpointProcessor(FrameProcessor):
             maximum_rms = self.maximum_rms
             average_rms = self.rms_total / max(self.rms_frames, 1)
             trailing_silence_ms = self.silence_ms
+            continuation_handoff_required = (
+                self.continuation_of_prior_endpoint and not self.barge_in_confirmed
+            )
             logger.info(
                 "voice turn phase complete phase=endpoint reason={} audio_ms={} voice_ms={} "
                 "foreground_voice_ms={} trailing_silence_ms={} maximum_rms={} average_rms={}",
@@ -352,7 +405,8 @@ class EndpointProcessor(FrameProcessor):
                 round(average_rms, 2),
             )
             self._reset_candidate()
-            self.turn_task = asyncio.create_task(
+            self._last_endpoint_at = monotonic()
+            task = asyncio.create_task(
                 self._complete(
                     audio,
                     frame.sample_rate,
@@ -364,9 +418,12 @@ class EndpointProcessor(FrameProcessor):
                     pre_roll_ms=max(0.0, pre_roll_ms),
                     trailing_silence_ms=trailing_silence_ms,
                     participant_id=candidate_participant_id,
+                    continuation_handoff_required=continuation_handoff_required,
                 ),
                 name="radcliffe-voice-turn",
             )
+            self._turn_tasks.add(task)
+            task.add_done_callback(self._turn_tasks.discard)
         elif silence_endpoint or maximum_endpoint:
             logger.info(
                 "voice endpoint rejected reason=insufficient_rms_speech audio_ms={} voice_ms={}",
@@ -384,30 +441,65 @@ class EndpointProcessor(FrameProcessor):
         self.barge_in_analyzed_voice_ms = self.barge_in_voice_ms
         speech_windows: int | None = None
         maximum_speech_probability: float | None = None
+        verifier = "speech_activity"
         if self.activity is not None:
             evidence = await self.activity.analyze(bytes(self.buffer), sample_rate, channels)
             speech_windows = evidence.speech_window_count
             maximum_speech_probability = evidence.maximum_probability
             if speech_windows < self.settings.minimum_speech_windows:
-                logger.info(
-                    "voice barge-in candidate rejected reason=insufficient_speech_activity "
-                    "barge_in_voice_ms={} speech_windows={} maximum_speech_probability={}",
-                    round(self.barge_in_voice_ms, 2),
-                    speech_windows,
-                    round(maximum_speech_probability, 4),
+                strong_zero_window_candidate = (
+                    speech_windows == 0
+                    and self.barge_in_voice_ms >= self.settings.strong_barge_in_confirmation_ms
+                    and self.maximum_rms >= self.settings.strong_barge_in_rms_threshold
+                    and maximum_speech_probability
+                    >= self.settings.strong_barge_in_minimum_probability
                 )
-                return
+                if strong_zero_window_candidate:
+                    verifier = "high_energy_fallback"
+                else:
+                    disposition = (
+                        "pending_high_energy_fallback"
+                        if speech_windows == 0
+                        and self.maximum_rms >= self.settings.strong_barge_in_rms_threshold
+                        and maximum_speech_probability
+                        >= self.settings.strong_barge_in_minimum_probability
+                        else "rejected"
+                    )
+                    logger.info(
+                        "voice barge-in candidate disposition={} "
+                        "reason=insufficient_speech_activity barge_in_voice_ms={} "
+                        "foreground_voice_ms={} maximum_rms={} speech_windows={} "
+                        "maximum_speech_probability={}",
+                        disposition,
+                        round(self.barge_in_voice_ms, 2),
+                        round(self.foreground_voice_ms, 2),
+                        round(self.maximum_rms, 2),
+                        speech_windows,
+                        round(maximum_speech_probability, 4),
+                    )
+                    return
         self.barge_in_confirmed = True
+        disposition = "continued" if self.continuation_of_prior_endpoint else "interrupted"
         logger.info(
-            "voice barge-in confirmed barge_in_voice_ms={} speech_windows={} "
-            "maximum_speech_probability={}",
+            "voice barge-in confirmed verifier={} barge_in_voice_ms={} "
+            "foreground_voice_ms={} maximum_rms={} speech_windows={} "
+            "maximum_speech_probability={} disposition={}",
+            verifier,
             round(self.barge_in_voice_ms, 2),
+            round(self.foreground_voice_ms, 2),
+            round(self.maximum_rms, 2),
             speech_windows,
             round(maximum_speech_probability, 4)
             if maximum_speech_probability is not None
             else None,
+            disposition,
         )
-        await self._cancel_current_turn(preserve_candidate=True)
+        if self.voice is not None:
+            await self.voice.barge_in(
+                verifier=verifier,
+                evidence_duration_ms=self.barge_in_voice_ms,
+                disposition=disposition,
+            )
 
     def _reset_candidate(self, *, preserve_speaking: bool = False) -> None:
         self.speaking = preserve_speaking
@@ -423,6 +515,7 @@ class EndpointProcessor(FrameProcessor):
         self.rms_frames = 0
         self.started_during_active_turn = False
         self.barge_in_confirmed = False
+        self.continuation_of_prior_endpoint = False
         self.candidate_pre_roll_ms = 0
         self.candidate_participant_id = None
 
@@ -445,6 +538,37 @@ class EndpointProcessor(FrameProcessor):
         pre_roll_ms: float,
         trailing_silence_ms: float,
         participant_id: str | None,
+        continuation_handoff_required: bool = False,
+    ) -> None:
+        async with self._completion_serial:
+            await self._complete_serial(
+                pcm,
+                sample_rate,
+                channels,
+                voice_ms=voice_ms,
+                foreground_voice_ms=foreground_voice_ms,
+                voice_ratio=voice_ratio,
+                endpoint_reason=endpoint_reason,
+                pre_roll_ms=pre_roll_ms,
+                trailing_silence_ms=trailing_silence_ms,
+                participant_id=participant_id,
+                continuation_handoff_required=continuation_handoff_required,
+            )
+
+    async def _complete_serial(
+        self,
+        pcm: bytes,
+        sample_rate: int,
+        channels: int,
+        *,
+        voice_ms: float,
+        foreground_voice_ms: float,
+        voice_ratio: float,
+        endpoint_reason: str,
+        pre_roll_ms: float,
+        trailing_silence_ms: float,
+        participant_id: str | None,
+        continuation_handoff_required: bool,
     ) -> None:
         started_at = monotonic()
         try:
@@ -537,7 +661,17 @@ class EndpointProcessor(FrameProcessor):
             )
             if self.voice is not None and not self.paused:
                 if assessment.accepted:
-                    await self.voice.handle_transcript(transcription.text)
+                    if continuation_handoff_required:
+                        logger.info(
+                            "voice continuation handoff preserving prior user turn "
+                            "after verified delayed transcription"
+                        )
+                        await self.voice.barge_in(
+                            verifier="continuation_handoff",
+                            evidence_duration_ms=foreground_voice_ms,
+                            disposition="continued",
+                        )
+                    await self.voice.submit_transcript(transcription.text)
                 elif assessment.reason == "decoder_disagreement" or (
                     assessment.reason == "low_log_probability" and not short_candidate
                 ):
@@ -546,38 +680,46 @@ class EndpointProcessor(FrameProcessor):
             raise
         except Exception as error:
             logger.error("voice turn failed before completion type={}", type(error).__name__)
-        finally:
-            if self.turn_task is asyncio.current_task():
-                self.turn_task = None
 
     async def interrupt(self) -> None:
         self.paused = False
         await self._cancel_current_turn()
 
-    async def _cancel_current_turn(self, *, preserve_candidate: bool = False) -> None:
-        turn_task = self.turn_task
+    async def _cancel_current_turn(
+        self,
+        *,
+        preserve_candidate: bool = False,
+        verifier: str = "explicit_control",
+        evidence_duration_ms: float | None = None,
+    ) -> None:
+        turn_tasks = self._active_turn_tasks()
         if not preserve_candidate:
             self._reset_candidate()
+            self._last_endpoint_at = None
         if self.voice is not None:
-            await self.voice.barge_in()
-        if turn_task is not None and not turn_task.done():
-            turn_task.cancel()
-            await asyncio.gather(turn_task, return_exceptions=True)
-        if self.turn_task is turn_task:
-            self.turn_task = None
+            await self.voice.barge_in(
+                verifier=verifier,
+                evidence_duration_ms=evidence_duration_ms,
+            )
+        current = asyncio.current_task()
+        cancellable = tuple(task for task in turn_tasks if task is not current)
+        for task in cancellable:
+            task.cancel()
+        if cancellable:
+            await asyncio.gather(*cancellable, return_exceptions=True)
 
     async def pause(self) -> None:
         self.paused = True
         self._reset_candidate()
         self.idle_buffer.clear()
+        self._last_endpoint_at = None
         if self.voice is not None:
             await self.voice.pause()
-        turn_task = self.turn_task
-        if turn_task is not None and not turn_task.done():
-            turn_task.cancel()
-            await asyncio.gather(turn_task, return_exceptions=True)
-        if self.turn_task is turn_task:
-            self.turn_task = None
+        turn_tasks = self._active_turn_tasks()
+        for task in turn_tasks:
+            task.cancel()
+        if turn_tasks:
+            await asyncio.gather(*turn_tasks, return_exceptions=True)
 
     async def resume(self) -> None:
         self.paused = False
@@ -588,6 +730,7 @@ class EndpointProcessor(FrameProcessor):
         self.paused = False
         self._reset_candidate()
         self.idle_buffer.clear()
+        self._last_endpoint_at = None
         if self.voice is not None:
             await self.voice.participant_connected()
 
@@ -640,6 +783,41 @@ class EndpointProcessor(FrameProcessor):
         await self.push_frame(InterruptionFrame())
 
 
+def speech_provider_from_environment() -> SpeechProvider:
+    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
+    if speech_provider in {"local", "parakeet"}:
+        return ParakeetAppleSpeechProvider(
+            parakeet_model=os.environ.get("RADCLIFFE_PARAKEET_MODEL", DEFAULT_PARAKEET_MODEL),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+            chunk_duration=float(os.environ.get("RADCLIFFE_PARAKEET_CHUNK_SECONDS", "120")),
+            overlap_duration=float(os.environ.get("RADCLIFFE_PARAKEET_OVERLAP_SECONDS", "15")),
+        )
+    if speech_provider == "whisper":
+        return LocalAppleSpeechProvider(
+            whisper_model=os.environ.get(
+                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
+            ),
+            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
+            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
+            initial_prompt=os.environ.get(
+                "RADCLIFFE_WHISPER_INITIAL_PROMPT",
+                DEFAULT_WHISPER_INITIAL_PROMPT,
+            ),
+            verification_model=os.environ.get("RADCLIFFE_WHISPER_VERIFICATION_MODEL"),
+        )
+    if speech_provider == "openai":
+        if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
+            raise RuntimeError(
+                "OpenAI speech is disabled; set RADCLIFFE_ALLOW_CLOUD_MODELS=1 "
+                "only for a user-approved test run"
+            )
+        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
+        return OpenAISpeechProvider(api_key)
+    raise RuntimeError(f"unsupported speech provider: {speech_provider}")
+
+
 async def run() -> None:
     required = {
         key: os.environ.get(key)
@@ -655,32 +833,21 @@ async def run() -> None:
     database_path = Path(os.environ.get("RADCLIFFE_DATABASE_PATH", "var/radcliffe.sqlite3"))
     store = EventStore(database_path)
     await store.migrate()
-    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
-    if speech_provider == "local":
-        speech: SpeechProvider = LocalAppleSpeechProvider(
-            whisper_model=os.environ.get(
-                "RADCLIFFE_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"
-            ),
-            language=os.environ.get("RADCLIFFE_WHISPER_LANGUAGE", "en"),
-            voice=os.environ.get("RADCLIFFE_TTS_VOICE", "Samantha"),
-            initial_prompt=os.environ.get(
-                "RADCLIFFE_WHISPER_INITIAL_PROMPT",
-                DEFAULT_WHISPER_INITIAL_PROMPT,
-            ),
-            verification_model=os.environ.get("RADCLIFFE_WHISPER_VERIFICATION_MODEL"),
+    speech = speech_provider_from_environment()
+    if isinstance(speech, PreparableSpeechProvider):
+        logger.info(
+            "preparing local speech provider provider={} model={} before input readiness",
+            type(speech).__name__,
+            speech.model_identity,
         )
-    elif speech_provider == "openai":
-        if os.environ.get("RADCLIFFE_ALLOW_CLOUD_MODELS") != "1":
-            raise RuntimeError(
-                "OpenAI speech is disabled; set RADCLIFFE_ALLOW_CLOUD_MODELS=1 "
-                "only for a user-approved test run"
-            )
-        api_key = os.environ.get("RADCLIFFE_OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("RADCLIFFE_OPENAI_API_KEY is required for OpenAI speech")
-        speech = OpenAISpeechProvider(api_key)
-    else:
-        raise RuntimeError(f"unsupported speech provider: {speech_provider}")
+        started_at = monotonic()
+        await speech.prepare()
+        logger.info(
+            "local speech provider ready provider={} model={} duration_ms={}",
+            type(speech).__name__,
+            speech.model_identity,
+            round((monotonic() - started_at) * 1000, 2),
+        )
     endpoint_settings = EndpointSettings.from_environment()
     capture = SpeechCapture.from_environment()
     sidecar_url = os.environ.get("RADCLIFFE_SIDECAR_URL", "http://127.0.0.1:8787")

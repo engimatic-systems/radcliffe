@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, milestone-1, voice]
+tags: [radcliffe, foundation, milestone-1, voice, operator-final-check]
 ---
 # Implement the streaming VAD, STT, Pi, and TTS voice pipeline
 
@@ -51,3 +51,11 @@ Five consecutive real local-provider turns now pass through the black-box LiveKi
 **2026-07-15T03:43:46Z**
 
 2026-07-14 repeated local-provider evidence remains within budget after adding long-pause and exact-source scenarios. Latest full external run: ordinary/three exact turns 2.170-2.473s, replacement 2.245s, source audio 2.857s, tap acknowledgement 8ms, speech-barge acknowledgement 206ms; all checks passed in artifacts/voice-conformance/20260715T034110Z/report.json.
+
+**2026-07-21T14:51:53Z**
+
+Deferred physical observation from 2026-07-21 session ses_ece6459346fbe944ae5be96736984b1c: the final user envelope began mid-thought ('needs to be supplied...'), so the preceding words were not persisted. Per the user, do not prioritize this endpointing/transcription truncation until the background-job lifecycle plumbing is fixed.
+
+**2026-07-21T15:54:25Z**
+
+2026-07-21 latest Pixel session reproduced the deferred truncation on its first turn. USER sequence 1 contained only Using your read source tool; USER sequence 4 says the intended preceding request was not captured by the microphone. Later 4.3s, 5.3s, and 16.6s turns were transcribed completely, narrowing the recurrence toward first-turn readiness or capture startup rather than a general long-input size cap. Do not start remediation until the background-job retry operator gate is resolved.

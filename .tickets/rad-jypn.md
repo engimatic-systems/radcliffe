@@ -1,6 +1,6 @@
 ---
 id: rad-jypn
-status: open
+status: closed
 deps: []
 links: [rad-16wv]
 created: 2026-07-21T02:40:24Z
@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: coopwilliams
 parent: rad-3se2
-tags: [voice, interruption, vad, silero, p0]
+tags: [voice, interruption, vad, silero, p0, operator-autonomous]
 ---
 # Handle near-field barge-in when Silero reports zero speech windows
 
@@ -22,3 +22,8 @@ Preserve echo, room-tone, and silence rejection while making the high-energy/zer
 
 1. The retained high-energy/zero-window candidates from ses_5fb0ac5ab311fbda54bb9652cb9b68b0 have a deterministic regression. 2. Genuine near-field overlap reaches a confirmed interruption or an explicit recoverable disposition instead of silently becoming a queued normal turn. 3. Echo, room tone, background babble, and silence retain their current false-interruption protections. 4. Telemetry correlates candidate, acoustic features, verifier result, turn, generation, flush request, and device acknowledgement. 5. External voice conformance covers both accepted near-field speech and rejected non-speech.
 
+## Notes
+
+**2026-07-21T03:40:39Z**
+
+Implemented a bounded high-energy fallback for the retained zero-Silero-window branch. The exact .1565/.2015/.3709 sequence now confirms only after sustained 12,517-RMS overlap; equally loud low-confidence echo remains rejected. Correlated telemetry covers verifier disposition, interrupted operation, flush request, and device acknowledgement. Focused endpoint/playback tests pass; STT rejection corpus passes; Qwen/LiveKit interruption, babble rejection, audible-stop, replacement-generation, and durable-flush checks pass in artifacts/voice-conformance/20260721T033831Z/report.json. That report's only red check was unrelated cold first-audio latency at 5.180s; subsequent turns were 2.35-2.40s.

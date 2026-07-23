@@ -47,6 +47,9 @@ class FakeJobVoice:
         event_id: str,
         announcement: JobAnnouncement,
         *,
+        job_id: str,
+        status: str,
+        detail_code: str,
         foreground_quiet: Callable[[], bool],
         claim: Callable[[], Awaitable[bool]],
         release: Callable[[], Awaitable[bool]],
@@ -61,6 +64,7 @@ class FakeJobVoice:
         if not foreground_quiet():
             await release()
             return NotificationAnnouncementOutcome.DEFERRED
+        del job_id, status, detail_code
         self.announcements.append((event_id, announcement))
         return self.outcome
 

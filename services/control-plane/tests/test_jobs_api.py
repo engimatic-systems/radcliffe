@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import sqlite3
 import time
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from radcliffe_control.job_results import (
     PromotedArtifact,
     PromotedFinding,
     PromotedJobResult,
+    PromotedRelatedLink,
     PromotedSource,
     write_promoted_result,
 )
@@ -119,6 +121,7 @@ def tool(
             "turnId": f"turn-{call_id}",
             "callId": call_id,
             "idempotencyKey": f"background:{call_id}",
+            "userMessage": f"verbatim user turn for {call_id}",
             "toolName": tool_name,
             "arguments": arguments,
         },
@@ -417,6 +420,61 @@ def test_foreground_api_remains_responsive_while_executor_process_is_running(tmp
         assert launcher.processes[0].terminated
 
 
+def test_manage_job_retries_a_failed_job_as_a_fresh_attempt(tmp_path) -> None:
+    config = settings(tmp_path)
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-retry",
+            arguments={"instruction": "download and extract headlines"},
+        )
+        job_id = accepted.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "retry-worker-1", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        failed = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "retry-worker-1",
+                "kind": "failed",
+                "detail_code": "model_provider_unavailable",
+            },
+        )
+        assert failed.status_code == 200
+
+        retried = tool(
+            client,
+            tool_name="manage_job",
+            call_id="retry-1",
+            arguments={"operation": "retry", "jobId": job_id},
+        )
+        replay = tool(
+            client,
+            tool_name="manage_job",
+            call_id="retry-1",
+            arguments={"operation": "retry", "jobId": job_id},
+        )
+
+        assert retried.status_code == 200
+        assert retried.json()["details"]["status"] == "queued"
+        assert replay.status_code == 200
+        assert replay.json()["details"]["replayed"] == "true"
+        second_claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "retry-worker-2", "lease_seconds": 60},
+        )
+        assert second_claim.status_code == 200
+        assert second_claim.json()["job"]["job_id"] == job_id
+        assert second_claim.json()["job"]["attempt"] == 2
+
+
 def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
     workspace_root = tmp_path / "jobs"
     config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
@@ -487,9 +545,163 @@ def test_manage_job_status_returns_only_the_promoted_result(tmp_path) -> None:
                 }
             ],
         }
+        assert content["latestEvent"] == {
+            "kind": "succeeded",
+            "status": "succeeded",
+            "detailCode": "completed",
+            "revision": 3,
+        }
         assert status.json()["details"]["artifactCount"] == "1"
+        assert status.json()["details"]["latestDetailCode"] == "completed"
         assert private_instruction not in status.text
         assert private_transcript not in status.text
+
+
+def test_new_job_snapshots_bounded_links_from_prior_success(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        first = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-headlines",
+            arguments={"instruction": "Collect the Hacker News headlines."},
+        )
+        first_job_id = first.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "headlines-worker", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        workspace = workspace_root / first_job_id / "attempt-1"
+        workspace.mkdir(parents=True)
+        write_promoted_result(
+            workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=first_job_id,
+                summary="Collected the headlines.",
+                relatedLinks=(
+                    PromotedRelatedLink(
+                        label="Second story",
+                        locator="https://example.test/second-story",
+                    ),
+                ),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{first_job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "headlines-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+            },
+        )
+        assert succeeded.status_code == 200
+
+        second = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-second-story",
+            arguments={"instruction": "Download the requested story."},
+        )
+        second_job_id = second.json()["details"]["jobId"]
+
+    with sqlite3.connect(config.database_path) as db:
+        user_message, links_json = db.execute(
+            """SELECT user_message, related_links_json
+            FROM background_job_attempt_contexts WHERE job_id = ? AND attempt = 1""",
+            (second_job_id,),
+        ).fetchone()
+    assert user_message == "verbatim user turn for run-second-story"
+    assert json.loads(links_json) == [
+        {"label": "Second story", "locator": "https://example.test/second-story"}
+    ]
+
+
+def test_unsourced_markdown_job_artifact_is_status_visible_and_readable(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    canonical = b"# Hacker News headlines\n\n1. First headline\n2. Second headline\n"
+    digest = hashlib.sha256(canonical).hexdigest()
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        accepted = tool(
+            client,
+            tool_name="run_job",
+            call_id="run-generated-source",
+            arguments={"instruction": "Create the headlines Markdown file."},
+        )
+        job_id = accepted.json()["details"]["jobId"]
+        claim = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "generated-source-worker", "lease_seconds": 60},
+        )
+        assert claim.status_code == 200
+        workspace = workspace_root / job_id / "attempt-1"
+        files = workspace / "files"
+        files.mkdir(parents=True)
+        path = "hacker_news_headlines.md"
+        files.joinpath(path).write_bytes(canonical)
+        artifact = PromotedArtifact(
+            artifactId=f"artifact:file:{digest[:16]}",
+            path=path,
+            sha256=digest,
+            byteLength=len(canonical),
+        )
+        write_promoted_result(
+            workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=job_id,
+                summary="Created the requested headlines file.",
+                artifacts=(artifact,),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{job_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "generated-source-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+                "artifact_ids": [artifact.artifact_id],
+            },
+        )
+        assert succeeded.status_code == 200
+
+        status = tool(
+            client,
+            tool_name="manage_job",
+            call_id="status-generated-source",
+            arguments={"operation": "status", "jobId": job_id},
+        )
+        assert status.status_code == 200
+        content = json.loads(status.json()["modelContent"])
+        assert content["result"]["sources"][0]["name"] == path
+        assert status.json()["details"]["sourceCount"] == "1"
+
+        response = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-generated-source",
+            arguments={"reference": path, "jobId": job_id},
+        )
+        assert response.status_code == 200
+        envelope = MessageEnvelope.from_proto(
+            protocol_pb2.MessageEnvelope.FromString(
+                base64.b64decode(
+                    response.json()["details"]["sourceEnvelopeProtoBase64"],
+                    validate=True,
+                )
+            )
+        )
+        assert envelope.content.inline_text.encode() == canonical
+        assert envelope.provenance.locator.startswith("radcliffe-job-output:")
 
 
 def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) -> None:

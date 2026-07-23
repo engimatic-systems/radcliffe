@@ -5,8 +5,17 @@ import pytest
 from loguru import logger
 from pipecat.frames.frames import UserAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection
-from radcliffe_media.production import EndpointProcessor, EndpointSettings
-from radcliffe_media.speech import Transcription, TranscriptionSegmentEvidence
+from radcliffe_media.production import (
+    EndpointProcessor,
+    EndpointSettings,
+    speech_provider_from_environment,
+)
+from radcliffe_media.speech import (
+    LocalAppleSpeechProvider,
+    ParakeetAppleSpeechProvider,
+    Transcription,
+    TranscriptionSegmentEvidence,
+)
 from radcliffe_media.speech_activity import SpeechActivityEvidence
 
 
@@ -17,6 +26,21 @@ class FakeSpeech:
 
     async def transcribe(self, pcm: bytes, _sample_rate: int, _channels: int) -> str:
         self.calls.append(pcm)
+        self.transcribed.set()
+        return f"transcript-{len(self.calls)}"
+
+
+class DelayedFirstSpeech(FakeSpeech):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+
+    async def transcribe(self, pcm: bytes, _sample_rate: int, _channels: int) -> str:
+        self.calls.append(pcm)
+        if len(self.calls) == 1:
+            self.first_started.set()
+            await self.release_first.wait()
         self.transcribed.set()
         return f"transcript-{len(self.calls)}"
 
@@ -52,16 +76,36 @@ class FakeActivity:
         )
 
 
+class SequencedActivity(FakeActivity):
+    def __init__(self, probabilities: tuple[float, ...]) -> None:
+        super().__init__(speech_windows=0, maximum_probability=probabilities[-1])
+        self.probabilities = probabilities
+
+    async def analyze(
+        self, _pcm: bytes, _sample_rate: int, _channels: int
+    ) -> SpeechActivityEvidence:
+        probability = self.probabilities[min(self.calls, len(self.probabilities) - 1)]
+        self.calls += 1
+        return SpeechActivityEvidence(
+            window_count=50,
+            speech_window_count=0,
+            maximum_probability=probability,
+            average_probability=probability / 2,
+        )
+
+
 class FakeVoice:
     def __init__(self, *, block_first: bool = False) -> None:
         self.block_first = block_first
         self.transcripts: list[str] = []
         self.barge_ins = 0
+        self.barge_in_dispositions: list[str] = []
         self.active = 0
         self.maximum_active = 0
         self.first_started = asyncio.Event()
         self.participant_connections = 0
         self.clarifications: list[str] = []
+        self.response_tasks: set[asyncio.Task[None]] = set()
 
     async def handle_transcript(self, transcript: str) -> None:
         self.transcripts.append(transcript)
@@ -74,8 +118,21 @@ class FakeVoice:
         finally:
             self.active -= 1
 
-    async def barge_in(self) -> None:
+    async def submit_transcript(self, transcript: str) -> None:
+        task = asyncio.create_task(self.handle_transcript(transcript))
+        self.response_tasks.add(task)
+        task.add_done_callback(self.response_tasks.discard)
+        await asyncio.sleep(0)
+
+    async def barge_in(self, **evidence: object) -> None:
         self.barge_ins += 1
+        disposition = evidence.get("disposition", "interrupted")
+        self.barge_in_dispositions.append(str(disposition))
+        tasks = tuple(self.response_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def foreground_turn_active(self) -> bool:
         return self.active > 0
@@ -164,7 +221,7 @@ async def test_audio_subscription_waits_for_the_first_processed_frame_before_rea
 
 
 @pytest.mark.asyncio
-async def test_new_speech_cancels_and_awaits_the_previous_endpoint_task() -> None:
+async def test_new_speech_interrupts_response_without_cancelling_previous_capture() -> None:
     speech = FakeSpeech()
     voice = FakeVoice(block_first=True)
     endpoint = EndpointProcessor(speech, EndpointSettings(end_silence_ms=900))
@@ -185,11 +242,84 @@ async def test_new_speech_cancels_and_awaits_the_previous_endpoint_task() -> Non
     assert voice.active == 0
     await feed(endpoint, voiced=True, frames=9)
     await feed(endpoint, voiced=False, frames=45)
+    task = endpoint.turn_task
+    if task is not None:
+        await asyncio.wait_for(task, timeout=1)
     await asyncio.sleep(0)
 
     assert voice.transcripts == ["transcript-1", "transcript-2"]
     assert voice.maximum_active == 1
     assert voice.barge_ins == 1
+    assert voice.barge_in_dispositions == ["continued"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("continuation_frames", [21, 28])
+async def test_phone_timing_continuation_never_cancels_pending_transcription(
+    continuation_frames: int,
+) -> None:
+    speech = DelayedFirstSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech, EndpointSettings(end_silence_ms=900))
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.first_started.wait(), timeout=1)
+
+    # The phone resumed 422 ms and 571 ms after the silence endpoint. Keep the
+    # first STT pending while the next clause begins, matching those traces.
+    await feed(endpoint, voiced=False, frames=continuation_frames)
+    await feed(endpoint, voiced=True, frames=3)
+    speech.release_first.set()
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    await feed(endpoint, voiced=True, frames=3)
+
+    assert voice.barge_ins == 1
+    assert voice.barge_in_dispositions == ["continued"]
+    assert speech.calls
+
+    await feed(endpoint, voiced=True, frames=9)
+    await feed(endpoint, voiced=False, frames=45)
+    task = endpoint.turn_task
+    if task is not None:
+        await asyncio.wait_for(task, timeout=1)
+    await asyncio.sleep(0)
+
+    assert len(speech.calls) == 2
+    assert voice.transcripts == ["transcript-1", "transcript-2"]
+    assert voice.maximum_active == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_continuation_preserves_prior_turn_even_when_stt_is_slower() -> None:
+    speech = DelayedFirstSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech, EndpointSettings(end_silence_ms=900))
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.first_started.wait(), timeout=1)
+
+    # Let the whole continuation endpoint while the first transcription is
+    # still blocked. Its ordered handoff must preserve, not supersede, turn one.
+    await feed(endpoint, voiced=False, frames=21)
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    assert voice.barge_ins == 0
+
+    speech.release_first.set()
+    for _ in range(2):
+        task = endpoint.turn_task
+        if task is not None:
+            await asyncio.wait_for(task, timeout=1)
+    await asyncio.sleep(0)
+
+    assert len(speech.calls) == 2
+    assert voice.transcripts == ["transcript-1", "transcript-2"]
+    assert voice.barge_in_dispositions == ["continued"]
+    assert voice.maximum_active == 1
 
 
 def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatch) -> None:
@@ -199,14 +329,18 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_PRE_ROLL_MS", "360")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_FOREGROUND_RMS", "1300")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RMS", "1900")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS", "9000")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_FOREGROUND_VOICE_MS", "180")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_CONFIRMATION_MS", "340")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS", "500")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_BARGE_IN_RELEASE_MS", "140")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_CONTINUATION_GRACE_MS", "800")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS", "20000")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_UNCONFIRMED_MS", "2200")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO", "0.07")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_MIN_SPEECH_WINDOWS", "3")
     monkeypatch.setenv("RADCLIFFE_ENDPOINT_SPEECH_PROBABILITY", "0.55")
+    monkeypatch.setenv("RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY", "0.2")
     monkeypatch.setenv("RADCLIFFE_WHISPER_MIN_AVG_LOGPROB", "-0.9")
     monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_FOREGROUND_MS", "650")
     monkeypatch.setenv("RADCLIFFE_WHISPER_SHORT_MIN_AVG_LOGPROB", "-0.7")
@@ -218,16 +352,20 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
         pre_roll_ms=360,
         foreground_rms_threshold=1300,
         barge_in_rms_threshold=1900,
+        strong_barge_in_rms_threshold=9000,
         minimum_voice_ms=300,
         minimum_foreground_voice_ms=180,
         barge_in_confirmation_ms=340,
+        strong_barge_in_confirmation_ms=500,
         barge_in_release_ms=140,
         end_silence_ms=1200,
+        continuation_grace_ms=800,
         maximum_unconfirmed_ms=2200,
         maximum_utterance_ms=20000,
         minimum_maximum_voice_ratio=0.07,
         minimum_speech_windows=3,
         speech_probability=0.55,
+        strong_barge_in_minimum_probability=0.2,
         minimum_average_log_probability=-0.9,
         short_foreground_voice_ms=650,
         short_minimum_average_log_probability=-0.7,
@@ -245,6 +383,31 @@ def test_endpoint_settings_are_configurable_and_reject_invalid_values(monkeypatc
             minimum_average_log_probability=-0.5,
             short_minimum_average_log_probability=-0.9,
         )
+
+
+@pytest.mark.parametrize("provider_name", ["local", "parakeet"])
+def test_local_speech_profile_defaults_to_parakeet(monkeypatch, provider_name: str) -> None:
+    monkeypatch.setenv("RADCLIFFE_SPEECH_PROVIDER", provider_name)
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_MODEL", "test-parakeet")
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_CHUNK_SECONDS", "90")
+    monkeypatch.setenv("RADCLIFFE_PARAKEET_OVERLAP_SECONDS", "10")
+
+    provider = speech_provider_from_environment()
+
+    assert isinstance(provider, ParakeetAppleSpeechProvider)
+    assert provider.parakeet_model == "test-parakeet"
+    assert provider.chunk_duration == 90
+    assert provider.overlap_duration == 10
+
+
+def test_whisper_remains_an_explicit_rollback_profile(monkeypatch) -> None:
+    monkeypatch.setenv("RADCLIFFE_SPEECH_PROVIDER", "whisper")
+    monkeypatch.setenv("RADCLIFFE_WHISPER_MODEL", "rollback-whisper")
+
+    provider = speech_provider_from_environment()
+
+    assert type(provider) is LocalAppleSpeechProvider
+    assert provider.whisper_model == "rollback-whisper"
 
 
 @pytest.mark.asyncio
@@ -294,6 +457,7 @@ async def test_background_babble_does_not_barge_in_or_become_a_turn() -> None:
 
     assert voice.active == 0
     assert voice.barge_ins == 1
+    assert voice.barge_in_dispositions == ["interrupted"]
 
 
 @pytest.mark.asyncio
@@ -309,6 +473,59 @@ async def test_loud_non_speech_must_pass_activity_gate_before_barge_in() -> None
     endpoint.activity = FakeActivity(speech_windows=0, maximum_probability=0.12)
 
     await feed(endpoint, voiced=True, frames=30)
+    await feed(endpoint, voiced=False, frames=45)
+
+    assert voice.active == 1
+    assert voice.barge_ins == 0
+    assert voice.transcripts == ["transcript-1"]
+    assert len(speech.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retained_high_energy_zero_window_overlap_uses_bounded_fallback() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(
+        speech,
+        EndpointSettings(barge_in_confirmation_ms=137.5),
+    )
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    activity = SequencedActivity((0.1565, 0.2015, 0.3709))
+    endpoint.activity = activity
+
+    for _ in range(21):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=12517),
+            FrameDirection.DOWNSTREAM,
+        )
+
+    assert activity.calls == 3
+    assert voice.barge_ins == 1
+    assert endpoint.barge_in_confirmed
+    assert voice.active == 0
+
+
+@pytest.mark.asyncio
+async def test_strong_zero_window_echo_stays_rejected_below_probability_floor() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice(block_first=True)
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=15)
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(voice.first_started.wait(), timeout=1)
+    endpoint.activity = FakeActivity(speech_windows=0, maximum_probability=0.12)
+
+    for _ in range(30):
+        await endpoint.process_frame(
+            audio_frame(voiced=True, amplitude=12517),
+            FrameDirection.DOWNSTREAM,
+        )
     await feed(endpoint, voiced=False, frames=45)
 
     assert voice.active == 1
@@ -364,6 +581,30 @@ async def test_maximum_utterance_bounds_intermittent_noise_that_defeats_silence(
     assert len(speech.calls) == 1
     assert len(speech.calls[0]) == 100 * 640
     assert voice.transcripts == ["transcript-1"]
+
+
+@pytest.mark.asyncio
+async def test_default_limit_keeps_a_continuous_thirty_two_second_turn_whole() -> None:
+    speech = FakeSpeech()
+    voice = FakeVoice()
+    endpoint = EndpointProcessor(speech)
+    endpoint.voice = voice  # type: ignore[assignment]
+
+    await feed(endpoint, voiced=True, frames=1_600)
+
+    assert endpoint.turn_task is None
+    assert speech.calls == []
+
+    await feed(endpoint, voiced=False, frames=45)
+    await asyncio.wait_for(speech.transcribed.wait(), timeout=1)
+    task = endpoint.turn_task
+    if task is not None:
+        await task
+
+    assert len(speech.calls) == 1
+    assert len(speech.calls[0]) == 1_645 * 640
+    assert voice.transcripts == ["transcript-1"]
+    assert voice.barge_ins == 0
 
 
 @pytest.mark.asyncio

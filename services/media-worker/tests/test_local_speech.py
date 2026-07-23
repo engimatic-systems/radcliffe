@@ -1,12 +1,15 @@
 import asyncio
+import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from radcliffe_media.speech import (
     LocalAppleSpeechProvider,
     OpenAISpeechProvider,
+    ParakeetAppleSpeechProvider,
     Transcription,
     TranscriptionSegmentEvidence,
     assess_transcription,
@@ -147,6 +150,68 @@ async def test_local_whisper_receives_an_in_memory_16khz_mono_waveform(monkeypat
             "read source, metadata."
         ),
     }
+
+
+@pytest.mark.asyncio
+async def test_local_parakeet_is_preloaded_and_returns_confidence_evidence(monkeypatch) -> None:
+    model_loads: list[str] = []
+    waveforms: list[np.ndarray] = []
+
+    class FakeParakeet:
+        preprocessor_config = SimpleNamespace(sample_rate=16000, hop_length=160)
+
+        def generate(self, _mel):
+            if len(waveforms) == 1:
+                return [SimpleNamespace(text="", sentences=[], tokens=[])]
+            sentence = SimpleNamespace(
+                tokens=[SimpleNamespace(confidence=0.8), SimpleNamespace(confidence=0.5)]
+            )
+            return [
+                SimpleNamespace(
+                    text=" Four score and seven years ago. ",
+                    sentences=[sentence],
+                    tokens=sentence.tokens,
+                )
+            ]
+
+    def fake_load(model: str):
+        model_loads.append(model)
+        return FakeParakeet()
+
+    def fake_logmel(waveform, _configuration):
+        waveforms.append(np.array(waveform))
+        return object()
+
+    monkeypatch.setattr("radcliffe_media.speech.load_parakeet_model", fake_load)
+    monkeypatch.setattr("radcliffe_media.speech.get_parakeet_logmel", fake_logmel)
+    provider = ParakeetAppleSpeechProvider(
+        parakeet_model="local-parakeet",
+        chunk_duration=90,
+        overlap_duration=10,
+    )
+
+    await provider.prepare()
+    await provider.prepare()
+    stereo_8khz = np.tile(np.array([16384, 16384], dtype="<i2"), 800).tobytes()
+    transcription = await provider.transcribe_with_evidence(stereo_8khz, 8000, 2)
+
+    assert model_loads == ["local-parakeet"]
+    assert len(waveforms) == 2
+    assert waveforms[0].shape == (16000,)
+    assert np.count_nonzero(waveforms[0]) == 0
+    assert waveforms[1].shape == (1600,)
+    assert np.allclose(waveforms[1], 0.5)
+    assert transcription.text == "Four score and seven years ago."
+    assert len(transcription.segments) == 1
+    assert transcription.segments[0].average_log_probability == pytest.approx(
+        (math.log(0.8) + math.log(0.5)) / 2
+    )
+    assert assess_transcription(transcription).accepted
+
+
+def test_parakeet_rejects_an_invalid_chunk_overlap() -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        ParakeetAppleSpeechProvider(chunk_duration=10, overlap_duration=10)
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from radcliffe_domain.jobs import (
     JobLeaseError,
     JobNotificationDisposition,
     JobNotificationPolicy,
+    JobRelatedLink,
     JobStateError,
     JobStatus,
     JobStore,
@@ -195,6 +196,79 @@ async def test_running_cancel_wins_over_late_success_and_worker_acknowledges(tmp
     )
     assert cancelled.status is JobStatus.CANCELLED
     assert cancelled.lease_owner is None
+
+
+@pytest.mark.asyncio
+async def test_failed_job_retry_is_idempotent_and_claims_a_fresh_attempt(tmp_path) -> None:
+    _path, session, store = await job_store(tmp_path)
+    accepted = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-1",
+        instruction="download and extract headlines",
+        user_message="Get the Hacker News headlines for me.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
+    )
+    claim = await store.claim_next(lease_owner="worker-1")
+    assert claim is not None
+    assert claim.user_message == "Get the Hacker News headlines for me."
+    assert claim.related_links == (
+        JobRelatedLink(label="Second story", locator="https://example.test/second"),
+    )
+    failed = await store.publish(
+        job_id=accepted.record.job_id,
+        lease_owner="worker-1",
+        kind=JobEventKind.FAILED,
+        detail_code="model_provider_unavailable",
+    )
+    assert failed.status is JobStatus.FAILED
+
+    retried = await store.retry(
+        principal_id="owner",
+        job_id=accepted.record.job_id,
+        idempotency_key="retry-1",
+        user_message="Download the second story from that list.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
+    )
+    replay = await store.retry(
+        principal_id="owner",
+        job_id=accepted.record.job_id,
+        idempotency_key="retry-1",
+        user_message="Download the second story from that list.",
+        related_links=(
+            JobRelatedLink(label="Second story", locator="https://example.test/second"),
+        ),
+    )
+
+    assert retried.record.status is JobStatus.QUEUED
+    assert replay.replayed
+    second_claim = await store.claim_next(lease_owner="worker-2")
+    assert second_claim is not None
+    assert second_claim.record.job_id == accepted.record.job_id
+    assert second_claim.record.attempt == 2
+    assert second_claim.user_message == "Download the second story from that list."
+    assert second_claim.related_links == (
+        JobRelatedLink(label="Second story", locator="https://example.test/second"),
+    )
+    events = await store.events(accepted.record.job_id)
+    assert [(event.kind, event.detail_code) for event in events] == [
+        (JobEventKind.ACCEPTED, "accepted"),
+        (JobEventKind.STARTED, "started"),
+        (JobEventKind.FAILED, "model_provider_unavailable"),
+        (JobEventKind.ACCEPTED, "retried"),
+        (JobEventKind.STARTED, "started"),
+    ]
+    with pytest.raises(JobStateError, match="only a failed"):
+        await store.retry(
+            principal_id="owner",
+            job_id=accepted.record.job_id,
+            idempotency_key="retry-while-running",
+        )
 
 
 @pytest.mark.asyncio

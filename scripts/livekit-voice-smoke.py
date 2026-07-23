@@ -204,6 +204,17 @@ def _event_after(state: SmokeState, index: int, predicate) -> TimedEvent | None:
     return next((item for item in state.events[index:] if predicate(item.event)), None)
 
 
+def _latest_conversation_state(state: SmokeState) -> int:
+    return next(
+        (
+            item.event.state_changed.current
+            for item in reversed(state.events)
+            if item.event.HasField("state_changed")
+        ),
+        protocol_pb2.CONVERSATION_STATE_UNSPECIFIED,
+    )
+
+
 def _active(pcm: bytes, threshold: float = 300) -> bool:
     samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
     if not samples.size:
@@ -1299,11 +1310,22 @@ async def run(commit: str) -> int:
             active_response = await sidecar_client.get(f"{sidecar_url}/healthz")
             active_response.raise_for_status()
             active_sidecar_turns = int(active_response.json().get("active_turns", 0))
+        foreground_output_owned = active_sidecar_turns >= 1 or (
+            bool(playback.pending)
+            and _latest_conversation_state(state) == protocol_pb2.CONVERSATION_STATE_SPEAKING
+        )
         checks.append(
             Check(
-                "speech_replacement_observes_live_sidecar_stream",
-                active_sidecar_turns >= 1,
-                f"sidecar reported {active_sidecar_turns} active turn(s) before barge-in",
+                "speech_replacement_preserves_foreground_output_ownership",
+                foreground_output_owned,
+                (
+                    f"foreground output remained owned with sidecar active={active_sidecar_turns} "
+                    f"and queued playback={len(playback.pending)}"
+                ),
+                {
+                    "active_sidecar_turns": active_sidecar_turns,
+                    "queued_playback_attempts": len(playback.pending),
+                },
             )
         )
 
@@ -1333,6 +1355,9 @@ async def run(commit: str) -> int:
             active_after_babble_response = await sidecar_during_babble.get(f"{sidecar_url}/healthz")
             active_after_babble_response.raise_for_status()
             active_after_babble = int(active_after_babble_response.json().get("active_turns", 0))
+        playback_owned_after_babble = bool(playback.pending) and (
+            _latest_conversation_state(state) == protocol_pb2.CONVERSATION_STATE_SPEAKING
+        )
         checks.append(
             Check(
                 "background_babble_does_not_interrupt_or_create_turn",
@@ -1352,16 +1377,20 @@ async def run(commit: str) -> int:
         checks.append(
             Check(
                 "background_babble_preserves_agent_audio",
-                bool(heard_during_babble) and active_after_babble >= 1,
+                bool(heard_during_babble)
+                and (active_after_babble >= 1 or playback_owned_after_babble),
                 (
                     f"heard {len(heard_during_babble)} active assistant frames during babble; "
-                    f"sidecar active turns={active_after_babble}"
-                    if heard_during_babble and active_after_babble >= 1
+                    f"sidecar active turns={active_after_babble}; "
+                    f"queued playback={len(playback.pending)}"
+                    if heard_during_babble
+                    and (active_after_babble >= 1 or playback_owned_after_babble)
                     else "assistant became inaudible or its active turn ended during babble"
                 ),
                 {
                     "active_output_frames": len(heard_during_babble),
                     "active_turns_after_babble": active_after_babble,
+                    "queued_playback_attempts": len(playback.pending),
                 },
             )
         )
@@ -1403,14 +1432,7 @@ async def run(commit: str) -> int:
                         break
                     await asyncio.sleep(0.05)
         await asyncio.sleep(0.25)
-        latest_conversation_state = next(
-            (
-                item.event.state_changed.current
-                for item in reversed(state.events)
-                if item.event.HasField("state_changed")
-            ),
-            protocol_pb2.CONVERSATION_STATE_UNSPECIFIED,
-        )
+        latest_conversation_state = _latest_conversation_state(state)
         checks.append(
             Check(
                 "post_model_playback_remains_foreground_owned",

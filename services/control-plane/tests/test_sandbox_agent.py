@@ -1,13 +1,19 @@
 import json
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
+    HAIKU_MODEL_ID,
+    PREVIEW_OUTPUT_LIMIT,
+    SANDBOX_FILE_SIZE_LIMIT,
     SYSTEM_PROMPT,
+    AnthropicAgent,
     DockerSandbox,
+    JobModelRequestError,
     OllamaAgent,
     PrivateTranscript,
     StartFrame,
@@ -22,6 +28,12 @@ def test_background_prompt_keeps_radcliffe_as_the_harness_not_the_model() -> Non
     assert "selected Unix job model" in normalized
     assert "set inference true" in normalized
     assert "paths of every source" in normalized
+    assert "Follow the schema exactly" in normalized
+    assert "Do not add a preface, historical note" in normalized
+    assert "never reconstruct missing text from model memory" in normalized
+    assert "Never cite a generated output as its own evidence" in normalized
+    assert "After one check proves" in normalized
+    assert "call finish_job immediately" in normalized
     assert "You are Radcliffe" not in normalized
     assert "Radcliffe's background Unix job agent" not in normalized
 
@@ -53,6 +65,30 @@ class FakeSandbox:
         self.commands.append((command, timeout_seconds))
         self.workspace.joinpath("report.md").write_text("verified result\n")
         return 0, "private shell output", False
+
+    def preview_page(
+        self,
+        url: str,
+        query: str,
+        *,
+        timeout_seconds: int = 60,
+    ) -> tuple[int, str, bool]:
+        self.commands.append((f"preview:{url}:{query}", timeout_seconds))
+        return (
+            0,
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "untrusted": True,
+                    "title": "Example",
+                    "htmlPath": "pages/example.html",
+                    "textPath": "pages/example.txt",
+                    "preview": "Relevant sentence one. ... Relevant sentence two.",
+                },
+                separators=(",", ":"),
+            ),
+            False,
+        )
 
 
 class ScriptedOllama(OllamaAgent):
@@ -88,7 +124,9 @@ def tool_batch(*calls: tuple[str, dict[str, object]]) -> dict[str, object]:
 
 
 def test_command_output_limit_leaves_room_for_the_bounded_model_context() -> None:
-    assert COMMAND_OUTPUT_LIMIT == 24 * 1024
+    assert COMMAND_OUTPUT_LIMIT == 8 * 1024
+    assert PREVIEW_OUTPUT_LIMIT == 8 * 1024
+    assert SANDBOX_FILE_SIZE_LIMIT == 64 * 1024 * 1024
 
 
 def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
@@ -118,6 +156,249 @@ def test_ollama_request_bounds_context_and_generation(monkeypatch) -> None:
         "temperature": 0.1,
         "num_ctx": 8_192,
         "num_predict": 512,
+    }
+
+
+def test_anthropic_job_model_is_pinned_bounded_and_forces_one_tool(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                }
+            ).encode()
+
+    def open_request(request, *, timeout):
+        captured.update(json.loads(request.data))
+        captured["timeout"] = timeout
+        captured["api_key"] = request.get_header("X-api-key")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    agent = AnthropicAgent(api_key="fake-key", budget_usd=0.25)
+
+    message = agent.chat(
+        [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "do work"},
+        ]
+    )
+
+    assert captured["model"] == HAIKU_MODEL_ID
+    assert captured["max_tokens"] == 1024
+    assert captured["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    assert captured["api_key"] == "fake-key"
+    assert message["tool_calls"] == [
+        {
+            "id": "toolu_1",
+            "function": {
+                "name": "run_shell",
+                "arguments": {"command": "true", "purpose": "testing"},
+            },
+        }
+    ]
+    assert agent.spent_usd == pytest.approx(0.0002)
+    assert message["usage"] == {
+        "inputTokens": 100,
+        "outputTokens": 20,
+        "cacheWriteTokens": 0,
+        "cacheReadTokens": 0,
+        "costUsd": pytest.approx(0.0002),
+        "cumulativeCostUsd": pytest.approx(0.0002),
+    }
+
+
+def test_agent_previews_a_page_without_putting_raw_html_in_model_context(
+    tmp_path,
+    capsys,
+) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+    sandbox = FakeSandbox(workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call(
+                "preview_page",
+                {
+                    "url": "https://example.test/bancroft",
+                    "query": "Bancroft Gettysburg",
+                },
+            ),
+            tool_call("run_shell", {"command": "create report", "purpose": "coding"}),
+            tool_call(
+                "finish_job",
+                {
+                    "summary": "Downloaded and checked the requested copy.",
+                    "artifactPaths": ["report.md"],
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=3,
+            result_workspace=workspace,
+        )
+    finally:
+        transcript.close()
+
+    assert sandbox.commands[0] == (
+        "preview:https://example.test/bancroft:Bancroft Gettysburg",
+        60,
+    )
+    assert "<html" not in json.dumps(agent.contexts)
+    assert "pages/example.html" in json.dumps(agent.contexts)
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [frame["detailCode"] for frame in frames] == ["searching", "coding", "completed"]
+
+
+def test_anthropic_job_model_retries_rate_limits_without_recording_response_body(
+    monkeypatch,
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_request(_request, *, timeout):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages",
+                429,
+                "rate limited",
+                {"retry-after": "2"},
+                None,
+            )
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    monkeypatch.setattr("radcliffe_control.sandbox_agent.time.sleep", delays.append)
+
+    message = AnthropicAgent(api_key="fake-key").chat([{"role": "user", "content": "do work"}])
+
+    assert attempts == 2
+    assert delays == [2.0]
+    assert message["tool_calls"]
+
+
+def test_anthropic_job_model_waits_through_a_longer_transient_outage(monkeypatch) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_recovered",
+                            "name": "run_shell",
+                            "input": {"command": "true", "purpose": "testing"},
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_request(_request, *, timeout):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts < 5:
+            raise urllib.error.URLError("temporary provider outage")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    monkeypatch.setattr("radcliffe_control.sandbox_agent.time.sleep", delays.append)
+
+    message = AnthropicAgent(api_key="fake-key").chat([{"role": "user", "content": "do work"}])
+
+    assert attempts == 5
+    assert delays == [1.0, 2.0, 4.0, 8.0]
+    assert message["tool_calls"]
+
+
+def test_agent_reports_a_stable_model_provider_failure(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+
+    class FailedAgent:
+        @property
+        def spent_usd(self) -> float:
+            return 0.0
+
+        def chat(self, _messages):
+            raise JobModelRequestError("model_rate_limited")
+
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
+            agent=FailedAgent(),
+            transcript=transcript,
+            max_steps=1,
+        )
+    finally:
+        transcript.close()
+
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "model_rate_limited"
+    records = [
+        json.loads(line)
+        for line in workspace.joinpath("agent-transcript.jsonl").read_text().splitlines()
+    ]
+    assert records[-1] == {
+        "kind": "model_error",
+        "payload": {"code": "model_rate_limited"},
     }
 
 
@@ -160,7 +441,7 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
         assert run_agent(
             start_frame(),
             sandbox=sandbox,  # type: ignore[arg-type]
-            ollama=ollama,
+            agent=ollama,
             transcript=transcript,
             max_steps=3,
             result_workspace=attempt_workspace,
@@ -190,6 +471,44 @@ def test_agent_promotes_only_bounded_result_and_artifacts(tmp_path, capsys) -> N
     assert sandbox.commands == [("python verify.py", 12)]
 
 
+def test_agent_automatically_makes_markdown_output_readable(tmp_path, capsys) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+    sandbox = FakeSandbox(artifact_workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call("run_shell", {"command": "create report", "purpose": "coding"}),
+            tool_call(
+                "finish_job",
+                {
+                    "summary": "Created and checked the Markdown report.",
+                    "artifactPaths": ["report.md"],
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=2,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    result = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert result is not None
+    assert [source.name for source in result.sources] == ["report.md"]
+    assert result.sources[0].locator.startswith("radcliffe-job-output:")
+    assert frames[-1]["entityIds"] == [result.sources[0].entity_id]
+
+
 def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) -> None:
     workspace = tmp_path / "job"
     workspace.mkdir()
@@ -198,13 +517,103 @@ def test_agent_fails_boundedly_when_model_never_uses_a_tool(tmp_path, capsys) ->
         assert not run_agent(
             start_frame(),
             sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
-            ollama=ScriptedOllama([{"role": "assistant", "content": "no tool"}]),
+            agent=ScriptedOllama([{"role": "assistant", "content": "no tool"}]),
             transcript=transcript,
             max_steps=1,
         )
     finally:
         transcript.close()
-    assert json.loads(capsys.readouterr().out)["detailCode"] == "resource_exhausted"
+    assert json.loads(capsys.readouterr().out)["detailCode"] == "step_limit_exhausted"
+
+
+def test_agent_fails_semantically_unsuccessful_work_with_a_promoted_reason(
+    tmp_path,
+    capsys,
+) -> None:
+    attempt_workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    artifact_workspace = attempt_workspace / "files"
+    artifact_workspace.mkdir(parents=True)
+    sandbox = FakeSandbox(artifact_workspace)
+    agent = ScriptedOllama(
+        [
+            tool_call(
+                "run_shell",
+                {"command": "curl blocked.example", "purpose": "downloading"},
+            ),
+            tool_call(
+                "fail_job",
+                {
+                    "summary": (
+                        "The requested source could not be acquired after a grounded attempt."
+                    ),
+                    "reasonCode": "source_unavailable",
+                },
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(attempt_workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=2,
+            result_workspace=attempt_workspace,
+        )
+    finally:
+        transcript.close()
+
+    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(frame["kind"], frame["detailCode"]) for frame in frames] == [
+        ("progress", "downloading"),
+        ("failed", "source_unavailable"),
+    ]
+    result = read_promoted_result(tmp_path / "jobs", job_id="job-1", attempt=1)
+    assert result is not None
+    assert "could not be acquired" in result.summary
+
+
+def test_agent_does_not_execute_an_identical_failed_command_twice(tmp_path, capsys) -> None:
+    workspace = tmp_path / "job"
+    workspace.mkdir()
+
+    class FailedSandbox(FakeSandbox):
+        def execute(self, command: str, *, timeout_seconds: int) -> tuple[int, str, bool]:
+            self.commands.append((command, timeout_seconds))
+            return 1, "failed", False
+
+    sandbox = FailedSandbox(workspace)
+    repeated = tool_call(
+        "run_shell",
+        {"command": "curl bad.example", "purpose": "downloading"},
+    )
+    agent = ScriptedOllama(
+        [
+            repeated,
+            repeated,
+            tool_call(
+                "fail_job",
+                {"summary": "The source stayed unavailable.", "reasonCode": "source_unavailable"},
+            ),
+        ]
+    )
+    transcript = PrivateTranscript(workspace)
+    try:
+        assert not run_agent(
+            start_frame(),
+            sandbox=sandbox,  # type: ignore[arg-type]
+            agent=agent,
+            transcript=transcript,
+            max_steps=3,
+        )
+    finally:
+        transcript.close()
+
+    assert sandbox.commands == [("curl bad.example", 60)]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["detailCode"] == (
+        "source_unavailable"
+    )
 
 
 def test_agent_sequences_and_repairs_the_observed_batched_fibonacci_calls(tmp_path, capsys) -> None:
@@ -283,7 +692,7 @@ def test_agent_sequences_and_repairs_the_observed_batched_fibonacci_calls(tmp_pa
         assert run_agent(
             start_frame(),
             sandbox=sandbox,  # type: ignore[arg-type]
-            ollama=ollama,
+            agent=ollama,
             transcript=transcript,
             max_steps=3,
             result_workspace=attempt_workspace,
@@ -319,7 +728,7 @@ def test_agent_retries_invalid_arguments_then_reports_a_specific_failure(tmp_pat
         assert not run_agent(
             start_frame(),
             sandbox=FakeSandbox(workspace),  # type: ignore[arg-type]
-            ollama=ScriptedOllama([invalid, invalid, invalid]),
+            agent=ScriptedOllama([invalid, invalid, invalid]),
             transcript=transcript,
             max_steps=3,
         )
@@ -390,9 +799,74 @@ def test_docker_sandbox_mounts_only_attempt_workspace_and_uses_internal_network(
         sandbox.proxy_name,
     ] in calls
     assert "--cap-drop" in job_create and "ALL" in job_create
+    assert "fsize=67108864:67108864" in job_create
     assert not any(
         "TOKEN=" in value or "KEY=" in value or "SECRET=" in value for value in job_create
     )
+
+
+def test_docker_sandbox_passes_multiline_commands_as_an_opaque_argument(tmp_path) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    command = """cat > report.md <<'EOF'\nfirst line\nsecond line\nEOF"""
+    calls: list[list[str]] = []
+
+    def capture(arguments, *, timeout=30, check=True):
+        del timeout, check
+        calls.append(list(arguments))
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    sandbox._run = capture  # type: ignore[method-assign]
+
+    assert sandbox.execute(command) == (0, "", False)
+    invocation = calls[-1]
+    assert invocation[-1] == command
+    assert command not in invocation[-3]
+    local = subprocess.run(
+        invocation[-5:],
+        cwd=workspace,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert local.returncode == 0
+    assert workspace.joinpath("report.md").read_text() == "first line\nsecond line\n"
+
+
+def test_docker_sandbox_passes_preview_url_and_query_as_opaque_arguments(tmp_path) -> None:
+    workspace = tmp_path / "jobs" / "job-1" / "attempt-1"
+    workspace.mkdir(parents=True)
+    sandbox = DockerSandbox(
+        docker=Path("/opt/homebrew/bin/docker"),
+        docker_host="unix:///private/docker.sock",
+        image="radcliffe-job-sandbox:test",
+        workspace=workspace,
+        workspace_root=tmp_path / "jobs",
+        job_id="job-1",
+    )
+    calls: list[list[str]] = []
+
+    def capture(arguments, *, timeout=30, check=True):
+        del timeout, check
+        calls.append(list(arguments))
+        return subprocess.CompletedProcess(arguments, 0, b'{"preview":"bounded"}\n', b"")
+
+    sandbox._run = capture  # type: ignore[method-assign]
+
+    url = "https://example.test/page?q=$(not-executed)"
+    query = "Bancroft; $(also-not-executed)"
+    assert sandbox.preview_page(url, query) == (0, '{"preview":"bounded"}', False)
+    invocation = calls[-1]
+    assert invocation[-4:] == ["--url", url, "--query", query]
+    assert invocation[-1] == query
 
 
 def test_docker_sandbox_cleans_partial_start_when_proxy_is_unavailable(tmp_path) -> None:

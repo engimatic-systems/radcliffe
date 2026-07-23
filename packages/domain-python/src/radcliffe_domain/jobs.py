@@ -86,8 +86,17 @@ _EXECUTOR_DETAIL_CODES = {
             "budget_exhausted",
             "runtime_exhausted",
             "resource_exhausted",
+            "step_limit_exhausted",
             "policy_denied",
+            "source_unavailable",
+            "task_failed",
             "tool_arguments_invalid",
+            "model_no_action",
+            "model_unavailable",
+            "model_rate_limited",
+            "model_provider_unavailable",
+            "model_request_failed",
+            "model_response_invalid",
         }
     ),
     JobEventKind.CANCELLED: frozenset(
@@ -146,9 +155,17 @@ class JobFollowUp:
 
 
 @dataclass(frozen=True, slots=True)
+class JobRelatedLink:
+    label: str
+    locator: str
+
+
+@dataclass(frozen=True, slots=True)
 class JobClaim:
     record: JobRecord
     instruction: str
+    user_message: str
+    related_links: tuple[JobRelatedLink, ...]
     follow_ups: tuple[JobFollowUp, ...]
     recovered: bool
 
@@ -246,6 +263,8 @@ class JobStore:
         generation: int,
         idempotency_key: str,
         instruction: str,
+        user_message: str = "",
+        related_links: tuple[JobRelatedLink, ...] = (),
         notification_policy: JobNotificationPolicy = JobNotificationPolicy.NEXT_SAFE_PAUSE,
         priority: int = 2,
         budget_microusd: int | None = None,
@@ -253,6 +272,7 @@ class JobStore:
     ) -> JobMutationResult:
         if not instruction or len(instruction) > 12_000:
             raise JobError("job instruction must contain 1 through 12000 characters")
+        self._validate_attempt_context(user_message, related_links)
         if generation <= 0:
             raise JobError("job generation must be positive")
         if priority not in range(5):
@@ -266,6 +286,7 @@ class JobStore:
                 "session_id": session_id,
                 "generation": generation,
                 "instruction": instruction,
+                "user_message": user_message,
                 "notification_policy": notification_policy.value,
                 "priority": priority,
                 "budget_microusd": budget_microusd,
@@ -310,6 +331,14 @@ class JobStore:
                     now,
                     now,
                 ),
+            )
+            await self._insert_attempt_context(
+                db,
+                job_id=job_id,
+                attempt=1,
+                user_message=user_message,
+                related_links=related_links,
+                created_at=now,
             )
             await self._insert_event(
                 db,
@@ -592,6 +621,25 @@ class JobStore:
             apply=self._apply_cancel,
         )
 
+    async def retry(
+        self,
+        *,
+        principal_id: str,
+        job_id: str,
+        idempotency_key: str,
+        user_message: str = "",
+        related_links: tuple[JobRelatedLink, ...] = (),
+    ) -> JobMutationResult:
+        self._validate_attempt_context(user_message, related_links)
+        return await self._command(
+            principal_id=principal_id,
+            job_id=job_id,
+            idempotency_key=idempotency_key,
+            kind="retry",
+            payload={"user_message": user_message},
+            apply=lambda db, row, now: self._apply_retry(db, row, now, user_message, related_links),
+        )
+
     async def claim_next(self, *, lease_owner: str, lease_seconds: int = 30) -> JobClaim | None:
         if not _REFERENCE.fullmatch(lease_owner):
             raise JobError("invalid job lease owner")
@@ -641,11 +689,17 @@ class JobStore:
                     (row["job_id"],),
                 )
             ).fetchall()
+            attempt = int(row["attempt"]) + 1
+            user_message, related_links = await self._attempt_context(
+                db, str(row["job_id"]), attempt
+            )
             await db.commit()
             current = await self._job_row(db, str(row["job_id"]))
             return JobClaim(
                 record=_record(current),
                 instruction=str(row["instruction"]),
+                user_message=user_message,
+                related_links=related_links,
                 follow_ups=tuple(_follow_up(item) for item in follow_up_rows),
                 recovered=recovered,
             )
@@ -919,6 +973,109 @@ class JobStore:
             status=next_status,
             detail_code=kind.value,
             occurred_at=now,
+        )
+
+    async def _apply_retry(
+        self,
+        db: aiosqlite.Connection,
+        row: aiosqlite.Row,
+        now: str,
+        user_message: str,
+        related_links: tuple[JobRelatedLink, ...],
+    ) -> None:
+        status = JobStatus(str(row["status"]))
+        if status is not JobStatus.FAILED:
+            raise JobStateError("only a failed background job can be retried")
+        if int(row["attempt"]) >= 3:
+            raise JobStateError("background job retry limit reached")
+        revision = int(row["revision"]) + 1
+        await self._insert_attempt_context(
+            db,
+            job_id=str(row["job_id"]),
+            attempt=int(row["attempt"]) + 1,
+            user_message=user_message,
+            related_links=related_links,
+            created_at=now,
+        )
+        await db.execute(
+            """UPDATE background_jobs SET status = 'queued', revision = ?,
+            cancel_requested_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
+            updated_at = ? WHERE job_id = ?""",
+            (revision, now, row["job_id"]),
+        )
+        await self._insert_event_from_row(
+            db,
+            row,
+            revision=revision,
+            kind=JobEventKind.ACCEPTED,
+            status=JobStatus.QUEUED,
+            detail_code="retried",
+            occurred_at=now,
+        )
+
+    @staticmethod
+    def _validate_attempt_context(
+        user_message: str,
+        related_links: tuple[JobRelatedLink, ...],
+    ) -> None:
+        if len(user_message) > 20_000:
+            raise JobError("job user message must contain at most 20000 characters")
+        if len(related_links) > 100:
+            raise JobError("job related links must contain at most 100 items")
+        for item in related_links:
+            if not item.label or len(item.label) > 300:
+                raise JobError("job related link label must contain 1 through 300 characters")
+            if not item.locator or len(item.locator) > 2_048:
+                raise JobError("job related link locator must contain 1 through 2048 characters")
+
+    @staticmethod
+    async def _insert_attempt_context(
+        db: aiosqlite.Connection,
+        *,
+        job_id: str,
+        attempt: int,
+        user_message: str,
+        related_links: tuple[JobRelatedLink, ...],
+        created_at: str,
+    ) -> None:
+        await db.execute(
+            """INSERT INTO background_job_attempt_contexts(
+                job_id, attempt, user_message, related_links_json, created_at
+            ) VALUES (?, ?, ?, ?, ?)""",
+            (
+                job_id,
+                attempt,
+                user_message,
+                json.dumps(
+                    [{"label": item.label, "locator": item.locator} for item in related_links],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                created_at,
+            ),
+        )
+
+    @staticmethod
+    async def _attempt_context(
+        db: aiosqlite.Connection,
+        job_id: str,
+        attempt: int,
+    ) -> tuple[str, tuple[JobRelatedLink, ...]]:
+        row = await (
+            await db.execute(
+                """SELECT user_message, related_links_json
+                FROM background_job_attempt_contexts
+                WHERE job_id = ? AND attempt <= ?
+                ORDER BY attempt DESC LIMIT 1""",
+                (job_id, attempt),
+            )
+        ).fetchone()
+        if row is None:
+            return "", ()
+        raw_links = json.loads(str(row["related_links_json"]))
+        return str(row["user_message"]), tuple(
+            JobRelatedLink(label=str(item["label"]), locator=str(item["locator"]))
+            for item in raw_links
         )
 
     @staticmethod

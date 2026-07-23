@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, testing, milestone-1]
+tags: [radcliffe, foundation, testing, milestone-1, operator-final-check]
 ---
 # Establish the Milestone 1 audio conformance suite and demo report
 

@@ -6,20 +6,30 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  classifyDeliveryIntent,
+  classifyExactOutputIntent,
   CONFIGURE_PARAMETERS,
+  containsTextualToolProtocol,
   convertRadcliffeContext,
+  explicitJobLaunchIntent,
   explicitJobManagementOperation,
+  finalizeExactOutput,
   MANAGE_JOB_PARAMETERS,
   MANAGE_SESSION_PARAMETERS,
   modelContextFromRequest,
   PiAgentOrchestrator,
+  prepareConfigureArguments,
   prepareManageJobArguments,
   prepareManageSessionArguments,
+  prepareReadJobSourceArguments,
   prepareRunJobArguments,
+  prepareReadSourceArguments,
   READ_JOB_SOURCE_PARAMETERS,
   RADCLIFFE_SYSTEM_PROMPT,
   RADCLIFFE_TOOL_NAMES,
   RUN_JOB_PARAMETERS,
+  sanitizeToolFailure,
+  validateExactOutput,
 } from "../src/orchestrator.js";
 import type { ContextMeter } from "../src/context-meter.js";
 import type { ContextPacket, ContextUsage, SidecarEvent, TurnRequest } from "../src/protocol.js";
@@ -72,6 +82,12 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("ambiguous title must be clarified");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("inference flag is true");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("source entity IDs");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Optimize ordinary responses for listening");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("raw URLs");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("explicitly requests exact delivery");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("provider's structured tool channel");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Follow the schema exactly");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Never print XML");
   });
 
   it("identifies Radcliffe as the harness without assigning the model that identity", () => {
@@ -95,8 +111,28 @@ describe("PiAgentOrchestrator", () => {
     expect(explicitJobManagementOperation("Add this as a follow-up to the job.")).toBe(
       "follow_up",
     );
+    expect(explicitJobManagementOperation("Can you just retry it?")).toBe("retry");
+    expect(explicitJobManagementOperation("How can I retry that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("How can I cancel that job?")).toBeUndefined();
     expect(explicitJobManagementOperation("Stop talking about it.")).toBeUndefined();
+  });
+
+  it("recognizes explicit job launches and textual tool protocol", () => {
+    expect(explicitJobLaunchIntent("Start a background job to download the page.")).toBe(true);
+    expect(explicitJobLaunchIntent("Run a job that downloads the first result.")).toBe(true);
+    expect(explicitJobLaunchIntent("Start a new job and save it to disk.")).toBe(true);
+    expect(explicitJobLaunchIntent("Kick off a batchground task for this.")).toBe(true);
+    expect(explicitJobLaunchIntent("How can I start a background job?")).toBe(false);
+    expect(explicitJobLaunchIntent("Tell me how to run a job.")).toBe(false);
+    expect(containsTextualToolProtocol("<function_calls>\n<invoke name=\"run_job\">"))
+      .toBe(true);
+    expect(containsTextualToolProtocol("I'll use <invoke name=\"run_job\"> now.")).toBe(true);
+    expect(
+      containsTextualToolProtocol(
+        "I'll launch it.\n```\nrun_job\njob_type: download\ntarget_url: https://example.test\n```",
+      ),
+    ).toBe(true);
+    expect(containsTextualToolProtocol("The phrase function call is ordinary prose.")).toBe(false);
   });
 
   it("streams a normal answer and reconstructs projected history", async () => {
@@ -130,6 +166,200 @@ describe("PiAgentOrchestrator", () => {
     );
     expect(events.at(-1)).toEqual({ type: "complete", requestId: "request-1" });
     expect(tool).not.toHaveBeenCalled();
+  });
+
+  it("discards textual tool markup and retries through the structured channel", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-tool-protocol-test" });
+    const leaked =
+      "I'll launch it now.\n```\nrun_job\njob_type: download\n" +
+      "target_url: https://example.test/page\noutput_format: markdown\n```";
+    faux.setResponses([
+      fauxAssistantMessage(leaked),
+      fauxAssistantMessage(
+        fauxToolCall("run_job", { instruction: "Download the page" }, { id: "retry-run-job" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"queued"}',
+      details: { jobId: "job-1" },
+    }));
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Download the requested page for me.")]), (event) => {
+      events.push(event);
+    });
+
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "retry-run-job" }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    const rendered = JSON.stringify(
+      events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
+    );
+    expect(rendered).not.toContain("run_job");
+    expect(rendered).not.toContain("job_type");
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I started it.",
+    });
+  });
+
+  it("quarantines a textual tool imitation when later source delivery is requested verbatim", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-verbatim-tool-protocol-test" });
+    const utterance =
+      "Download the first commentary on the Gettysburg Address and then read it to me verbatim.";
+    faux.setResponses([
+      fauxAssistantMessage(
+        'I will download it.\nrun_job(tool_type: "download", resource: "commentary")',
+      ),
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the first commentary on the Gettysburg Address." },
+          { id: "verbatim-retry-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } }));
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", utterance)]), (event) => {
+      events.push(event);
+    });
+
+    expect(classifyExactOutputIntent(utterance)).toBeUndefined();
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "verbatim-retry-run-job" }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(JSON.stringify(events)).not.toContain("tool_type");
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "I started it.",
+    });
+  });
+
+  it("forces a structured run_job call for an explicit background-job launch", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-required-run-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("run_job", { instruction: "Download the page" }, { id: "run-job-1" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const orchestrator = new PiAgentOrchestrator(
+      model,
+      stream,
+      vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } })),
+    );
+
+    await orchestrator.run(
+      request([packet("user-1", "Start a background job to download the page.")]),
+      () => undefined,
+    );
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+    expect(stream.mock.calls[0]?.[1].tools?.map((tool) => tool.name)).toEqual(
+      RADCLIFFE_TOOL_NAMES,
+    );
+  });
+
+  it("keeps every schema available when a first-turn job request mentions later verbatim delivery", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-first-turn-schema-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the first commentary and save it to disk." },
+          { id: "run-job-first-turn" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const tool = vi.fn(async () => ({ modelContent: "accepted", details: { jobId: "job-1" } }));
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+    const utterance =
+      "Start a new job that downloads the first piece of commentary, save it to disk, " +
+      "and after it is done I will have you read it verbatim.";
+
+    await orchestrator.run(request([packet("first-user", utterance)]), () => undefined);
+
+    expect(classifyExactOutputIntent(utterance)).toBeUndefined();
+    expect(stream.mock.calls[0]?.[1].tools?.map((candidate) => candidate.name)).toEqual(
+      RADCLIFFE_TOOL_NAMES,
+    );
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "run_job", callId: "run-job-first-turn" }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it("preserves textual tool tags when the user explicitly requests them verbatim", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-tool-tag-test" });
+    faux.setResponses([fauxAssistantMessage("I would normally paraphrase this.")]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(
+      request([packet("exact-tag", 'Repeat exactly: "<function_calls>"')]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(events.filter((event) => event.type === "model_delta")).toEqual([
+      { type: "model_delta", requestId: "request-1", text: "<function_calls>" },
+    ]);
+  });
+
+  it("keeps machine detail in display text while emitting a speakable alternative", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-spoken-output-test" });
+    const raw =
+      "The job job_0123456789abcdef wrote /srv/radcliffe/output/report.json. " +
+      "Details are at https://docs.example.test/jobs/0123456789.";
+    faux.setResponses([fauxAssistantMessage(raw)]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(request([packet("spoken-output", "Summarize the result")]), (event) => {
+      events.push(event);
+    });
+
+    const deltas = events.filter((event) => event.type === "model_delta");
+    expect(deltas.map((event) => ("text" in event ? event.text : "")).join("")).toBe(raw);
+    const spoken = deltas
+      .map((event) => (event.type === "model_delta" ? (event.spokenText ?? event.text) : ""))
+      .join("");
+    expect(spoken).not.toContain("job_0123456789abcdef");
+    expect(spoken).not.toContain("/srv/radcliffe/output/report.json");
+    expect(spoken).not.toContain("https://");
+    expect(deltas.flatMap((event) => (event.type === "model_delta" ? (event.spokenCategories ?? []) : []))).toEqual(
+      expect.arrayContaining(["identifier", "path", "url"]),
+    );
+    expect(events.find((event) => event.type === "model_complete")).toMatchObject({ text: raw });
   });
 
   it("surfaces a provider budget failure as a visible sidecar error", async () => {
@@ -199,7 +429,7 @@ describe("PiAgentOrchestrator", () => {
       generation: 1,
       callId: "call-1",
       toolName: "read_source",
-      arguments: { path: "demo.md", rate: "fast" },
+      arguments: { path: "demo.md", rate: "1.25x" },
     });
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["tool_start", "tool_update", "tool_end", "model_complete"]),
@@ -212,20 +442,13 @@ describe("PiAgentOrchestrator", () => {
   it("routes a typed allowlisted configuration change with exact turn identity", async () => {
     const faux = createFauxCore({ provider: "radcliffe-configuration-test" });
     faux.setResponses([
-      fauxAssistantMessage(
-        fauxToolCall(
-          "configure",
-          {
-            operation: "set",
-            key: "default_speech_rate",
-            scope: "session",
-            value: "1.25x",
-          },
-          { id: "configure-1" },
-        ),
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("Future speech will use the faster pace."),
+      (context) => {
+        const toolNames = (context.tools ?? []).map((candidate) => candidate.name);
+        expect(toolNames).not.toContain("configure");
+        expect(toolNames).not.toContain("read_source");
+        expect(context.systemPrompt).toContain("already applied for this session");
+        return fauxAssistantMessage("Future speech will use the faster pace.");
+      },
     ]);
     const tool = vi.fn(async () => ({
       modelContent:
@@ -258,9 +481,314 @@ describe("PiAgentOrchestrator", () => {
           value: "1.25x",
         },
       }),
-      expect.anything(),
-      expect.any(Function),
+      undefined,
     );
+  });
+
+  it.each([
+    ["Count slowly from 1 to 60", { rate: "0.75x", scope: "turn", sourceRead: false }],
+    ["Answer faster this time", { rate: "1.25x", scope: "turn", sourceRead: false }],
+    [
+      "Speak at 0.75x for this session",
+      { rate: "0.75x", scope: "session", sourceRead: false },
+    ],
+    [
+      "Use the normal speech rate from now on",
+      { rate: "1.0x", scope: "session", sourceRead: false },
+    ],
+    ["Read demo.md slowly", { rate: "0.75x", scope: "turn", sourceRead: true }],
+  ])("classifies delivery intent: %s", (text, expected) => {
+    expect(classifyDeliveryIntent(text)).toEqual(expected);
+  });
+
+  it("leaves ordinary mentions of speed out of delivery routing", () => {
+    expect(classifyDeliveryIntent("The faster algorithm won the benchmark.")).toBeUndefined();
+    expect(classifyDeliveryIntent("Count from 1 to 60")).toBeUndefined();
+  });
+
+  it("classifies numeric ranges and exact machine-readable values", () => {
+    expect(classifyExactOutputIntent("Count slowly from 1 to 60")).toEqual({
+      kind: "numbers",
+      sequence: { start: 1, end: 60 },
+    });
+    expect(classifyExactOutputIntent('Repeat the ID exactly: "build-A7:42"')).toEqual({
+      kind: "identifier",
+      literal: "build-A7:42",
+    });
+    expect(
+      classifyExactOutputIntent("Say this hash exactly: aabbccddeeff00112233445566778899"),
+    ).toEqual({
+      kind: "hash",
+      literal: "aabbccddeeff00112233445566778899",
+    });
+    expect(classifyExactOutputIntent("Read exactly https://example.test/a?q=1")).toEqual({
+      kind: "url",
+      literal: "https://example.test/a?q=1",
+    });
+    expect(classifyExactOutputIntent('Repeat this JSON exactly: {"ready":true}')).toEqual({
+      kind: "json",
+      literal: '{"ready":true}',
+    });
+    expect(classifyExactOutputIntent("Say this path exactly: /srv/radcliffe/config.json")).toEqual({
+      kind: "path",
+      literal: "/srv/radcliffe/config.json",
+    });
+    expect(classifyExactOutputIntent("Repeat exactly 2026-07-21T04:00:00Z")).toEqual({
+      kind: "timestamp",
+      literal: "2026-07-21T04:00:00Z",
+    });
+    expect(classifyExactOutputIntent('Spell out "Q7-x" character by character')).toEqual({
+      kind: "characters",
+      literal: "Q7-x",
+    });
+    expect(classifyExactOutputIntent('Repeat exactly: "No compression allowed"')).toEqual({
+      kind: "literal",
+      literal: "No compression allowed",
+    });
+  });
+
+  it("does not substitute explicitly requested exact machine output", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-machine-output-test" });
+    const literal = "https://example.test/a?q=1";
+    faux.setResponses([fauxAssistantMessage("I would normally add a preamble.")]);
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, vi.fn());
+
+    await orchestrator.run(
+      request([packet("exact-url", `Repeat exactly ${literal}`)]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(events.filter((event) => event.type === "model_delta")).toEqual([
+      { type: "model_delta", requestId: "request-1", text: literal },
+    ]);
+  });
+
+  it("retains startup schemas while disabling tool execution for true exact output", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-schema-test" });
+    faux.setResponses([
+      (context) => {
+        expect(context.tools?.map((candidate) => candidate.name)).toEqual(RADCLIFFE_TOOL_NAMES);
+        return fauxAssistantMessage("I would normally add a preamble.");
+      },
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const tool = vi.fn();
+    const events: SidecarEvent[] = [];
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+
+    await orchestrator.run(
+      request([packet("exact-url", "Repeat exactly https://example.test/a?q=1")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({ toolChoice: "none" });
+    expect(tool).not.toHaveBeenCalled();
+    expect(events).toContainEqual({
+      type: "model_complete",
+      requestId: "request-1",
+      text: "https://example.test/a?q=1",
+    });
+  });
+
+  it.each([
+    ["1, 2, 4, 5.", "missing"],
+    ["1, 2, 2, 3, 4, 5.", "duplicated_or_extra"],
+    ["1, 3, 2, 4, 5.", "reordered_or_replaced"],
+    ["1, 2, 3... 5.", "abbreviated"],
+  ])("rejects invalid numeric exact output: %s", (candidate, reason) => {
+    const validation = validateExactOutput(
+      { kind: "numbers", sequence: { start: 1, end: 5 } },
+      candidate,
+    );
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain(reason);
+  });
+
+  it("repairs an abbreviated number range into a complete bounded sequence", () => {
+    const completed = finalizeExactOutput(
+      { kind: "numbers", sequence: { start: 1, end: 60 } },
+      "1, 2, 3... 60.",
+    );
+    expect([...completed.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+      Array.from({ length: 60 }, (_, index) => index + 1),
+    );
+    expect(completed).not.toContain("...");
+  });
+
+  it("derives continuation from the last durable emitted number", () => {
+    const history = [
+      packet("range-request", "Count from 1 to 1000"),
+      packet("durable-output", "1, 2, 3, 4, 200.\nThe sequence stops here.", {
+        role: "assistant",
+        source: "model",
+      }),
+    ];
+    expect(classifyExactOutputIntent("Keep going", history)).toEqual({
+      kind: "numbers",
+      sequence: { start: 201, end: 1000 },
+    });
+  });
+
+  it("stops truthfully at the bounded limit and continues from durable output", () => {
+    const original = { kind: "numbers" as const, sequence: { start: 1, end: 250 } };
+    const first = finalizeExactOutput(original, "1, 2, 3... 250.");
+    const firstNumbers = [...first.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+    expect(firstNumbers).toEqual(Array.from({ length: 200 }, (_, index) => index + 1));
+    expect(first).toContain("stops at the last displayed number");
+
+    const continuation = classifyExactOutputIntent("Keep going", [
+      packet("long-range", "Count from 1 to 250"),
+      packet("durable-first-part", first, { role: "assistant", source: "model" }),
+    ]);
+    expect(continuation).toEqual({
+      kind: "numbers",
+      sequence: { start: 201, end: 250 },
+    });
+    const second = finalizeExactOutput(continuation!, "201, 202... 250.");
+    expect([...second.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+      Array.from({ length: 50 }, (_, index) => index + 201),
+    );
+  });
+
+  it.each(["brief", "standard", "detailed"] as const)(
+    "buffers and repairs exact counting before emission under %s detail",
+    async (responseDetail) => {
+      const faux = createFauxCore({ provider: `radcliffe-exact-${responseDetail}-test` });
+      faux.setResponses([
+        (context) => {
+          expect(context.systemPrompt).toContain("Fidelity constraint");
+          expect(context.systemPrompt).toContain("overrides response-detail brevity");
+          return fauxAssistantMessage("1, 2, 3... 60.");
+        },
+      ]);
+      const events: SidecarEvent[] = [];
+      const tool = vi.fn();
+      const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+      await orchestrator.run(
+        { ...request([packet("exact-count", "Count from 1 to 60")]), responseDetail },
+        (event) => {
+          events.push(event);
+        },
+      );
+
+      expect(tool).not.toHaveBeenCalled();
+      const deltas = events.filter((event) => event.type === "model_delta");
+      expect(deltas).toHaveLength(1);
+      const text = "text" in deltas[0]! ? deltas[0].text : "";
+      expect([...text.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]))).toEqual(
+        Array.from({ length: 60 }, (_, index) => index + 1),
+      );
+      expect(events.find((event) => event.type === "model_complete")).toMatchObject({ text });
+      expect(JSON.stringify(events)).not.toContain("1, 2, 3... 60");
+    },
+  );
+
+  it("combines exact counting with one turn-scoped slow-delivery mutation", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-exact-slow-test" });
+    faux.setResponses([fauxAssistantMessage("One, two, three, and so on.")]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn(async () => ({ modelContent: "configured", details: {} }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([packet("exact-slow", "Count slowly from 1 to 60")]),
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(tool).toHaveBeenCalledOnce();
+    expect(events.find((event) => event.type === "tool_start")).toMatchObject({
+      toolName: "configure",
+      arguments: {
+        operation: "set",
+        key: "default_speech_rate",
+        scope: "turn",
+        value: "0.75x",
+      },
+    });
+    const complete = events.find((event) => event.type === "model_complete");
+    const text = complete && "text" in complete ? complete.text : "";
+    expect([...text.matchAll(/\b\d+\b/g)]).toHaveLength(60);
+  });
+
+  it("keeps named-source exact reading on the canonical source path", () => {
+    const context = modelContextFromRequest(
+      request([packet("source", "Read the file radcliffe-demo.md exactly")]),
+    );
+    expect(context.systemPrompt).not.toContain("Fidelity constraint:");
+  });
+
+  it("normalizes weak-model speech rate aliases before schema validation", () => {
+    expect(
+      prepareConfigureArguments({
+        operation: "set",
+        key: "default_speech_rate",
+        scope: "turn",
+        value: "slowly",
+      }),
+    ).toEqual({
+      operation: "set",
+      key: "default_speech_rate",
+      scope: "turn",
+      value: "0.75x",
+    });
+    expect(prepareReadSourceArguments({ path: "demo.md", rate: 1.5 })).toEqual({
+      path: "demo.md",
+      rate: "1.5x",
+    });
+  });
+
+  it("emits one redacted recoverable diagnostic for a malformed model tool call", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-invalid-tool-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "configure",
+          {
+            operation: "set",
+            key: "default_speech_rate",
+            scope: "turn",
+            value: "private-invalid-rate",
+          },
+          { id: "bad-configure" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I kept the current rate."),
+    ]);
+    const events: SidecarEvent[] = [];
+    const tool = vi.fn();
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(request([packet("user-1", "Change a setting")]), (event) => {
+      events.push(event);
+    });
+
+    expect(tool).not.toHaveBeenCalled();
+    const failure = events.find(
+      (event) => event.type === "tool_end" && event.callId === "bad-configure",
+    );
+    expect(failure).toMatchObject({
+      type: "tool_end",
+      isError: true,
+      result: {
+        details: {
+          errorCode: "invalid_arguments",
+          field: "value",
+          recoverable: true,
+          toolName: "configure",
+        },
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain("private-invalid-rate");
   });
 
   it("routes conversation lifecycle actions with the exact turn identity", async () => {
@@ -349,7 +877,7 @@ describe("PiAgentOrchestrator", () => {
     });
     expect(manageJobSchema.properties.operation).toMatchObject({
       type: "string",
-      enum: ["status", "follow_up", "set_priority", "cancel"],
+      enum: ["status", "follow_up", "set_priority", "cancel", "retry"],
     });
     expect(runJobSchema.properties.notificationPolicy).toMatchObject({
       type: "string",
@@ -380,6 +908,13 @@ describe("PiAgentOrchestrator", () => {
     expect(() =>
       prepareManageJobArguments({ action: "cancel", jobId: "job-1" }),
     ).toThrow(/valid operation/);
+    expect(
+      prepareReadJobSourceArguments({
+        reference: "headlines.md",
+        jobId: "job-1",
+        rate: "fast",
+      }),
+    ).toEqual({ reference: "headlines.md", jobId: "job-1", rate: "1.25x" });
   });
 
   it("applies safe argument preparation before executing a weak-model run_job call", async () => {
@@ -412,6 +947,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "run_job",
+        userMessage: "Run a Fibonacci job",
         arguments: {
           instruction: "Create and test a Fibonacci script.",
           maxRuntimeSeconds: 30,
@@ -473,6 +1009,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "run_job",
+        userMessage: "Research this while we talk",
         arguments: {
           instruction: "Search six months of private lab papers",
           notificationPolicy: "next_safe_pause",
@@ -500,6 +1037,51 @@ describe("PiAgentOrchestrator", () => {
         events.filter((event) => event.type === "model_delta" || event.type === "model_complete"),
       ),
     ).not.toContain("job-1");
+  });
+
+  it("sends one exact current-turn user message without prior user turns", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-current-turn-job-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          { instruction: "Download the exact source selected by the user." },
+          { id: "current-turn-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("I started it."),
+    ]);
+    const tool = vi.fn(async () => ({
+      modelContent: '{"jobId":"job-1","status":"queued"}',
+      details: { jobId: "job-1" },
+    }));
+    const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
+
+    await orchestrator.run(
+      request([
+        packet("old-user", "An unrelated older request.", {
+          annotations: [["radcliffe.turn_id", "turn-old"]],
+        }),
+        packet("fragment-one", "Use the Bancroft version exactly.", {
+          annotations: [["radcliffe.turn_id", "turn-current"]],
+        }),
+        packet("fragment-two", "Run that as a background job.", {
+          annotations: [["radcliffe.turn_id", "turn-current"]],
+        }),
+      ]),
+      () => undefined,
+    );
+
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        userMessage: "Use the Bancroft version exactly.\nRun that as a background job.",
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(JSON.stringify(tool.mock.calls)).not.toContain("unrelated older request");
   });
 
   it("keeps a failed background-job acceptance brief and truthful", async () => {
@@ -713,6 +1295,12 @@ describe("PiAgentOrchestrator", () => {
       arguments: { operation: "set_priority" as const, jobId: "job-1", priority: 4 },
       response: "I reprioritized it. The original analysis scope is unchanged.",
     },
+    {
+      requestText: "Can you just retry it?",
+      operation: "retry" as const,
+      arguments: { operation: "retry" as const, jobId: "job-1" },
+      response: "I retried it. The original request is running again.",
+    },
   ])("grounds an explicit $operation response without swallowing useful context", async (scenario) => {
     const faux = createFauxCore({ provider: `radcliffe-${scenario.operation}-test` });
     faux.setResponses([
@@ -744,6 +1332,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "manage_job",
+        userMessage: scenario.requestText,
         arguments: scenario.arguments,
       }),
       expect.anything(),
@@ -878,7 +1467,7 @@ describe("PiAgentOrchestrator", () => {
       fauxAssistantMessage(
         fauxToolCall(
           "read_job_source",
-          { reference: "Scaling Laws", rate: "fast" },
+          { reference: "Scaling Laws", jobId: "job-1", rate: "fast" },
           { id: "read-job-source-1" },
         ),
         { stopReason: "toolUse" },
@@ -905,7 +1494,7 @@ describe("PiAgentOrchestrator", () => {
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "read_job_source",
-        arguments: { reference: "Scaling Laws", rate: "fast" },
+        arguments: { reference: "Scaling Laws", jobId: "job-1", rate: "1.25x" },
       }),
       expect.anything(),
       expect.any(Function),
@@ -917,6 +1506,19 @@ describe("PiAgentOrchestrator", () => {
         isError: false,
       }),
     );
+  });
+
+  it("maps tool gateway statuses to content-safe stable failure codes", () => {
+    expect(sanitizeToolFailure("read_job_source", new Error("Tool Gateway returned HTTP 404")))
+      .toMatchObject({
+        details: {
+          errorCode: "not_found",
+          recoverable: false,
+          toolName: "read_job_source",
+        },
+      });
+    expect(sanitizeToolFailure("manage_job", new Error("Tool Gateway returned HTTP 409")))
+      .toMatchObject({ details: { errorCode: "conflict" } });
   });
 
   it("filters excluded packets and labels canonical sources", () => {
@@ -935,6 +1537,33 @@ describe("PiAgentOrchestrator", () => {
     expect(converted).toHaveLength(1);
     expect(converted[0]?.role).toBe("user");
     expect(converted[0]?.content).toContain("[Radcliffe text_source from demo.md]");
+  });
+
+  it("preserves harness job speech and outcome ahead of the next user message", () => {
+    const converted = convertRadcliffeContext([
+      {
+        role: "radcliffe",
+        packet: packet("announcement", "A background job failed.", {
+          role: "system",
+          source: "system",
+        }),
+      },
+      {
+        role: "radcliffe",
+        packet: packet(
+          "outcome",
+          "Internal background job outcome for job-1: failed. The job agent exhausted its allowed steps.",
+          { role: "tool", source: "call" },
+        ),
+      },
+      { role: "radcliffe", packet: packet("user", "Do you know why?") },
+    ]);
+
+    expect(converted.map((message) => message.content)).toEqual([
+      "[Radcliffe system]\nA background job failed.",
+      "[Radcliffe call]\nInternal background job outcome for job-1: failed. The job agent exhausted its allowed steps.",
+      "[Radcliffe user]\nDo you know why?",
+    ]);
   });
 
   it("rejects overflow before invoking the model provider", async () => {

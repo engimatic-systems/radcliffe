@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, android, milestone-1]
+tags: [radcliffe, foundation, android, milestone-1, operator-final-check]
 ---
 # Build the Android VoiceSessionService connectivity foundation
 

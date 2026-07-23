@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, webrtc, milestone-1]
+tags: [radcliffe, foundation, webrtc, milestone-1, operator-interactive]
 ---
 # Provision the self-hosted LiveKit Milestone 1 media topology
 

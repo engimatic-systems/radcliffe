@@ -160,4 +160,17 @@ async def test_existing_version_one_database_migrates_without_data_loss(tmp_path
     assert record.session_id == "after-upgrade"
     async with aiosqlite.connect(path) as db:
         versions = await (await db.execute("SELECT version FROM schema_migrations")).fetchall()
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)]
+        assert versions == [
+            (1,),
+            (2,),
+            (3,),
+            (4,),
+            (5,),
+            (6,),
+            (7,),
+            (8,),
+            (9,),
+            (10,),
+            (11,),
+            (12,),
+        ]

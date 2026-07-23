@@ -16,10 +16,12 @@ import type {
   ContextPacket,
   ContextUsage,
   SidecarEvent,
+  SpeechRate,
   ToolExecutionRequest,
   ToolExecutor,
   TurnRequest,
 } from "./protocol.js";
+import { splitCompletedSpeechSegments, spokenOutputFor } from "./spoken-output.js";
 
 interface RadcliffeContextMessage {
   role: "radcliffe";
@@ -54,6 +56,14 @@ type ConfigureArguments = Extract<
   ToolExecutionRequest,
   { toolName: "configure" }
 >["arguments"];
+type ReadSourceArguments = Extract<
+  ToolExecutionRequest,
+  { toolName: "read_source" }
+>["arguments"];
+type ReadJobSourceArguments = Extract<
+  ToolExecutionRequest,
+  { toolName: "read_job_source" }
+>["arguments"];
 type ManageSessionArguments = Extract<
   ToolExecutionRequest,
   { toolName: "manage_session" }
@@ -77,8 +87,290 @@ const JOB_NOTIFICATION_POLICIES = [
   "silent",
   "user_waiting",
 ] as const;
-const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel"] as const;
+const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel", "retry"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
+const TEXTUAL_TOOL_PROTOCOL =
+  /<\/?(?:function_calls?|invoke|parameter|tool_calls?|tool_call)\b|```[^\n]*\n\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\b|(?:^|\n)\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\s*(?:\(|\n\s*(?:\{|[A-Za-z_][\w-]*\s*:))|"(?:name|tool|tool_name)"\s*:\s*"(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)"/i;
+
+export interface DeliveryIntent {
+  rate: SpeechRate;
+  scope: "turn" | "session";
+  sourceRead: boolean;
+}
+
+interface DeliveryPreparation {
+  intent: DeliveryIntent;
+  applied: boolean;
+}
+
+export type ExactOutputKind =
+  | "numbers"
+  | "identifier"
+  | "hash"
+  | "url"
+  | "json"
+  | "path"
+  | "timestamp"
+  | "literal"
+  | "characters";
+
+export interface ExactOutputIntent {
+  kind: ExactOutputKind;
+  literal?: string;
+  sequence?: {
+    start: number;
+    end: number;
+  };
+}
+
+export interface ExactOutputValidation {
+  valid: boolean;
+  reasons: string[];
+}
+
+const EXACT_SEQUENCE_ITEM_LIMIT = 200;
+const ABBREVIATED_OUTPUT = /(?:\.{3}|…|\band so (?:on|forth)\b|\betc\.?\b|\bthrough\s+\d+\b)/i;
+
+const SPEECH_RATE_ALIASES = new Map<string, SpeechRate>([
+  ["0.75", "0.75x"],
+  ["0.75x", "0.75x"],
+  ["slow", "0.75x"],
+  ["slowly", "0.75x"],
+  ["slower", "0.75x"],
+  ["1", "1.0x"],
+  ["1.0", "1.0x"],
+  ["1x", "1.0x"],
+  ["1.0x", "1.0x"],
+  ["normal", "1.0x"],
+  ["normally", "1.0x"],
+  ["regular", "1.0x"],
+  ["default", "1.0x"],
+  ["1.25", "1.25x"],
+  ["1.25x", "1.25x"],
+  ["fast", "1.25x"],
+  ["faster", "1.25x"],
+  ["quick", "1.25x"],
+  ["quickly", "1.25x"],
+  ["1.5", "1.5x"],
+  ["1.5x", "1.5x"],
+  ["very fast", "1.5x"],
+  ["very_fast", "1.5x"],
+  ["fastest", "1.5x"],
+]);
+
+function invalidToolArgument(toolName: string, field: string): Error {
+  return new Error(`tool_argument_invalid:${toolName}:${field}`);
+}
+
+export function normalizeSpeechRate(value: unknown): SpeechRate | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return SPEECH_RATE_ALIASES.get(String(value));
+  }
+  if (typeof value !== "string") return undefined;
+  return SPEECH_RATE_ALIASES.get(value.trim().toLowerCase().replace(/\s+/g, " "));
+}
+
+export function classifyDeliveryIntent(text: string): DeliveryIntent | undefined {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  const rateMatch = normalized.match(
+    /\b(0\.75x|1(?:\.0)?x|1\.25x|1\.5x|very[_ ]fast|fastest|faster|fast|quickly|quick|slower|slowly|slow|normally|normal|regular|default)\b/,
+  );
+  const explicitNumericRate = normalized.match(
+    /\b(?:at|rate(?: of)?|speed(?: of)?)\s+(0\.75|1(?:\.0)?|1\.25|1\.5)\b/,
+  );
+  const rate = normalizeSpeechRate(rateMatch?.[1] ?? explicitNumericRate?.[1]);
+  if (!rate) return undefined;
+  if (
+    !/\b(?:speak|say|talk|answer|respond|reply|count|read|recite|deliver|pace|rate)\b/.test(
+      normalized,
+    ) &&
+    !/\b(?:slow down|speed up)\b/.test(normalized)
+  ) {
+    return undefined;
+  }
+  const sourceRead = hasExplicitSourceReadIntent(normalized);
+  const persistent =
+    /\b(?:for (?:this|the) session|session default|default (?:speech )?(?:pace|rate)|from now on|going forward|until i change|keep (?:speaking|talking)|always)\b/.test(
+      normalized,
+    );
+  return { rate, scope: persistent ? "session" : "turn", sourceRead };
+}
+
+function quotedLiteral(text: string): string | undefined {
+  const doubleQuoted = text.match(/["“]([^"”]{1,4000})["”]/s)?.[1];
+  if (doubleQuoted) return doubleQuoted;
+  const singleQuoted = text.match(/(?:^|\s)'([^']{1,4000})'(?:\s|[.!?]|$)/s)?.[1];
+  return singleQuoted;
+}
+
+function trimCapturedLiteral(value: string): string {
+  return value.trim().replace(/[.!?]+$/, "");
+}
+
+function numericSequenceFromPacket(packet: ContextPacket): number[] {
+  const sequenceLine = packet.content.split(/\r?\n/, 1)[0] ?? "";
+  return [...sequenceLine.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+}
+
+function continuationIntent(history: readonly ContextPacket[]): ExactOutputIntent | undefined {
+  const lastCountIndex = history.findLastIndex(
+    (packet) =>
+      packet.source === "user" &&
+      /\bcount\b/i.test(packet.content) &&
+      /\b(?:from\s+\d+\s+to|to)\s+\d+\b/i.test(packet.content),
+  );
+  if (lastCountIndex < 0) return undefined;
+  const original = classifyExactOutputIntent(history[lastCountIndex]!.content);
+  if (!original?.sequence) return undefined;
+  const durable = history
+    .slice(lastCountIndex + 1)
+    .filter((packet) => packet.source === "model" && packet.role === "assistant")
+    .at(-1);
+  if (!durable) return undefined;
+  const emitted = numericSequenceFromPacket(durable);
+  const last = emitted.at(-1);
+  if (last === undefined) return undefined;
+  return {
+    kind: "numbers",
+    sequence: { start: last + 1, end: original.sequence.end },
+  };
+}
+
+export function classifyExactOutputIntent(
+  text: string,
+  history: readonly ContextPacket[] = [],
+): ExactOutputIntent | undefined {
+  const normalized = text.trim();
+  if (/\b(?:keep going|continue|resume)\b/i.test(normalized)) {
+    return continuationIntent(history);
+  }
+  const range = normalized.match(/\bcount(?:\s+\w+){0,3}\s+from\s+(\d+)\s+to\s+(\d+)\b/i);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start) {
+      return { kind: "numbers", sequence: { start, end } };
+    }
+  }
+  const countTo = normalized.match(/\bcount(?:\s+\w+){0,3}\s+to\s+(\d+)\b/i);
+  if (countTo) {
+    const end = Number(countTo[1]);
+    if (Number.isSafeInteger(end) && end >= 1) {
+      return { kind: "numbers", sequence: { start: 1, end } };
+    }
+  }
+  const exactLanguage =
+    /\b(?:exactly|verbatim|character[- ]by[- ]character|spell out|exact reading|read exactly|repeat exactly)\b/i.test(
+      normalized,
+    );
+  if (!exactLanguage) return undefined;
+  const characters = /\b(?:character[- ]by[- ]character|spell out)\b/i.test(normalized);
+  const quoted = quotedLiteral(normalized);
+  if (characters && quoted) return { kind: "characters", literal: quoted };
+  if (/\b(?:id|identifier)\b/i.test(normalized) && quoted) {
+    return { kind: "identifier", literal: quoted };
+  }
+  const hash = normalized.match(/\b[a-fA-F0-9]{16,128}\b/)?.[0];
+  if (/\bhash\b/i.test(normalized) && hash) return { kind: "hash", literal: hash };
+  const url = normalized.match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.!?]+$/, "");
+  if (url) return { kind: "url", literal: url };
+  const timestamp = normalized.match(
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})\b/,
+  )?.[0];
+  if (timestamp) return { kind: "timestamp", literal: timestamp };
+  if (/\bjson\b/i.test(normalized)) {
+    const fenced = normalized.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
+    const object = normalized.match(/(\{[\s\S]*\}|\[[\s\S]*\])/s)?.[1];
+    const literal = fenced ?? object ?? quoted;
+    if (literal) return { kind: "json", literal: literal.trim() };
+  }
+  const path = normalized.match(
+    /(?:^|\s)((?:\/[A-Za-z0-9._-]+){2,}|(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?=\s|[.!?]|$)/,
+  )?.[1];
+  if (/\bpath\b/i.test(normalized) && path) {
+    return { kind: "path", literal: path };
+  }
+  const identifier = normalized.match(
+    /\b(?:id|identifier)\b[^\n:]*:\s*([A-Za-z0-9][A-Za-z0-9_.:-]{2,})/i,
+  )?.[1];
+  if (identifier) return { kind: "identifier", literal: trimCapturedLiteral(identifier) };
+  if (quoted) return { kind: "literal", literal: quoted };
+  const afterColon = normalized.match(/:\s*([^\n]{1,4000})$/s)?.[1];
+  if (afterColon) return { kind: "literal", literal: trimCapturedLiteral(afterColon) };
+  return undefined;
+}
+
+function expectedNumericItems(intent: ExactOutputIntent): number[] {
+  if (!intent.sequence) return [];
+  const last = Math.min(
+    intent.sequence.end,
+    intent.sequence.start + EXACT_SEQUENCE_ITEM_LIMIT - 1,
+  );
+  return Array.from({ length: Math.max(0, last - intent.sequence.start + 1) }, (_, index) =>
+    intent.sequence!.start + index,
+  );
+}
+
+function renderCharacters(value: string): string {
+  return [...value].join(", ");
+}
+
+export function validateExactOutput(
+  intent: ExactOutputIntent,
+  candidate: string,
+): ExactOutputValidation {
+  const reasons: string[] = [];
+  if (ABBREVIATED_OUTPUT.test(candidate)) reasons.push("abbreviated");
+  if (intent.kind === "numbers") {
+    const observed = [...candidate.matchAll(/\b\d+\b/g)].map((match) => Number(match[0]));
+    const expected = expectedNumericItems(intent);
+    if (observed.length < expected.length) reasons.push("missing");
+    if (observed.length > expected.length) reasons.push("duplicated_or_extra");
+    if (
+      observed.length === expected.length &&
+      observed.some((value, index) => value !== expected[index])
+    ) {
+      reasons.push("reordered_or_replaced");
+    }
+  } else if (intent.literal !== undefined) {
+    const expected =
+      intent.kind === "characters" ? renderCharacters(intent.literal) : intent.literal;
+    if (candidate.trim() !== expected) reasons.push("literal_mismatch");
+  } else if (!candidate.trim()) {
+    reasons.push("empty");
+  }
+  return { valid: reasons.length === 0, reasons };
+}
+
+function renderNumericSequence(intent: ExactOutputIntent): string {
+  if (!intent.sequence) return "I could not determine the requested numeric range.";
+  if (intent.sequence.start > intent.sequence.end) {
+    return `The durable sequence already reached ${intent.sequence.end}.`;
+  }
+  const items = expectedNumericItems(intent);
+  const groups: string[] = [];
+  for (let index = 0; index < items.length; index += 10) {
+    groups.push(`${items.slice(index, index + 10).join(", ")}.`);
+  }
+  const reached = items.at(-1);
+  if (reached !== undefined && reached < intent.sequence.end) {
+    groups.push(
+      "The sequence above stops at the last displayed number because this turn reached the " +
+        "exact-output limit. Say keep going to continue from durable output.",
+    );
+  }
+  return groups.join(" ");
+}
+
+export function finalizeExactOutput(intent: ExactOutputIntent, candidate: string): string {
+  const validation = validateExactOutput(intent, candidate);
+  if (validation.valid) return candidate.trim();
+  if (intent.kind === "numbers") return renderNumericSequence(intent);
+  if (intent.literal !== undefined) {
+    return intent.kind === "characters" ? renderCharacters(intent.literal) : intent.literal;
+  }
+  return "I could not complete that exact-output request without risking an inexact result.";
+}
 
 function stringEnum(values: readonly string[]) {
   return Type.String({ enum: [...values] });
@@ -86,7 +378,7 @@ function stringEnum(values: readonly string[]) {
 
 function argumentRecord(value: unknown, toolName: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${toolName} arguments must be an object`);
+    throw invalidToolArgument(toolName, "arguments");
   }
   return value as Record<string, unknown>;
 }
@@ -121,14 +413,19 @@ function isMember<T extends string>(values: readonly T[], value: unknown): value
 }
 
 export function prepareConfigureArguments(value: unknown): ConfigureArguments {
-  const item = normalizeOperationAlias(argumentRecord(value, "configure"), ["inspect"]);
+  const item = {
+    ...normalizeOperationAlias(argumentRecord(value, "configure"), ["inspect"]),
+  };
+  if (item.key === "default_speech_rate" && item.operation === "set") {
+    item.value = normalizeSpeechRate(item.value);
+  }
   if (
     !exactKeys(item, ["operation", "key"], ["scope", "value", "undoMutationId"]) ||
     !isMember(CONFIGURATION_OPERATIONS, item.operation) ||
     !isMember(CONFIGURATION_KEYS, item.key) ||
     (item.scope !== undefined && !isMember(CONFIGURATION_SCOPES, item.scope))
   ) {
-    throw new Error("configure arguments do not match the registered setting contract");
+    throw invalidToolArgument("configure", "operation_or_key");
   }
   if (item.operation === "set") {
     const validValue =
@@ -136,10 +433,10 @@ export function prepareConfigureArguments(value: unknown): ConfigureArguments {
         ? isMember(RESPONSE_DETAILS, item.value)
         : isMember(SPEECH_RATES, item.value);
     if (!validValue || item.undoMutationId !== undefined) {
-      throw new Error("configure set requires one valid value for its selected key");
+      throw invalidToolArgument("configure", "value");
     }
   } else if (item.value !== undefined) {
-    throw new Error("only configure set accepts a value");
+    throw invalidToolArgument("configure", "value");
   }
   if (
     item.operation === "undo"
@@ -148,9 +445,115 @@ export function prepareConfigureArguments(value: unknown): ConfigureArguments {
         item.undoMutationId.length > 128
       : item.undoMutationId !== undefined
   ) {
-    throw new Error("configure undo requires exactly one valid undoMutationId");
+    throw invalidToolArgument("configure", "undoMutationId");
   }
   return item as ConfigureArguments;
+}
+
+function prepareSourceRateArguments(
+  value: unknown,
+  toolName: "read_source" | "read_job_source",
+  identityField: "path" | "reference",
+): Record<string, unknown> {
+  const item = { ...argumentRecord(value, toolName) };
+  if (!exactKeys(item, [identityField], ["rate"])) {
+    throw invalidToolArgument(toolName, "arguments");
+  }
+  if (
+    typeof item[identityField] !== "string" ||
+    item[identityField].length < 1 ||
+    item[identityField].length > (identityField === "path" ? 4096 : 300)
+  ) {
+    throw invalidToolArgument(toolName, identityField);
+  }
+  if (item.rate !== undefined) {
+    const normalized = normalizeSpeechRate(item.rate);
+    if (!normalized) throw invalidToolArgument(toolName, "rate");
+    item.rate = normalized;
+  }
+  return item;
+}
+
+export function prepareReadSourceArguments(value: unknown): ReadSourceArguments {
+  return prepareSourceRateArguments(value, "read_source", "path") as ReadSourceArguments;
+}
+
+export function prepareReadJobSourceArguments(value: unknown): ReadJobSourceArguments {
+  const item = { ...argumentRecord(value, "read_job_source") };
+  if (!exactKeys(item, ["reference"], ["jobId", "rate"])) {
+    throw invalidToolArgument("read_job_source", "arguments");
+  }
+  const prepared = prepareSourceRateArguments(
+    { reference: item.reference, ...(item.rate === undefined ? {} : { rate: item.rate }) },
+    "read_job_source",
+    "reference",
+  );
+  if (item.jobId !== undefined) {
+    if (typeof item.jobId !== "string" || !JOB_ID.test(item.jobId)) {
+      throw invalidToolArgument("read_job_source", "jobId");
+    }
+    prepared.jobId = item.jobId;
+  }
+  return prepared as ReadJobSourceArguments;
+}
+
+function toolResultText(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const content = (value as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      return (block as { text: string }).text;
+    }
+  }
+  return undefined;
+}
+
+export function sanitizeToolFailure(toolName: string, value: unknown): unknown {
+  const message = value instanceof Error ? value.message : toolResultText(value);
+  const match = message?.match(/^tool_argument_invalid:([a-z_]+):([a-z_]+)$/);
+  if (match?.[1] === toolName) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "The tool arguments were invalid. Correct the named field and retry.",
+        },
+      ],
+      details: {
+        errorCode: "invalid_arguments",
+        field: match[2],
+        recoverable: true,
+        toolName,
+      },
+    };
+  }
+  const status = message?.match(/^Tool Gateway returned HTTP (\d{3})$/)?.[1];
+  const errorCode =
+    status === "403"
+      ? "authorization_denied"
+      : status === "404"
+        ? "not_found"
+        : status === "409"
+          ? "conflict"
+          : status === "422"
+            ? "invalid_request"
+            : status === "503"
+              ? "gateway_unavailable"
+              : "execution_failed";
+  return {
+    content: [{ type: "text", text: "The tool could not be completed." }],
+    details: {
+      errorCode,
+      recoverable: false,
+      toolName,
+    },
+  };
 }
 
 export function prepareManageSessionArguments(value: unknown): ManageSessionArguments {
@@ -249,6 +652,13 @@ export function explicitJobManagementOperation(text: string): JobManagementOpera
     /\b(?:how (?:can|could|do|would) i|can i|could i|tell me how|explain how)\b/.test(normalized);
   if (
     !asksHowTo &&
+    (/\b(?:retry|rerun)(?:\s+(?:(?:the|that)\s+)?(?:job|task|work|it))?\b/.test(normalized) ||
+      /\btry\s+(?:(?:the|that)\s+)?(?:job|task|work|it)\s+again\b/.test(normalized))
+  ) {
+    return "retry";
+  }
+  if (
+    !asksHowTo &&
     (new RegExp(`\\b(?:cancel|abort|stop|terminate)\\b.{0,48}\\b(?:${JOB_REFERENCE})\\b`).test(
       normalized,
     ) ||
@@ -282,20 +692,50 @@ export function explicitJobManagementOperation(text: string): JobManagementOpera
   return undefined;
 }
 
-function requiredManageJobStream(base: StreamFn): StreamFn {
+export function explicitJobLaunchIntent(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized || /\b(?:how (?:can|could|do|would) i|tell me how|explain how)\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\b(?:start|launch|create|run|kick off|spin up)\b.{0,48}\b(?:background|batchground)\s+(?:job|task|work)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:start|launch|create|run|kick off|spin up)\b.{0,24}\b(?:a\s+)?(?:new\s+)?(?:job|task)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:background|batchground)\s+(?:job|task)\b.{0,48}\b(?:start|launch|create|run)\b/.test(
+      normalized,
+    )
+  );
+}
+
+export function containsTextualToolProtocol(text: string): boolean {
+  return TEXTUAL_TOOL_PROTOCOL.test(text);
+}
+
+function requiredToolStream(base: StreamFn, toolName: "manage_job" | "run_job"): StreamFn {
   let firstRequest = true;
   return (model, context, options) => {
     if (!firstRequest) return base(model, context, options);
     firstRequest = false;
     const toolChoice =
       model.api === "anthropic-messages"
-        ? { type: "tool", name: "manage_job" }
+        ? { type: "tool", name: toolName }
         : model.api === "openai-completions"
-          ? { type: "function", function: { name: "manage_job" } }
+          ? { type: "function", function: { name: toolName } }
           : undefined;
     if (!toolChoice) return base(model, context, options);
     return base(model, context, { ...options, toolChoice } as Parameters<StreamFn>[2]);
   };
+}
+
+function toolDisabledStream(base: StreamFn): StreamFn {
+  return (model, context, options) =>
+    base(model, context, {
+      ...options,
+      toolChoice: "none",
+    } as Parameters<StreamFn>[2]);
 }
 
 function toolResultDetails(value: unknown): Record<string, unknown> | undefined {
@@ -316,12 +756,15 @@ function groundedJobResponse(
       ? "I couldn't check that job."
       : operation === "cancel"
         ? "I couldn't cancel that job."
+        : operation === "retry"
+          ? "I couldn't retry that job."
         : "I couldn't update that job.";
   }
   if (modelResponse.trim()) return modelResponse;
   if (operation === "cancel") return "I requested cancellation.";
   if (operation === "follow_up") return "I added that to the job.";
   if (operation === "set_priority") return "I changed the job priority.";
+  if (operation === "retry") return "I retried the job.";
   const status = typeof details?.status === "string" ? details.status : "available";
   return `The job status is ${status}.`;
 }
@@ -345,6 +788,8 @@ function manageJobModelContent(
       ? "The cancellation request was accepted."
       : parameters.operation === "follow_up"
         ? "The job follow-up was accepted."
+        : parameters.operation === "retry"
+          ? "The failed job was queued for a fresh bounded attempt."
         : "The priority change was accepted.";
   return `${outcome} ${JOB_ACTION_RESPONSE_INSTRUCTION}`;
 }
@@ -361,7 +806,11 @@ const EMPTY_USAGE = {
 export const RADCLIFFE_SYSTEM_PROMPT =
   "The voice-agent harness is called Radcliffe. You are the selected conversational model " +
   "operating inside it. You may inspect, set, reset, or undo only response_detail and " +
-  "default_speech_rate with configure. Map concise or short to brief, normal to standard, " +
+  "default_speech_rate with configure. " +
+  "Treat included Radcliffe system and call packets as durable chronological conversation " +
+  "records; when one reports a background-job outcome before the current user message, use it " +
+  "to ground your answer and call manage_job if more detail is needed. " +
+  "Map concise or short to brief, normal to standard, " +
   "thorough or verbose to detailed, slowly to 0.75x, regular to 1.0x, quickly to 1.25x, and " +
   "very fast to 1.5x. Use turn scope for a temporary request and session scope when the user " +
   "asks the change to continue. Never invent another setting key. You may create a new " +
@@ -369,28 +818,44 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "end the current conversation with manage_session. Never guess between returned choices and " +
   "never copy conversation history. You may launch long research, analysis, download, or coding " +
   "work with run_job; it returns an accepted job ID promptly while this foreground conversation " +
-  "continues. Call job tools without a preamble. For each successful run_job or manage_job mutation, " +
-  "first describe the job tool action " +
+  "continues. Follow the schema exactly for every tool call, including required field names and " +
+  "value types. Tool invocations must use the provider's structured tool channel. Never print XML, JSON, " +
+  "function tags, invoke tags, parameter tags, or a textual imitation of a tool call. " +
+  "Call job tools without a preamble. For each successful run_job or manage_job mutation, first " +
+  "describe the job tool action " +
   "in one short sentence using only a few words. Then provide any additional useful context the user " +
   "requested; do not omit it. In that tool-action sentence, never speak or reproduce the job ID, " +
   "status, notification policy, priority, budget, runtime, revision, or serialized tool result. " +
-  "Use manage_job to inspect, follow up, reprioritize, or cancel an " +
+  "Use manage_job to inspect, follow up, reprioritize, cancel, or retry a failed " +
   "existing job. Never " +
-  "claim a job was inspected, changed, reprioritized, followed up, or cancelled unless the matching " +
+  "claim a job was inspected, changed, reprioritized, followed up, cancelled, or retried unless the matching " +
   "manage_job call succeeds in the current turn. If it fails, say that the job was not changed. Never " +
   "claim background work completed until a job event or status says so. You can discover authorized " +
+  "Markdown filenames with list_sources and read one with read_source. " +
   "When a completed job status returns findings, cite their promoted source titles or locators and " +
   "explicitly label every finding whose inference flag is true. Never detach a finding from its " +
   "source entity IDs. " +
-  "Markdown filenames with list_sources and read " +
-  "one with read_source. If the user identifies a source informally or the exact authorized path " +
+  "If the user identifies a source informally or the exact authorized path " +
   "is uncertain, call list_sources first without narrating the lookup. Use only a returned path; " +
   "if multiple paths are genuinely plausible, ask the user which one. Convert spoken filename " +
   "punctuation such as dash, hyphen, and dot M D into path characters. " +
   "Use read_job_source when the user asks to read a named source promoted by a completed " +
-  "background job. Pass its human title or entity ID; an ambiguous title must be clarified, never " +
+  "background job. Pass its human title, artifact Markdown filename, or entity ID and include the " +
+  "exact hidden job ID when the chronological job outcome identifies it; an ambiguous title must be clarified, never " +
   "guessed. " +
-  "Set read_source rate only when the user explicitly requests a delivery speed. " +
+  "Use read_source only when the user explicitly asks for a named source, file, document, or path. " +
+  "Never use read_source to deliver a generated answer, a count, or other transient response. " +
+  "Set a source rate only when the user explicitly requests a delivery speed. A request about this " +
+  "answer or this turn is temporary; a request for this session or from now on persists. " +
+  "An explicit exact-output request overrides response-detail brevity. Never abbreviate an exact " +
+  "enumeration, identifier, hash, URL, JSON value, path, timestamp, quotation, verbatim reading, " +
+  "or character sequence with an ellipsis, a summary, or 'and so on'. " +
+  "Optimize ordinary responses for listening. Do not volunteer or laboriously read hashes, UUIDs, " +
+  "internal IDs, raw URLs, filesystem paths, machine timestamps, stack traces, serialized data, " +
+  "long numbers, code, citation machinery, repeated punctuation, or acronym-heavy metadata. State " +
+  "the human meaning instead. If machine detail is useful in the visual conversation, include it " +
+  "once with a nearby plain-language description; Radcliffe will provide a speakable alternative. " +
+  "Only read or spell machine detail when the user explicitly requests exact delivery. " +
   "No Emojis. Do not use emoji characters in responses. " +
   "Never recreate source text.";
 export const LIST_SOURCES_DESCRIPTION =
@@ -400,36 +865,31 @@ export const LIST_SOURCES_PARAMETERS = Type.Object({}, { additionalProperties: f
 export const READ_SOURCE_DESCRIPTION =
   "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
   "Normalize spoken filename punctuation before passing the path. An explicitly requested speech " +
-  "rate may be slow, normal, fast, very_fast, or a numeric multiplier from 0.75 through 1.5.";
-export const READ_SOURCE_PARAMETERS = Type.Object({
-  path: Type.String({ minLength: 1, maxLength: 4096 }),
-  rate: Type.Optional(
-    Type.Union([
-      Type.Literal("slow"),
-      Type.Literal("normal"),
-      Type.Literal("fast"),
-      Type.Literal("very_fast"),
-      Type.Number({ minimum: 0.75, maximum: 1.5 }),
-    ]),
+  "rate must be one of 0.75x, 1.0x, 1.25x, or 1.5x.";
+export const READ_SOURCE_PARAMETERS = Type.Unsafe<ReadSourceArguments>(
+  Type.Object(
+    {
+      path: Type.String({ minLength: 1, maxLength: 4096 }),
+      rate: Type.Optional(stringEnum(SPEECH_RATES)),
+    },
+    { additionalProperties: false },
   ),
-});
+);
 export const READ_JOB_SOURCE_DESCRIPTION =
-  "Read one canonical Markdown source promoted by a completed background job. Resolve it by its " +
-  "human title or exact entity ID within this conversation; ambiguous references fail closed.";
-export const READ_JOB_SOURCE_PARAMETERS = Type.Object(
-  {
-    reference: Type.String({ minLength: 1, maxLength: 300 }),
-    rate: Type.Optional(
-      Type.Union([
-        Type.Literal("slow"),
-        Type.Literal("normal"),
-        Type.Literal("fast"),
-        Type.Literal("very_fast"),
-        Type.Number({ minimum: 0.75, maximum: 1.5 }),
-      ]),
-    ),
-  },
-  { additionalProperties: false },
+  "Read one canonical Markdown source promoted or safely derived from a completed background job. " +
+  "Resolve it by human title, Markdown artifact filename, or exact entity ID within this " +
+  "conversation. Include the hidden exact job ID when known; ambiguous references fail closed.";
+export const READ_JOB_SOURCE_PARAMETERS = Type.Unsafe<ReadJobSourceArguments>(
+  Type.Object(
+    {
+      reference: Type.String({ minLength: 1, maxLength: 300 }),
+      jobId: Type.Optional(
+        Type.String({ minLength: 1, maxLength: 128, pattern: JOB_ID.source }),
+      ),
+      rate: Type.Optional(stringEnum(SPEECH_RATES)),
+    },
+    { additionalProperties: false },
+  ),
 );
 export const CONFIGURE_DESCRIPTION =
   "Inspect, set, reset, or undo one registered Radcliffe setting. Only response_detail and " +
@@ -476,8 +936,9 @@ export const RUN_JOB_PARAMETERS = Type.Unsafe<RunJobArguments>(
   ),
 );
 export const MANAGE_JOB_DESCRIPTION =
-  "Inspect, add a private follow-up to, reprioritize, or cancel a durable background job by its " +
-  "exact job ID. Job output remains separate from the foreground conversation.";
+  "Inspect, add a private follow-up to, reprioritize, cancel, or retry a failed durable " +
+  "background job by its exact job ID. Job output remains separate from the foreground " +
+  "conversation.";
 export const MANAGE_JOB_PARAMETERS = Type.Unsafe<ManageJobArguments>(
   Type.Object(
     {
@@ -527,23 +988,75 @@ export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
   });
 }
 
-function systemPrompt(request: TurnRequest): string {
+function exactOutputInstruction(intent: ExactOutputIntent): string {
+  if (intent.kind === "numbers" && intent.sequence) {
+    return (
+      ` Fidelity constraint: emit every integer from ${intent.sequence.start} through ` +
+      `${intent.sequence.end} exactly once and in order. This overrides response-detail brevity; ` +
+      "do not use words in place of digits, ellipses, ranges, summaries, or fabricated progress."
+    );
+  }
+  return (
+    ` Fidelity constraint: this is an exact ${intent.kind} request. Return only the requested ` +
+    "value without a prefix, suffix, explanation, normalization, omission, or abbreviation."
+  );
+}
+
+function systemPrompt(
+  request: TurnRequest,
+  delivery?: DeliveryPreparation,
+  exactOutput?: ExactOutputIntent,
+): string {
   return (
     RADCLIFFE_SYSTEM_PROMPT +
     (request.responseDetail === "brief"
       ? " Keep this response brief."
       : request.responseDetail === "detailed"
         ? " Give a detailed response."
-        : " Use standard response detail.")
+        : " Use standard response detail.") +
+    (delivery
+      ? delivery.applied
+        ? ` The requested ${delivery.intent.rate} speech rate is already applied for this ${delivery.intent.scope}. Answer directly and do not call configure or a source-reading tool for it.`
+        : " The requested speech rate could not be applied. Answer directly without claiming the rate changed."
+      : "") +
+    (exactOutput ? exactOutputInstruction(exactOutput) : "")
   );
 }
 
+function hasExplicitSourceReadIntent(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    /\b(?:read|recite)\b/.test(normalized) &&
+    (/\b(?:source|file|document|markdown|path|abstract|paper|article|report|chapter)\b/.test(
+      normalized,
+    ) ||
+      /(?:\.md\b|\bdot m d\b)/.test(normalized))
+  );
+}
+
+function exactOutputFromPackets(packets: readonly ContextPacket[]): ExactOutputIntent | undefined {
+  const current = packets.at(-1);
+  if (!current || current.source !== "user" || hasExplicitSourceReadIntent(current.content)) {
+    return undefined;
+  }
+  return classifyExactOutputIntent(current.content, packets.slice(0, -1));
+}
+
+function includedPacketsForRequest(request: TurnRequest): ContextPacket[] {
+  const packets = request.packets.filter((packet) => packet.include);
+  const current = packets.at(-1);
+  if (!request.userMessage || current?.source !== "user") return packets;
+  return [...packets.slice(0, -1), { ...current, content: request.userMessage }];
+}
+
 export function modelContextFromRequest(request: TurnRequest) {
-  const messages: RadcliffeContextMessage[] = request.packets
-    .filter((packet) => packet.include)
-    .map((packet) => ({ role: "radcliffe", packet }));
+  const packets = includedPacketsForRequest(request);
+  const messages: RadcliffeContextMessage[] = packets.map((packet) => ({
+    role: "radcliffe",
+    packet,
+  }));
   return {
-    systemPrompt: systemPrompt(request),
+    systemPrompt: systemPrompt(request, undefined, exactOutputFromPackets(packets)),
     messages: convertRadcliffeContext(messages),
     tools: [
       {
@@ -613,18 +1126,99 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         );
       }
     }
-    const packets = request.packets.filter((packet) => packet.include);
+    const packets = includedPacketsForRequest(request);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
+    const deliveryIntent =
+      current.source === "user" ? classifyDeliveryIntent(current.content) : undefined;
+    const exactOutputIntent = exactOutputFromPackets(packets);
     const jobOperation =
       current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
+    const jobLaunch = current.source === "user" && explicitJobLaunchIntent(current.content);
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
+    const userMessage =
+      request.userMessage ??
+      packets
+        .filter(
+          (packet) =>
+            packet.source === "user" &&
+            (Object.fromEntries(packet.annotations)["radcliffe.turn_id"] ?? packet.messageId) ===
+              turnId,
+        )
+        .map((packet) => packet.content)
+        .join("\n");
+    let deliveryPreparation: DeliveryPreparation | undefined;
+    if (deliveryIntent && !deliveryIntent.sourceRead) {
+      const callId = `delivery-rate:${request.requestId}`;
+      const parameters: ConfigureArguments = {
+        operation: "set",
+        key: "default_speech_rate",
+        scope: deliveryIntent.scope,
+        value: deliveryIntent.rate,
+      };
+      await emit({
+        type: "tool_start",
+        requestId: request.requestId,
+        callId,
+        toolName: "configure",
+        arguments: parameters,
+      });
+      try {
+        const result = await this.executeTool(
+          {
+            sessionId: request.sessionId,
+            generation: request.generation,
+            operationId: request.operationId!,
+            cancellationId: request.cancellationId!,
+            traceId: request.traceId!,
+            turnId,
+            callId,
+            idempotencyKey: `${request.requestId}:${callId}`,
+            toolName: "configure",
+            arguments: parameters,
+          },
+          signal,
+        );
+        deliveryPreparation = { intent: deliveryIntent, applied: true };
+        await emit({
+          type: "tool_end",
+          requestId: request.requestId,
+          callId,
+          toolName: "configure",
+          isError: false,
+          result: {
+            content: [{ type: "text", text: result.modelContent }],
+            details: result.details,
+          },
+        });
+      } catch {
+        deliveryPreparation = { intent: deliveryIntent, applied: false };
+        await emit({
+          type: "tool_end",
+          requestId: request.requestId,
+          callId,
+          toolName: "configure",
+          isError: true,
+          result: {
+            content: [{ type: "text", text: "The speech rate could not be applied." }],
+            details: {
+              errorCode: "delivery_configuration_failed",
+              recoverable: false,
+              toolName: "configure",
+            },
+          },
+        });
+      }
+    }
     let modelText = "";
+    let pendingDisplayText = "";
     let groundedJobCall = false;
     let groundedJobDetails: Record<string, unknown> | undefined;
     const matchingJobCalls = new Set<string>();
     let providerError: string | undefined;
+    let textualToolProtocolViolation = false;
+    let textualToolProtocolRecoveries = 0;
     const listSources: AgentTool<typeof LIST_SOURCES_PARAMETERS> = {
       name: "list_sources",
       label: "List sources",
@@ -669,13 +1263,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       label: "Read source",
       description: READ_SOURCE_DESCRIPTION,
       parameters: READ_SOURCE_PARAMETERS,
+      prepareArguments: prepareReadSourceArguments,
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
-        params: {
-          path: string;
-          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
-        },
+        params: ReadSourceArguments,
         toolSignal?: AbortSignal,
         onUpdate?: (value: {
           content: Array<{ type: "text"; text: string }>;
@@ -711,13 +1303,11 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       label: "Read background job source",
       description: READ_JOB_SOURCE_DESCRIPTION,
       parameters: READ_JOB_SOURCE_PARAMETERS,
+      prepareArguments: prepareReadJobSourceArguments,
       executionMode: "sequential" as const,
       execute: async (
         toolCallId: string,
-        params: {
-          reference: string;
-          rate?: "slow" | "normal" | "fast" | "very_fast" | number;
-        },
+        params: ReadJobSourceArguments,
         toolSignal?: AbortSignal,
         onUpdate?: (value: {
           content: Array<{ type: "text"; text: string }>;
@@ -854,6 +1444,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "run_job",
+          userMessage,
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {
@@ -894,6 +1485,7 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: toolCallId,
           idempotencyKey: `${request.requestId}:${toolCallId}`,
           toolName: "manage_job",
+          userMessage,
           arguments: params,
         };
         const result = await this.executeTool(toolRequest, toolSignal, (update) => {
@@ -913,49 +1505,118 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
       packet,
     }));
     const turnStream = this.streamFnForTurn?.(request) ?? this.streamFn;
+    const allTools = [
+      listSources,
+      readSource,
+      readJobSource,
+      configure,
+      manageSession,
+      runJob,
+      manageJob,
+    ];
+    const tools = exactOutputIntent
+      ? allTools
+      : deliveryIntent
+        ? deliveryIntent.sourceRead
+          ? [listSources, readSource, readJobSource, manageSession, runJob, manageJob]
+          : [manageSession, runJob, manageJob]
+        : allTools;
+    const controlledStream = exactOutputIntent
+      ? toolDisabledStream(turnStream)
+      : jobOperation
+        ? requiredToolStream(turnStream, "manage_job")
+        : jobLaunch
+          ? requiredToolStream(turnStream, "run_job")
+          : turnStream;
     const agent = new Agent({
       initialState: {
-        systemPrompt: systemPrompt(request),
+        systemPrompt: systemPrompt(request, deliveryPreparation, exactOutputIntent),
         model: this.model,
         thinkingLevel: "off",
-        tools: [
-          listSources,
-          readSource,
-          readJobSource,
-          configure,
-          manageSession,
-          runJob,
-          manageJob,
-        ],
+        tools,
         messages: history,
       },
       convertToLlm: convertRadcliffeContext,
       transformContext: async (messages) => messages,
-      streamFn: jobOperation ? requiredManageJobStream(turnStream) : turnStream,
+      streamFn: controlledStream,
       sessionId: request.sessionId,
       toolExecution: "sequential",
     });
     let runJobCallSeen = false;
     let runJobSucceeded = false;
+    const emitSpeechSegments = async (flush: boolean) => {
+      const split = splitCompletedSpeechSegments(pendingDisplayText, flush);
+      pendingDisplayText = split.remainder;
+      for (const segment of split.segments) {
+        const spoken = spokenOutputFor(segment);
+        await emit({
+          type: "model_delta",
+          requestId: request.requestId,
+          text: segment,
+          ...(spoken.text !== segment
+            ? {
+                spokenText: spoken.text,
+                spokenCategories: spoken.categories,
+              }
+            : {}),
+        });
+      }
+    };
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        const candidate = modelText + event.assistantMessageEvent.delta;
+        if (!exactOutputIntent && containsTextualToolProtocol(candidate)) {
+          textualToolProtocolViolation = true;
+          modelText = "";
+          pendingDisplayText = "";
+          return;
+        }
+        if (textualToolProtocolViolation) return;
         if (
           (!runJobCallSeen || runJobSucceeded) &&
           (!jobOperation || groundedJobCall)
         ) {
           modelText += event.assistantMessageEvent.delta;
-          await emit({
-            type: "model_delta",
-            requestId: request.requestId,
-            text: event.assistantMessageEvent.delta,
-          });
+          if (!exactOutputIntent) {
+            pendingDisplayText += event.assistantMessageEvent.delta;
+            await emitSpeechSegments(false);
+          }
         }
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         const complete = event.message.content
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("");
+        const protocolViolation =
+          !exactOutputIntent &&
+          (textualToolProtocolViolation || containsTextualToolProtocol(complete));
+        if (protocolViolation) {
+          const hasNativeToolCall = event.message.content.some((block) => block.type === "toolCall");
+          modelText = "";
+          pendingDisplayText = "";
+          textualToolProtocolViolation = false;
+          if (!hasNativeToolCall && textualToolProtocolRecoveries < 1) {
+            textualToolProtocolRecoveries += 1;
+            agent.followUp({
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Your previous response used textual tool syntax, so it was discarded. " +
+                    "Retry now using only the provider's structured tool channel. Follow the " +
+                    "schema exactly. Do not " +
+                    "describe, print, or imitate the tool call.",
+                },
+              ],
+              timestamp: Date.now(),
+            });
+          } else if (!hasNativeToolCall) {
+            providerError = "model repeatedly emitted textual tool protocol";
+          }
+        }
         if (
+          !protocolViolation &&
           complete &&
           (!runJobCallSeen || runJobSucceeded) &&
           (!jobOperation || groundedJobCall)
@@ -964,6 +1625,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
         }
         if (event.message.stopReason === "error") {
           providerError = event.message.errorMessage ?? "model provider failed";
+        }
+        if (!protocolViolation && !exactOutputIntent && pendingDisplayText) {
+          await emitSpeechSegments(true);
         }
         await emit({
           type: "usage",
@@ -1018,7 +1682,9 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           callId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-          result: event.result,
+          result: event.isError
+            ? sanitizeToolFailure(event.toolName, event.result)
+            : event.result,
         });
       }
     });
@@ -1041,6 +1707,12 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
           groundedJobDetails,
         );
         if (!groundedJobCall || !modelSuppliedResponse) {
+          await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
+        }
+      }
+      if (exactOutputIntent) {
+        modelText = finalizeExactOutput(exactOutputIntent, modelText);
+        if (modelText) {
           await emit({ type: "model_delta", requestId: request.requestId, text: modelText });
         }
       }

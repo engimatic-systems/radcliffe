@@ -2,13 +2,13 @@
 id: rad-ncdz
 status: open
 deps: [rad-l1jc]
-links: [rad-l1jc, rad-lezo]
+links: [rad-l1jc, rad-lezo, rad-nhai, rad-l386]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 0
 assignee: coopwilliams
 parent: rad-2tft
-tags: [radcliffe, foundation, milestone-1, demo]
+tags: [radcliffe, foundation, milestone-1, demo, operator-final-check]
 ---
 # Milestone 1: demo Android voice and deterministic source reading
 

@@ -7,7 +7,7 @@ created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1
 assignee: coopwilliams
-tags: [radcliffe, post-m1, security, identity]
+tags: [radcliffe, post-m1, security, identity, operator-final-check]
 ---
 # Implement device enrollment, control-plane authentication, and secret storage
 

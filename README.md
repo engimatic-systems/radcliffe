@@ -108,11 +108,13 @@ Private job instructions and worker transcripts remain in the job context;
 conversation-facing events contain bounded lifecycle metadata and promoted
 entity or artifact references only.
 
-Background execution remains opt-in. The local deployment uses the repository's
-Colima/Docker sandbox plus a credential-free loopback-Ollama broker; the control
-plane runs it with a scrubbed environment and private per-attempt workspace,
+Background execution remains opt-in. Operator/user acceptance uses the repository's
+Colima/Docker sandbox plus a locally selected Anthropic broker on the trusted host; the control
+plane gives that broker only the explicitly approved Anthropic credential and a
+private per-attempt workspace,
 streams job context on stdin, and accepts only bounded JSON-line lifecycle
-frames. Deployment details, containment, and limits are documented in
+frames. Model-selected commands remain inside a credential-free container. Deployment details,
+containment, and limits are documented in
 [`services/control-plane/README.md`](services/control-plane/README.md#opt-in-executor-process).
 
 The local simulation is the fast reviewer entry point. The external deployment
@@ -121,6 +123,10 @@ foreground-service behavior.
 
 ### Local privacy profile
 
+This profile is retained as a deprecated, explicit development path. Qwen output
+is not accepted as operator/user-test evidence; deterministic tests should use
+fakes, and all physical acceptance uses the Haiku profile below.
+
 The LAN launcher defaults are:
 
 - `RADCLIFFE_MODEL_PROVIDER=ollama`
@@ -128,8 +134,9 @@ The LAN launcher defaults are:
 - `RADCLIFFE_MODEL_CONTEXT_LIMIT=40960`
 - `RADCLIFFE_MODEL_RESERVED_OUTPUT_TOKENS=8192`
 - `RADCLIFFE_SPEECH_PROVIDER=local`
-- `RADCLIFFE_WHISPER_MODEL=mlx-community/whisper-large-v3-turbo`
-- `RADCLIFFE_WHISPER_INITIAL_PROMPT=Radcliffe vocabulary: ...`
+- `RADCLIFFE_PARAKEET_MODEL=mlx-community/parakeet-tdt-0.6b-v3`
+- `RADCLIFFE_PARAKEET_CHUNK_SECONDS=120`
+- `RADCLIFFE_PARAKEET_OVERLAP_SECONDS=15`
 - `RADCLIFFE_TTS_VOICE=Samantha`
 - `RADCLIFFE_MODEL_CHUNK_CHARS=240`
 
@@ -141,11 +148,13 @@ ollama pull qwen3:8b
 uv sync --all-packages --all-groups
 ```
 
-Audio is endpointed in the media worker, transcribed by MLX Whisper, and spoken
+Audio is endpointed in the media worker, transcribed locally by NVIDIA Parakeet
+TDT 0.6B v3 through MLX, and spoken
 with the offline macOS voice. Conversation context and tool calls go only to
-the loopback Ollama API. Ollama and Whisper each require a one-time model
+the loopback Ollama API. Ollama and Parakeet each require a one-time model
 download; after both models are cached, turns require no model-provider network
-access.
+access. Set `RADCLIFFE_SPEECH_PROVIDER=whisper` to use the deprecated
+`RADCLIFFE_WHISPER_MODEL` rollback path explicitly.
 
 `scripts/run-local-sidecar.sh` forces that local boundary even when cloud
 settings exist in `var/.env`; local overrides use
@@ -178,11 +187,28 @@ estimated cost under `artifacts/cloud-haiku-smoke/`. It will not run without
 both the normal cloud opt-in and the one-run approval phrase documented in the
 script. Ordinary tests use fakes and make no Anthropic calls.
 
+For an operator/user acceptance run, activate and verify the persistent managed
+profile with:
+
+```sh
+make services-install-user-test
+make check-background-jobs-local
+```
+
+The first command pins the foreground LaunchAgent to Haiku. The second rejects
+the handoff unless the foreground sidecar is pinned to Haiku and the background broker's
+locally configured Anthropic model, backend, and sandbox image agree with its command; it never
+makes a paid model request.
+The Qwen broker remains available only through an explicit deprecated
+`--provider ollama` development selector.
+
 The endpoint waits for 900 ms of silence after at least 250 ms of voiced audio
 before finalizing an utterance. Tune those local VAD heuristics with
 `RADCLIFFE_ENDPOINT_SILENCE_MS`, `RADCLIFFE_ENDPOINT_MIN_VOICE_MS`, and
-`RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 30
-seconds, and a subminimum burst now resets after normal endpoint silence rather
+`RADCLIFFE_ENDPOINT_RMS`. `RADCLIFFE_ENDPOINT_MAX_UTTERANCE_MS` defaults to 120
+seconds so a long continuous instruction is not split into a cancelled first
+chunk and a retained tail; the limit remains a hard memory and processing bound.
+A subminimum burst resets after normal endpoint silence rather
 than holding one endpoint open. Maximum-duration candidates must also meet
 `RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO` (default `0.05`). Before Whisper, a
 local Silero pass requires at least two speech-like windows. After decoding,
@@ -190,6 +216,13 @@ generic segment evidence rejects non-finite, repetitive, no-speech, or very
 low-log-probability output. Rejection logs contain only aggregate confidence
 and timing—not transcript text or microphone audio—and no phrase is
 blacklisted.
+During active playback, a sustained near-field candidate that is much stronger
+than the normal barge-in floor can recover from Silero's zero-window branch only
+after 400 ms and a non-zero confidence floor. The bounded fallback defaults are
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_RMS=8000`,
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_CONFIRMATION_MS=400`, and
+`RADCLIFFE_ENDPOINT_STRONG_BARGE_IN_MIN_PROBABILITY=0.15`; ordinary echo, room
+tone, and loud non-speech remain subject to the normal Silero gate.
 Model speech flushes on sentence and completed-line
 boundaries, with `RADCLIFFE_MODEL_CHUNK_CHARS` providing an upper bound for
 punctuation-poor output. Phase logs report endpointing, transcription, first
@@ -377,3 +410,10 @@ completed sentence boundaries in SQLite. Successful canonical source rendering
 is terminal for its assistant turn, so a provider postamble cannot add a model
 message after the source; model text is also filtered through the deterministic
 no-emoji output policy before TTS or persistence.
+
+Ordinary model output also passes through the bounded
+[spoken-output policy](docs/spoken-output-policy.md). Machine-oriented detail
+remains in the durable model envelope and Android timeline, while TTS receives
+a truthful category-level alternative. Explicit exact/verbatim requests and
+canonical source envelopes bypass this substitution. The content-free Qwen and
+Haiku evaluation entry point is `scripts/spoken-output-conformance.py`.

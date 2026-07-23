@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,8 @@ from radcliffe_domain.store import EventStore
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CONTROL_CAPABILITIES = frozenset({"background_jobs_v1", "promoted_job_results_v1"})
 REQUIRED_SIDECAR_TOOLS = frozenset({"run_job", "manage_job"})
+REQUIRED_USER_TEST_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_BACKGROUND_MODEL = "claude-haiku-4-5-20251001"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +102,72 @@ def executor_check(payload: object) -> Check:
     return Check("job_executor", "failed", "job_executor_unavailable")
 
 
+def foreground_model_check(payload: object) -> Check:
+    body = payload if isinstance(payload, dict) else {}
+    ready = (
+        body.get("provider") == "anthropic"
+        and body.get("model_id") == REQUIRED_USER_TEST_MODEL
+        and body.get("data_boundary") == "cloud_anthropic"
+    )
+    return Check(
+        "foreground_model",
+        "ok" if ready else "failed",
+        "haiku_user_test_profile" if ready else "foreground_model_not_haiku",
+    )
+
+
+def job_model_ready(environment: Mapping[str, str]) -> bool:
+    try:
+        command = shlex.split(environment.get("RADCLIFFE_JOB_EXECUTOR_COMMAND", ""))
+        provider_index = command.index("--provider")
+        model_index = command.index("--model")
+        image_index = command.index("--image")
+        configured_image = environment.get("RADCLIFFE_JOB_SANDBOX_IMAGE", "")
+        configured_backend = (
+            "claude-agent-sdk"
+            if "radcliffe_control.agent_sdk_executor" in command
+            else "custom-loop"
+        )
+        expected_backend = environment.get("RADCLIFFE_JOB_EXECUTOR_BACKEND", "custom-loop")
+        expected_model = environment.get("RADCLIFFE_JOB_MODEL_ID", DEFAULT_BACKGROUND_MODEL)
+        command_ready = (
+            command[provider_index + 1] == "anthropic"
+            and command[model_index + 1] == expected_model
+            and configured_backend == expected_backend
+            and bool(configured_image)
+            and command[image_index + 1] == configured_image
+        )
+    except (ValueError, IndexError):
+        command_ready = False
+    return (
+        environment.get("RADCLIFFE_JOB_MODEL_PROVIDER") == "anthropic"
+        and environment.get("RADCLIFFE_JOB_ALLOW_CLOUD_MODELS") == "1"
+        and bool(environment.get("RADCLIFFE_ANTHROPIC_API_KEY"))
+        and command_ready
+    )
+
+
+def background_model_check(
+    payload: object,
+    configuration_ready: bool,
+    *,
+    expected_model: str,
+    expected_backend: str,
+) -> Check:
+    body = payload if isinstance(payload, dict) else {}
+    ready = (
+        configuration_ready
+        and body.get("background_model_provider") == "anthropic"
+        and body.get("background_model_id") == expected_model
+        and body.get("background_executor_backend") == expected_backend
+    )
+    return Check(
+        "background_model",
+        "ok" if ready else "failed",
+        "approved_job_profile" if ready else "background_model_not_approved",
+    )
+
+
 def validate_live(
     *,
     expected_revision: str,
@@ -107,6 +176,9 @@ def validate_live(
     sidecar_health: object,
     image_available: bool,
     synthetic_smoke: bool,
+    job_model_ready: bool,
+    expected_background_model: str = DEFAULT_BACKGROUND_MODEL,
+    expected_background_backend: str = "custom-loop",
 ) -> tuple[Check, ...]:
     return (
         deployment_check(
@@ -122,7 +194,14 @@ def validate_live(
             required_capabilities=REQUIRED_SIDECAR_TOOLS,
             nested_tools=True,
         ),
+        foreground_model_check(sidecar_health),
         executor_check(control_readiness),
+        background_model_check(
+            control_health,
+            job_model_ready,
+            expected_model=expected_background_model,
+            expected_backend=expected_background_backend,
+        ),
         Check(
             "sandbox_image",
             "ok" if image_available else "failed",
@@ -232,6 +311,8 @@ def parser() -> argparse.ArgumentParser:
 def main(arguments: Sequence[str] | None = None) -> int:
     options = parser().parse_args(arguments)
     expected = git_revision()
+    expected_background_model = os.environ.get("RADCLIFFE_JOB_MODEL_ID", DEFAULT_BACKGROUND_MODEL)
+    expected_background_backend = os.environ.get("RADCLIFFE_JOB_EXECUTOR_BACKEND", "custom-loop")
     deadline = time.monotonic() + max(0, options.wait)
     while True:
         _control_status, control_health = fetch_json(f"{options.control_url.rstrip('/')}/healthz")
@@ -244,8 +325,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
             sidecar_health=sidecar_health,
             image_available=True,
             synthetic_smoke=True,
+            job_model_ready=job_model_ready(os.environ),
+            expected_background_model=expected_background_model,
+            expected_background_backend=expected_background_backend,
         )
-        if all(check.status == "ok" for check in deployment[:3]):
+        if all(check.status == "ok" for check in deployment[:5]):
             break
         if time.monotonic() >= deadline:
             break
@@ -257,6 +341,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         sidecar_health=sidecar_health,
         image_available=image_available(os.environ),
         synthetic_smoke=asyncio.run(synthetic_executor_smoke()),
+        job_model_ready=job_model_ready(os.environ),
+        expected_background_model=expected_background_model,
+        expected_background_backend=expected_background_backend,
     )
     report = {
         "schema": "radcliffe-background-job-preflight-v1",

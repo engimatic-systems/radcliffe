@@ -23,6 +23,8 @@ from radcliffe_domain.configuration import (
 )
 from radcliffe_domain.envelope import MessageEnvelope, SourceKind
 from radcliffe_domain.projection import (
+    BACKGROUND_JOB_ANNOUNCEMENT_EVENT,
+    BACKGROUND_JOB_OUTCOME_EVENT,
     BACKGROUND_JOB_REFERENCE_EVENT,
     CONFIGURATION_EVENT,
     PROVIDER_BUDGET_EVENT,
@@ -63,7 +65,55 @@ _REGISTERED_TOOL_NAMES = frozenset(
         "manage_job",
     }
 )
+_SPOKEN_OUTPUT_CATEGORIES = frozenset(
+    {
+        "hash",
+        "identifier",
+        "url",
+        "path",
+        "timestamp",
+        "stack_trace",
+        "serialized_data",
+        "long_number",
+        "code",
+        "citation",
+        "repeated_punctuation",
+        "acronym_metadata",
+    }
+)
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
+
+_JOB_OUTCOME_EXPLANATIONS = {
+    "completed": "A promoted result may be available through manage_job status.",
+    "executor_failed": "The trusted job executor stopped before it produced a result.",
+    "budget_exhausted": "The job exhausted its approved model budget before producing a result.",
+    "runtime_exhausted": "The job exceeded its runtime limit before producing a result.",
+    "resource_exhausted": "The job exhausted a bounded resource before producing a result.",
+    "step_limit_exhausted": "The job agent exhausted its allowed steps without producing a result.",
+    "policy_denied": "The job was blocked by the sandbox policy.",
+    "source_unavailable": "The requested source could not be acquired in the job sandbox.",
+    "task_failed": "The job agent could not complete the requested objective.",
+    "tool_arguments_invalid": "The job agent repeatedly produced invalid tool arguments.",
+    "model_no_action": "The job model repeatedly failed to choose an available action.",
+    "model_unavailable": "No approved background job model was configured.",
+    "model_rate_limited": (
+        "The job model provider kept rate-limiting the request after bounded retries."
+    ),
+    "model_provider_unavailable": (
+        "The job model provider remained unavailable after bounded retries."
+    ),
+    "model_request_failed": "The job model provider rejected the request.",
+    "model_response_invalid": "The job model provider returned an invalid or oversized response.",
+}
+
+_TOOL_FAILURE_MESSAGES = {
+    "authorization_denied": "Tool call failed because permission was denied.",
+    "not_found": "Tool call failed because the requested resource was not found.",
+    "conflict": "Tool call failed because the operation conflicts with the current state.",
+    "invalid_request": "Tool call failed because the request was rejected.",
+    "gateway_unavailable": "Tool call failed because its service was unavailable.",
+    "execution_failed": "Tool call failed.",
+}
 
 
 class JobAnnouncement(StrEnum):
@@ -126,6 +176,8 @@ class _ActiveTurn:
     source_envelope: MessageEnvelope | None = None
     next_source_boundary: int = 0
     model_metadata: dict[str, str] = field(default_factory=dict)
+    user_message: str = ""
+    tool_started: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,13 +354,53 @@ class VoicePipeline:
                 await self._notify_state(previous, "audio input ready")
             return self.engine.generation
 
-    async def barge_in(self) -> None:
-        await self._cancel_active("interrupted", always_flush=True)
+    async def barge_in(
+        self,
+        *,
+        verifier: str = "explicit_control",
+        evidence_duration_ms: float | None = None,
+        disposition: str = "interrupted",
+    ) -> None:
+        if disposition not in {"continued", "interrupted"}:
+            raise ValueError("barge-in disposition must be continued or interrupted")
+        turn = self._active_turn
+        operation = turn.operation if turn is not None else None
+        if operation is not None:
+            self.telemetry.emit(
+                component="media_worker",
+                event="barge_in",
+                outcome="succeeded",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase=verifier,
+                operation=operation,
+                duration_ms=evidence_duration_ms,
+            )
+            self.telemetry.emit(
+                component="media_worker",
+                event="playback_flush",
+                outcome="started",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase="barge_in",
+                operation=operation,
+            )
+        await self._cancel_active(disposition, always_flush=True)
+        if operation is not None:
+            self.telemetry.emit(
+                component="media_worker",
+                event="playback_flush",
+                outcome="succeeded",
+                session_id=self.engine.session_id,
+                generation=operation.generation,
+                phase="barge_in",
+                operation=operation,
+            )
         if self.engine.state is ConversationState.PAUSED:
             previous = self.engine.state
             self._paused_source = None
             self.engine.interrupt()
-            await self._notify_state(previous, "interrupted")
+            await self._notify_state(previous, disposition)
 
     async def pause(self) -> None:
         task: asyncio.Task[None] | None = None
@@ -367,9 +459,34 @@ class VoicePipeline:
             await self._notify_state(previous, "session ended")
 
     async def handle_transcript(self, text: str) -> None:
+        await self._handle_transcript(text)
+
+    async def submit_transcript(self, text: str) -> None:
+        """Persist and activate a transcript without coupling capture to response lifetime."""
+
+        submitted = asyncio.Event()
+        task = asyncio.create_task(
+            self._handle_transcript(text, submitted=submitted),
+            name="radcliffe-model-turn",
+        )
+        task.add_done_callback(lambda _task: submitted.set())
+        await submitted.wait()
+        if task.done():
+            await task
+        else:
+            task.add_done_callback(self._consume_background_task)
+
+    async def _handle_transcript(
+        self,
+        text: str,
+        *,
+        submitted: asyncio.Event | None = None,
+    ) -> None:
         if self._closed_for_handoff:
+            if submitted is not None:
+                submitted.set()
             return
-        submission = await self._begin_submission()
+        submission, user_message = await self._begin_user_submission(text)
         turn_id = str(uuid4())
         async with self._turn_serial:
             await self._append_text(
@@ -379,13 +496,15 @@ class VoicePipeline:
                 notify=True,
             )
             task = cast(asyncio.Task[None], asyncio.current_task())
-            turn = _ActiveTurn(turn_id, task, asyncio.Event())
+            turn = _ActiveTurn(turn_id, task, asyncio.Event(), user_message=user_message)
             async with self._coordinator:
                 if submission != self._latest_submission:
                     stale = True
                 else:
                     stale = False
                     self._active_turn = turn
+            if submitted is not None:
+                submitted.set()
             if stale:
                 await self._append_disposition(turn, "superseded")
                 return
@@ -397,6 +516,8 @@ class VoicePipeline:
                 await self._finish_failed(turn)
                 raise
             finally:
+                if submitted is not None:
+                    submitted.set()
                 async with self._coordinator:
                     if self._active_turn is turn:
                         self._active_turn = None
@@ -474,6 +595,9 @@ class VoicePipeline:
         event_id: str,
         announcement: JobAnnouncement,
         *,
+        job_id: str,
+        status: str,
+        detail_code: str,
         foreground_quiet: Callable[[], bool],
         claim: Callable[[], Awaitable[bool]],
         release: Callable[[], Awaitable[bool]],
@@ -527,6 +651,13 @@ class VoicePipeline:
                     source=SourceKind.SYSTEM,
                     wait_for_playback=True,
                 )
+                await self._persist_job_announcement(
+                    event_id=event_id,
+                    job_id=job_id,
+                    status=status,
+                    detail_code=detail_code,
+                    announcement=announcement,
+                )
                 async with self._coordinator:
                     self._assert_owner(turn, operation)
                     previous = self.engine.state
@@ -560,6 +691,68 @@ class VoicePipeline:
                 async with self._coordinator:
                     if self._active_turn is turn:
                         self._active_turn = None
+
+    async def _persist_job_announcement(
+        self,
+        *,
+        event_id: str,
+        job_id: str,
+        status: str,
+        detail_code: str,
+        announcement: JobAnnouncement,
+    ) -> None:
+        if _JOB_ID.fullmatch(job_id) is None:
+            raise ValueError("background job announcement has an invalid job ID")
+        event_digest = hashlib.sha256(event_id.encode()).hexdigest()
+        spoken_message_id = f"job-announcement:{event_digest}"
+        outcome_message_id = f"job-outcome:{event_digest}"
+        explanation = _JOB_OUTCOME_EXPLANATIONS.get(
+            detail_code,
+            "Inspect the job status before explaining this outcome.",
+        )
+        metadata = {
+            "radcliffe.job.id": job_id,
+            "radcliffe.job.status": status,
+            "radcliffe.job.detail_code": detail_code,
+            "radcliffe.job.event_id": event_id,
+        }
+        spoken: MessageEnvelope | None = None
+        async with self._append_lock:
+            replay = await self.store.replay(self.engine.session_id)
+            existing = {item.message_id: item for item in replay}
+            spoken = existing.get(spoken_message_id)
+            if spoken is None:
+                spoken = MessageEnvelope.text(
+                    session_id=self.engine.session_id,
+                    sequence=await self.store.next_sequence(self.engine.session_id),
+                    source=SourceKind.SYSTEM,
+                    text=announcement.value,
+                    metadata={
+                        **metadata,
+                        TURN_EVENT_METADATA: BACKGROUND_JOB_ANNOUNCEMENT_EVENT,
+                    },
+                    message_id=spoken_message_id,
+                )
+                await self.store.append(spoken)
+            if outcome_message_id not in existing:
+                outcome = MessageEnvelope.text(
+                    session_id=self.engine.session_id,
+                    sequence=await self.store.next_sequence(self.engine.session_id),
+                    source=SourceKind.CALL,
+                    text=(
+                        f"Internal background job outcome for {job_id}: {status}. {explanation} "
+                        "Use this exact job ID with manage_job when the user asks about this job; "
+                        "never quote the ID aloud."
+                    ),
+                    metadata={
+                        **metadata,
+                        TURN_EVENT_METADATA: BACKGROUND_JOB_OUTCOME_EVENT,
+                    },
+                    message_id=outcome_message_id,
+                )
+                await self.store.append(outcome)
+        if self.events is not None and spoken is not None:
+            await self.events.message(spoken)
 
     async def _finish_job_announcement(self, turn: _ActiveTurn, reason: str) -> None:
         try:
@@ -603,6 +796,7 @@ class VoicePipeline:
             "operationId": operation.operation_id,
             "cancellationId": operation.cancellation_id,
             "traceId": operation.trace_id,
+            "userMessage": turn.user_message,
             "responseDetail": await self._effective_configuration(
                 ConfigurationKey.RESPONSE_DETAIL,
                 turn.turn_id,
@@ -618,9 +812,15 @@ class VoicePipeline:
             if turn.cancelled.is_set():
                 break
             self._assert_owner(turn, operation)
-            if event.type == "model_delta" and not source_rendered:
-                delta = _canonical_model_text(str(event.payload.get("text", "")))
-                if not delta:
+            if event.type == "tool_start":
+                turn.tool_started = True
+            elif event.type == "model_delta" and not source_rendered:
+                display_delta = _canonical_model_text(str(event.payload.get("text", "")))
+                raw_spoken = event.payload.get("spokenText")
+                spoken_delta = _canonical_model_text(
+                    raw_spoken if isinstance(raw_spoken, str) else display_delta
+                )
+                if not display_delta and not spoken_delta:
                     continue
                 if turn.first_model_delta_at is None:
                     turn.first_model_delta_at = monotonic()
@@ -629,9 +829,39 @@ class VoicePipeline:
                         "first_model_delta",
                         turn.first_model_delta_at - turn.started_at,
                     )
-                turn.model_text += delta
+                turn.model_text += display_delta
+                raw_categories = event.payload.get("spokenCategories")
+                categories = (
+                    sorted(
+                        {
+                            category
+                            for category in raw_categories
+                            if isinstance(category, str) and category in _SPOKEN_OUTPUT_CATEGORIES
+                        }
+                    )
+                    if isinstance(raw_categories, list)
+                    else []
+                )
+                for category in categories:
+                    self.telemetry.emit(
+                        component="media_worker",
+                        event="spoken_output",
+                        outcome="succeeded",
+                        session_id=self.engine.session_id,
+                        generation=operation.generation,
+                        phase=category,
+                        operation=operation,
+                    )
+                if categories:
+                    existing = set(
+                        turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(",")
+                    )
+                    existing.discard("")
+                    turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
+                        sorted(existing | set(categories))
+                    )
                 if not source_rendered:
-                    buffer += delta
+                    buffer += spoken_delta
                     buffer = await self._speak_complete_sentences(buffer, operation, turn)
             elif event.type == "tool_end" and bool(event.payload.get("isError")):
                 raw_tool_name = event.payload.get("toolName")
@@ -640,15 +870,50 @@ class VoicePipeline:
                     if isinstance(raw_tool_name, str) and raw_tool_name in _REGISTERED_TOOL_NAMES
                     else "unknown"
                 )
+                result = event.payload.get("result")
+                result_details = result.get("details") if isinstance(result, dict) else None
+                recoverable = (
+                    isinstance(result_details, dict)
+                    and result_details.get("recoverable") is True
+                    and result_details.get("errorCode") == "invalid_arguments"
+                )
+                raw_error_code = (
+                    result_details.get("errorCode") if isinstance(result_details, dict) else None
+                )
+                error_code = (
+                    raw_error_code
+                    if isinstance(raw_error_code, str) and raw_error_code in _TOOL_FAILURE_MESSAGES
+                    else "execution_failed"
+                )
+                raw_field = (
+                    result_details.get("field")
+                    if recoverable and isinstance(result_details, dict)
+                    else None
+                )
+                field = (
+                    raw_field
+                    if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
+                    else "unknown"
+                )
+                metadata = {
+                    TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+                    TURN_ID_METADATA: turn.turn_id,
+                    "radcliffe.tool.name": tool_name,
+                    "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
+                }
+                if recoverable:
+                    metadata["radcliffe.tool.error_code"] = "invalid_arguments"
+                    metadata["radcliffe.tool.invalid_field"] = field
+                else:
+                    metadata["radcliffe.tool.error_code"] = error_code
                 await self._append_text(
                     SourceKind.SYSTEM,
-                    "Tool call failed",
-                    {
-                        TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
-                        TURN_ID_METADATA: turn.turn_id,
-                        "radcliffe.tool.name": tool_name,
-                        "radcliffe.tool.outcome": "failed",
-                    },
+                    (
+                        "Tool arguments rejected"
+                        if recoverable
+                        else _TOOL_FAILURE_MESSAGES[error_code]
+                    ),
+                    metadata,
                 )
                 self.telemetry.emit(
                     component="media_worker",
@@ -1093,6 +1358,23 @@ class VoicePipeline:
             submission = self._latest_submission
         await self._cancel_active("superseded")
         return submission
+
+    async def _begin_user_submission(self, text: str) -> tuple[int, str]:
+        async with self._coordinator:
+            active = self._active_turn
+            if (
+                active is not None
+                and active.user_message
+                and not active.model_text
+                and not active.tool_started
+            ):
+                user_message = active.user_message + "\n" + text
+            else:
+                user_message = text
+            self._latest_submission += 1
+            submission = self._latest_submission
+        await self._cancel_active("superseded")
+        return submission, user_message
 
     async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
         task: asyncio.Task[None] | None = None

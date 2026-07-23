@@ -84,6 +84,23 @@ def test_plist_is_repository_owned_and_contains_no_environment_or_secret(tmp_pat
     assert b"TOKEN" not in encoded
 
 
+def test_user_test_plist_pins_live_haiku_without_copying_provider_credentials(
+    tmp_path,
+) -> None:
+    root = workspace(tmp_path)
+    live_runner = root / "scripts/run-live-sidecar.sh"
+    live_runner.write_text("#!/bin/sh\nexit 0\n")
+    live_runner.chmod(0o755)
+
+    payload = build_plist(root, SERVICES[0], "live-haiku-4.5")
+    encoded = plistlib.dumps(payload)
+
+    assert payload["ProgramArguments"] == [str(live_runner)]
+    assert payload["EnvironmentVariables"] == {"RADCLIFFE_ALLOW_CLOUD_MODELS": "1"}
+    assert b"not-copied-to-plist" not in encoded
+    assert b"API_KEY" not in encoded
+
+
 def test_workspace_validation_requires_private_environment_and_executable_runners(
     tmp_path,
 ) -> None:

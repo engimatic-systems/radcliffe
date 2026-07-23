@@ -210,6 +210,43 @@ class AnswerOrchestrator:
         yield SidecarEvent("complete", {})
 
 
+class ExactCountOrchestrator:
+    text = " ".join(
+        f"{', '.join(str(value) for value in range(start, min(start + 10, 61)))}."
+        for start in range(1, 61, 10)
+    )
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent("model_delta", {"text": self.text})
+        yield SidecarEvent("model_complete", {"text": self.text})
+        yield SidecarEvent("complete", {})
+
+
+class SpokenAlternativeOrchestrator:
+    display = (
+        "The job job_0123456789abcdef wrote /srv/radcliffe/output/report.json. "
+        "Details are at https://docs.example.test/jobs/0123456789."
+    )
+    spoken = (
+        "The job identifier and file path are shown in the conversation. "
+        "A link is also shown in the conversation."
+    )
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "model_delta",
+            {
+                "text": self.display,
+                "spokenText": self.spoken,
+                "spokenCategories": ["identifier", "path", "url", "not_registered"],
+            },
+        )
+        yield SidecarEvent("model_complete", {"text": self.display})
+        yield SidecarEvent("complete", {})
+
+
 class BudgetExhaustedOrchestrator:
     async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
         del request, cancelled
@@ -291,11 +328,40 @@ class FailedToolEventOrchestrator:
                 "result": {
                     "privatePrompt": "must not persist",
                     "arguments": {"jobId": "private-job-id"},
+                    "details": {
+                        "errorCode": "conflict",
+                        "recoverable": False,
+                        "toolName": "manage_job",
+                    },
                 },
             },
         )
         yield SidecarEvent("model_delta", {"text": "I corrected the tool call."})
         yield SidecarEvent("model_complete", {"text": "I corrected the tool call."})
+        yield SidecarEvent("complete", {})
+
+
+class RecoverableToolEventOrchestrator:
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del request, cancelled
+        yield SidecarEvent(
+            "tool_end",
+            {
+                "toolName": "configure",
+                "isError": True,
+                "result": {
+                    "content": [{"type": "text", "text": "redacted correction hint"}],
+                    "details": {
+                        "errorCode": "invalid_arguments",
+                        "field": "value",
+                        "recoverable": True,
+                        "toolName": "configure",
+                    },
+                },
+            },
+        )
+        yield SidecarEvent("model_delta", {"text": "I kept the current rate."})
+        yield SidecarEvent("model_complete", {"text": "I kept the current rate."})
         yield SidecarEvent("complete", {})
 
 
@@ -503,6 +569,22 @@ class InterruptibleOrchestrator:
             await asyncio.Event().wait()
         yield SidecarEvent("model_delta", {"text": "I am the local model."})
         yield SidecarEvent("model_complete", {"text": "I am the local model."})
+        yield SidecarEvent("complete", {})
+
+
+class PendingUserBatchOrchestrator:
+    def __init__(self) -> None:
+        self.first_started = asyncio.Event()
+        self.requests: list[dict[str, object]] = []
+
+    async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+        del cancelled
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            self.first_started.set()
+            await asyncio.Event().wait()
+        yield SidecarEvent("model_delta", {"text": "I started it."})
+        yield SidecarEvent("model_complete", {"text": "I started it."})
         yield SidecarEvent("complete", {})
 
 
@@ -721,6 +803,69 @@ async def test_model_sentences_stream_to_tts_and_are_persisted(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_exact_count_is_durable_and_every_item_reaches_tts(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        ExactCountOrchestrator(),
+        tts,
+        publisher,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Count from 1 to 60")
+
+    durable = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert durable.content.inline_text == ExactCountOrchestrator.text
+    assert "".join(tts.inputs) == ExactCountOrchestrator.text
+    assert b"".join(publisher.audio).decode() == ExactCountOrchestrator.text
+    observed = [
+        int(value.rstrip(".,"))
+        for value in ExactCountOrchestrator.text.split()
+        if value.rstrip(".,").isdigit()
+    ]
+    assert observed == list(range(1, 61))
+
+
+@pytest.mark.asyncio
+async def test_spoken_alternative_preserves_visual_detail_without_speaking_it(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    tts = FakeSynthesizer()
+    publisher = FakePublisher()
+    events = FakeEvents()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        SpokenAlternativeOrchestrator(),
+        tts,
+        publisher,
+        events,
+        telemetry=TelemetrySink(telemetry_path, strict=True),
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Summarize the result")
+
+    durable = next(item for item in await store.replay("s1") if item.source is SourceKind.MODEL)
+    assert durable.content.inline_text == SpokenAlternativeOrchestrator.display
+    assert next(item for item in events.messages if item.source is SourceKind.MODEL) == durable
+    assert "".join(tts.inputs) == SpokenAlternativeOrchestrator.spoken
+    assert b"".join(publisher.audio).decode() == SpokenAlternativeOrchestrator.spoken
+    assert durable.metadata["radcliffe.spoken_output.categories"] == "identifier,path,url"
+    telemetry = telemetry_path.read_text()
+    assert telemetry.count('"event":"spoken_output"') == 3
+    assert "job_0123456789abcdef" not in telemetry
+    assert "/srv/radcliffe/output/report.json" not in telemetry
+    assert "https://" not in telemetry
+
+
+@pytest.mark.asyncio
 async def test_turn_emits_content_free_correlated_phase_telemetry(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
@@ -896,7 +1041,7 @@ async def test_configuration_tool_result_is_live_auditable_and_excluded_from_mod
 
 
 @pytest.mark.asyncio
-async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry(
+async def test_failed_tool_result_persists_content_safe_model_context_and_telemetry(
     tmp_path,
 ) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
@@ -916,9 +1061,12 @@ async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry
 
     history = await store.replay("s1")
     audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
-    assert audit.content.inline_text == "Tool call failed"
+    assert audit.content.inline_text == (
+        "Tool call failed because the operation conflicts with the current state."
+    )
     assert audit.metadata["radcliffe.tool.name"] == "manage_job"
-    assert not context_replay((audit,))[0].include
+    assert audit.metadata["radcliffe.tool.error_code"] == "conflict"
+    assert context_replay((audit,))[0].include
     persisted = (tmp_path / "events.sqlite3").read_bytes()
     telemetry = telemetry_path.read_text()
     assert b"privatePrompt" not in persisted
@@ -927,6 +1075,35 @@ async def test_failed_tool_result_persists_only_content_free_audit_and_telemetry
     assert "private-job-id" not in telemetry
     assert '"event":"tool_call"' in telemetry
     assert '"outcome":"failed"' in telemetry
+
+
+@pytest.mark.asyncio
+async def test_recoverable_tool_rejection_avoids_generic_failure_message(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        RecoverableToolEventOrchestrator(),
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+    )
+    await pipeline.start()
+
+    await pipeline.handle_transcript("Speak slowly")
+
+    history = await store.replay("s1")
+    audit = next(item for item in history if item.metadata.get("radcliffe.event") == "tool_failure")
+    assert audit.content.inline_text == "Tool arguments rejected"
+    assert audit.metadata["radcliffe.tool.name"] == "configure"
+    assert audit.metadata["radcliffe.tool.outcome"] == "rejected"
+    assert audit.metadata["radcliffe.tool.error_code"] == "invalid_arguments"
+    assert audit.metadata["radcliffe.tool.invalid_field"] == "value"
+    assert context_replay((audit,))[0].include
+    assert all(message.content.inline_text != "Tool call failed" for message in events.messages)
+    assert b"redacted correction hint" not in (tmp_path / "events.sqlite3").read_bytes()
 
 
 @pytest.mark.asyncio
@@ -1518,6 +1695,69 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
 
 
 @pytest.mark.asyncio
+async def test_unanswered_user_fragments_form_one_current_instruction_batch(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = PendingUserBatchOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    first = asyncio.create_task(pipeline.handle_transcript("Use the Bancroft version exactly."))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+    await pipeline.handle_transcript("Run that as a background job.")
+    await asyncio.wait_for(first, timeout=1)
+
+    assert orchestrator.requests[1]["userMessage"] == (
+        "Use the Bancroft version exactly.\nRun that as a background job."
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_endpoint_continuation_keeps_both_user_fragments_in_context(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = InterruptibleOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    first = asyncio.create_task(pipeline.handle_transcript("Four score and seven years ago"))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+    await pipeline.barge_in(disposition="continued")
+    await asyncio.wait_for(first, timeout=1)
+    await pipeline.handle_transcript("our fathers brought forth on this continent")
+
+    second_packets = orchestrator.requests[1]["packets"]
+    assert isinstance(second_packets, list)
+    included = [packet["content"] for packet in second_packets if packet["include"]]
+    assert included == [
+        "Four score and seven years ago",
+        "One. ",
+        "our fathers brought forth on this continent",
+    ]
+    replay = await store.replay("s1")
+    dispositions = [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in replay
+        if TURN_DISPOSITION_METADATA in item.metadata
+    ]
+    assert dispositions == ["continued", "completed"]
+
+
+@pytest.mark.asyncio
 async def test_repeated_cancellation_races_never_reinclude_abandoned_prompts(tmp_path) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
@@ -1669,7 +1909,7 @@ async def test_punctuation_poor_output_streams_before_model_completion(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_job_announcement_uses_the_foreground_owner_without_entering_context(
+async def test_job_announcement_enters_context_before_the_next_user_turn(
     tmp_path,
 ) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
@@ -1696,6 +1936,9 @@ async def test_job_announcement_uses_the_foreground_owner_without_entering_conte
     outcome = await pipeline.announce_job(
         "job-event:job-1:3",
         JobAnnouncement.COMPLETE,
+        job_id="job-1",
+        status="succeeded",
+        detail_code="completed",
         foreground_quiet=lambda: True,
         claim=claim,
         release=release,
@@ -1705,7 +1948,31 @@ async def test_job_announcement_uses_the_foreground_owner_without_entering_conte
     assert claimed == [True]
     assert tts.inputs == ["Your background job is complete."]
     assert pipeline.engine.state is ConversationState.LISTENING
-    assert await store.replay("s1") == ()
+    replay = await store.replay("s1")
+    assert [item.source for item in replay] == [SourceKind.SYSTEM, SourceKind.CALL]
+    assert replay[0].content.inline_text == "Your background job is complete."
+    assert "job-1: succeeded" in (replay[1].content.inline_text or "")
+    assert all(packet.include for packet in context_replay(replay))
+
+    class RecordingOrchestrator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def turn(self, request, cancelled=None):
+            del cancelled
+            self.requests.append(request)
+            yield SidecarEvent("model_complete", {"text": "I can inspect it."})
+            yield SidecarEvent("complete", {})
+
+    recording = RecordingOrchestrator()
+    pipeline.orchestrator = recording
+    await pipeline.handle_transcript("What happened?")
+    packets = recording.requests[0]["packets"]
+    included = [packet for packet in packets if packet["include"]]
+    assert [packet["source"] for packet in included[-3:]] == ["system", "call", "user"]
+    assert included[-3]["content"] == "Your background job is complete."
+    assert "job-1: succeeded" in included[-2]["content"]
+    assert included[-1]["content"] == "What happened?"
 
 
 @pytest.mark.asyncio
@@ -1734,6 +2001,9 @@ async def test_job_announcement_rechecks_user_speech_after_claim(tmp_path) -> No
     outcome = await pipeline.announce_job(
         "job-event:job-1:3",
         JobAnnouncement.COMPLETE,
+        job_id="job-1",
+        status="succeeded",
+        detail_code="completed",
         foreground_quiet=lambda: quiet[0],
         claim=claim,
         release=release,
@@ -1768,6 +2038,9 @@ async def test_barge_in_interrupts_job_announcement_without_stale_audio(tmp_path
         pipeline.announce_job(
             "job-event:job-1:3",
             JobAnnouncement.COMPLETE,
+            job_id="job-1",
+            status="succeeded",
+            detail_code="completed",
             foreground_quiet=lambda: True,
             claim=claim,
             release=release,
@@ -1781,6 +2054,7 @@ async def test_barge_in_interrupts_job_announcement_without_stale_audio(tmp_path
     assert publisher.flushed
     assert pipeline.engine.state is ConversationState.LISTENING
     assert pipeline.notification_foreground_available()
+    assert await store.replay("s1") == ()
 
 
 @pytest.mark.asyncio
@@ -1849,6 +2123,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
     await store.migrate()
     events = FakeEvents()
     publisher = FakePublisher()
+    telemetry_path = tmp_path / "telemetry/events.jsonl"
     pipeline = VoicePipeline(
         "s1",
         store,
@@ -1856,6 +2131,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
         FakeSynthesizer(),
         publisher,
         events,
+        telemetry=TelemetrySink(telemetry_path, strict=True),
         client_playback_acknowledgements=True,
     )
     await pipeline.start()
@@ -1877,7 +2153,10 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
     assert pipeline.engine.state is ConversationState.SPEAKING
     assert pipeline.foreground_turn_active()
 
-    await pipeline.barge_in()
+    await pipeline.barge_in(
+        verifier="high_energy_fallback",
+        evidence_duration_ms=412.5,
+    )
     await asyncio.wait_for(turn, timeout=1)
 
     assert publisher.flushed
@@ -1924,3 +2203,18 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
             )
         ]
     assert statuses == ["flushed", "flushed"]
+    telemetry = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
+    correlated = [item for item in telemetry if item["operation"] == operation.operation_id]
+    assert any(
+        item["event"] == "barge_in"
+        and item["phase"] == "high_energy_fallback"
+        and item["duration_ms"] == 412.5
+        for item in correlated
+    )
+    assert [item["outcome"] for item in correlated if item["event"] == "playback_flush"] == [
+        "started",
+        "succeeded",
+    ]
+    assert any(
+        item["event"] == "playback" and item["outcome"] == "interrupted" for item in correlated
+    )

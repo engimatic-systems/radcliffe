@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: coopwilliams
 parent: rad-3se2
-tags: [radcliffe, android, voice, stt, whisper, regression]
+tags: [radcliffe, android, voice, stt, whisper, regression, operator-final-check]
 ---
 # Stop recurring silent-audio Thank you turns
 

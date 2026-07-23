@@ -126,6 +126,7 @@ class JsonLineJobProcess:
 
 class JsonLineJobLauncher:
     _ENVIRONMENT_KEYS = frozenset({"PATH", "LANG", "LC_ALL", "SSL_CERT_FILE"})
+    _PROVIDER_ENVIRONMENT_KEYS = frozenset({"ANTHROPIC_API_KEY"})
 
     def __init__(
         self,
@@ -134,6 +135,7 @@ class JsonLineJobLauncher:
         workspace_root: Path,
         max_output_bytes: int,
         base_environment: Mapping[str, str] | None = None,
+        provider_environment: Mapping[str, str] | None = None,
     ) -> None:
         if not command:
             raise JobExecutorConfigurationError("job executor command is required")
@@ -143,6 +145,15 @@ class JsonLineJobLauncher:
         source = base_environment if base_environment is not None else os.environ
         self.base_environment = {
             key: value for key, value in source.items() if key in self._ENVIRONMENT_KEYS
+        }
+        provider_source = provider_environment or {}
+        unexpected = set(provider_source) - self._PROVIDER_ENVIRONMENT_KEYS
+        if unexpected:
+            raise JobExecutorConfigurationError("unsupported job provider environment key")
+        self.provider_environment = {
+            key: value
+            for key, value in provider_source.items()
+            if key in self._PROVIDER_ENVIRONMENT_KEYS and value
         }
 
     async def __call__(self, claim: JobClaim) -> JobProcess:
@@ -168,6 +179,7 @@ class JsonLineJobLauncher:
         transcript = os.fdopen(descriptor, "ab", buffering=0)
         environment = {
             **self.base_environment,
+            **self.provider_environment,
             "HOME": str(workspace),
             "TMPDIR": str(temporary),
             "XDG_CACHE_HOME": str(workspace / ".cache"),
@@ -289,6 +301,11 @@ class JobExecutorSupervisor:
                         "jobId": claim.record.job_id,
                         "attempt": claim.record.attempt,
                         "instruction": claim.instruction,
+                        "userMessage": claim.user_message,
+                        "relatedLinks": [
+                            {"label": item.label, "locator": item.locator}
+                            for item in claim.related_links
+                        ],
                         "followUps": [
                             {"id": item.follow_up_id, "instruction": item.instruction}
                             for item in claim.follow_ups

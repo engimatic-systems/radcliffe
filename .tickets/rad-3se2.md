@@ -7,7 +7,7 @@ created: 2026-07-14T02:46:46Z
 type: epic
 priority: 1
 assignee: coopwilliams
-tags: [radcliffe, milestone-2, sessions, android, voice]
+tags: [radcliffe, milestone-2, sessions, android, voice, operator-final-check]
 ---
 # Milestone 2: durable sessions and deterministic conversation control
 

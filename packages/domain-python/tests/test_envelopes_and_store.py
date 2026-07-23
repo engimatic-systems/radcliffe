@@ -259,7 +259,7 @@ def test_configuration_audit_is_durable_but_not_model_visible() -> None:
     assert packet.content == "[excluded: configuration audit]"
 
 
-def test_tool_failure_audit_is_durable_but_not_model_visible() -> None:
+def test_content_safe_tool_failure_audit_is_durable_model_context() -> None:
     audit = MessageEnvelope.text(
         session_id="s1",
         sequence=1,
@@ -274,9 +274,9 @@ def test_tool_failure_audit_is_durable_but_not_model_visible() -> None:
 
     packet = context_projection(audit)
 
-    assert not packet.include
-    assert "Tool call failed" not in packet.content
-    assert packet.content == "[excluded: tool failure audit]"
+    assert packet.include
+    assert packet.content == "Tool call failed"
+    assert dict(packet.annotations)["radcliffe.tool.name"] == "manage_job"
 
 
 def test_background_job_reference_is_model_visible_tool_state() -> None:

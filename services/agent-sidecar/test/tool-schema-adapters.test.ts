@@ -80,7 +80,7 @@ describe("model tool schema adapters", () => {
       properties: {
         operation: {
           type: "string",
-          enum: ["status", "follow_up", "set_priority", "cancel"],
+          enum: ["status", "follow_up", "set_priority", "cancel", "retry"],
         },
       },
     });
