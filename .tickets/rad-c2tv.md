@@ -2,7 +2,7 @@
 id: rad-c2tv
 status: in_progress
 deps: []
-links: []
+links: [rad-0ax4]
 created: 2026-07-21T04:04:49Z
 type: feature
 priority: 2
