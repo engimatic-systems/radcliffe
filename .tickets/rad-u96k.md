@@ -1,6 +1,6 @@
 ---
 id: rad-u96k
-status: in_progress
+status: closed
 deps: []
 links: [rad-25m0, rad-e9wi, rad-rnt5]
 created: 2026-07-22T14:23:06Z
@@ -33,3 +33,7 @@ Live credentialed spike (2026-07-22): claude-sonnet-4-6, effort=low, max_turns=8
 **2026-07-23T02:38:29Z**
 
 Follow-up hardening after the phone HN/Medici test: removed the Agent SDK `--bare` flag that suppressed native WebSearch/WebFetch and added a runtime init-contract assertion for both tools. Every initial/retry attempt now receives one private `user_message` equal to the complete current user instruction batch; unanswered fragments are joined, while any model output or tool action closes the batch, and no prior user turn is selected. Trafilatura downloads now retain a bounded private link manifest whose title/URL pairs are promoted and snapshotted into later same-session attempts. Attempt context is migration-backed, backup-covered, and excluded from public job records/events. Acknowledgement grounding was intentionally left unchanged. Python and Node gates passed (368 Python tests, 106 sidecar tests); awaiting a deployed phone verification before closure.
+
+**2026-07-23T02:51:07Z**
+
+Operator confirmed the deployed phone workflow works. Acceptance criteria satisfied; closing the ticket.
