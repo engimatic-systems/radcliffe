@@ -5,7 +5,7 @@ deps: []
 links: []
 created: 2026-07-21T04:04:49Z
 type: feature
-priority: 2
+priority: 3
 assignee: coopwilliams
 parent: rad-cnrg
 tags: [android, accessibility, spoken-output, operator-final-check]
@@ -21,3 +21,9 @@ Mark messages whose speech differed from display, expose a concise accessible la
 ## Acceptance Criteria
 
 TalkBack announces that visual technical detail is available without reading raw identifiers by default; the user can explicitly request exact reading; ordinary touch and voice flows are unchanged; a physical-phone TalkBack check verifies focus order, labels, and exact-reading escape hatch.
+
+## Notes
+
+**2026-07-25T13:42:34Z**
+
+Product triage: accessibility and TalkBack work are not a current priority. This standalone affordance does not block voice reliability or background-job correctness, so defer it to P3.
