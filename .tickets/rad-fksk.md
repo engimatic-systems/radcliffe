@@ -2,7 +2,7 @@
 id: rad-fksk
 status: closed
 deps: []
-links: [rad-bbep]
+links: [rad-bbep, rad-57f3]
 created: 2026-07-25T17:44:58Z
 type: bug
 priority: 1

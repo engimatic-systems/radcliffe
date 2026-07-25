@@ -33,7 +33,8 @@ from radcliffe_media.sidecar import SidecarEvent
 ARTICLE = Path(__file__).resolve().parents[3] / "fixtures" / "sources" / "gwern-nicotine.md"
 # The sentence the user was hearing when they interrupted, in the real session.
 INTERRUPTED_AT = 9
-FIRST_SENTENCE = "[IQ](/doc/iq/index)"
+# Spoken form, not the raw markdown: the render plan resolves link syntax before playback.
+FIRST_SENTENCE = "IQ,nootropic"
 RESUME_SENTENCE = "Less obvious is that nicotine"
 
 

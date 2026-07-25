@@ -220,19 +220,83 @@ def with_delivery_rate_for_all(
     )
 
 
+_LINK_SHAPE = r"\[[^\]\n]*\]\([^)\n]*\)"
+# A word run straight into a link, e.g. "affects[tons of systems](...)" — unwrapping the
+# anchor without repair would say "affectstons".
+_LINK_GLUED_BEFORE = re.compile(rf"(\w)(?={_LINK_SHAPE})")
+_LINK_GLUED_AFTER = re.compile(rf"({_LINK_SHAPE})(\w)")
+_IMAGE = re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)")
+_INLINE_LINK = re.compile(r"(?<!!)\[([^\]\n]*)\]\([^)\n]*\)")
+_REFERENCE_LINK = re.compile(r"(?<!!)\[([^\]\n]*)\]\[[^\]\n]*\]")
+_REFERENCE_DEFINITION = re.compile(r"(?m)^[ \t]*\[[^\]\n]+\]:[ \t]*\S+.*$")
+_AUTOLINK = re.compile(r"<(?:https?|mailto):[^>\s]*>")
+_BARE_URL = re.compile(r"(?<![\w@])(?:https?://|www\.)\S+")
+_INLINE_CODE = re.compile(r"`([^`\n]+)`")
+_STRONG = re.compile(r"\*\*([^*\n]+)\*\*|__([^_\n]+)__")
+_EMPHASIS = re.compile(r"(?<!\w)\*([^*\n]+)\*(?!\w)|(?<!\w)_([^_\n]+)_(?!\w)")
+# Left over after balanced pairs are resolved: unclosed "**" and combined "***". A run of
+# two or more asterisks is never intended prose, unlike a lone "*", which is left alone.
+_ORPHAN_EMPHASIS = re.compile(r"\*{2,}")
+_SPACE_BEFORE_PUNCTUATION = re.compile(r"[ \t]+([.,;:!?)\]])")
+_SPACE_AFTER_OPENING = re.compile(r"([(\[])[ \t]+")
+_REPEATED_SPACE = re.compile(r"[ \t]{2,}")
+_EMPTY_WRAPPER = re.compile(r"\(\s*\)|\[\s*\]")
+
+
+def speakable_text(text: str) -> str:
+    """Render Markdown source text as the words a listener should actually hear.
+
+    Markup is an encoding, not the author's prose: speaking a URL or a bracket aloud is
+    less faithful than speaking the words around it, not more. So link *syntax* is parsed
+    and resolved to its label rather than stripped character by character — a bare
+    parenthetical or a bracketed aside matches no link grammar and is left untouched.
+
+    This never changes stored content. It applies to the render plan only, so
+    canonical bytes and the source hash are unaffected.
+    """
+
+    if not text:
+        return text
+    cleaned = _REFERENCE_DEFINITION.sub("", text)
+    original = text
+    cleaned = _LINK_GLUED_BEFORE.sub(r"\1 ", cleaned)
+    cleaned = _LINK_GLUED_AFTER.sub(r"\1 \2", cleaned)
+    cleaned = _IMAGE.sub(lambda match: match.group(1), cleaned)
+    cleaned = _INLINE_LINK.sub(lambda match: match.group(1), cleaned)
+    cleaned = _REFERENCE_LINK.sub(lambda match: match.group(1), cleaned)
+    cleaned = _AUTOLINK.sub("", cleaned)
+    cleaned = _BARE_URL.sub("", cleaned)
+    cleaned = _INLINE_CODE.sub(lambda match: match.group(1), cleaned)
+    cleaned = _STRONG.sub(lambda match: match.group(1) or match.group(2), cleaned)
+    cleaned = _EMPHASIS.sub(lambda match: match.group(1) or match.group(2), cleaned)
+    cleaned = _ORPHAN_EMPHASIS.sub("", cleaned)
+    cleaned = _EMPTY_WRAPPER.sub("", cleaned)
+    if cleaned == original:
+        # No markup here, so there is nothing to make speakable and nothing to repair.
+        # Returning the input untouched is what keeps plain prose byte-exact: its spacing
+        # belongs to the source, not to us.
+        return original
+    cleaned = _SPACE_AFTER_OPENING.sub(r"\1", cleaned)
+    cleaned = _SPACE_BEFORE_PUNCTUATION.sub(r"\1", cleaned)
+    return _REPEATED_SPACE.sub(" ", cleaned)
+
+
 def render_projection(envelope: MessageEnvelope) -> RenderPlan:
     text = envelope.content.inline_text or ""
     speak = envelope.source in {SourceKind.MODEL, SourceKind.TEXT_SOURCE}
     segments: tuple[RenderSegment, ...] = ()
     if speak:
         rendered: list[RenderSegment] = []
+        # Normalize per sentence, after splitting: boundary indices stay anchored to the
+        # canonical document, so positions recorded before this existed remain valid.
+        normalize = envelope.source is SourceKind.TEXT_SOURCE
         for index, sentence in enumerate(_sentences(text)):
             metadata_key = delivery_metadata_key(index)
             rendered.append(
                 RenderSegment(
                     segment_id=f"{envelope.message_id}:{index}",
                     boundary_index=index,
-                    canonical_text=sentence,
+                    canonical_text=speakable_text(sentence) if normalize else sentence,
                     delivery=SpeechDelivery.parse(envelope.metadata.get(metadata_key)),
                     delivery_overridden=metadata_key in envelope.metadata,
                 )

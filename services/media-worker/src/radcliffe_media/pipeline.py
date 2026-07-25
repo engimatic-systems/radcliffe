@@ -1068,6 +1068,11 @@ class VoicePipeline:
         for segment in plan.segments:
             if segment.boundary_index < turn.next_source_boundary:
                 continue
+            if not segment.canonical_text.strip():
+                # Navigation and link-only lines normalize away to nothing. Advance the
+                # boundary anyway so resume positions keep lining up with the document.
+                turn.next_source_boundary = segment.boundary_index + 1
+                continue
             await self._speak(
                 segment.canonical_text,
                 segment.segment_id,
