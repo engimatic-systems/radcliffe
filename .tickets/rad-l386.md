@@ -56,3 +56,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-25T16:31:26Z**
 
 2026-07-25 physical regression ses_802b2b0bd8b7d1b0ce276b3d3e990dd8: Haiku selected read_job_source at least six times for succeeded job job_ae71375432f558547c819b90d4e97148, but every call returned not_found and the model fell back to conversational output. The promoted source exists at hn_headlines.md. Root cause: the prompt/tool contract advertises Markdown artifact filenames while _resolve_job_source matched only source names/entity IDs; manage_job also omitted the source path/artifact mapping from modelContent. Reopened pending a real foreground Haiku read_job_source acceptance.
+
+**2026-07-25T16:35:37Z**
+
+2026-07-25 live foreground acceptance on revision 1fcb732 passed with pinned claude-haiku-4-5-20251001 against the exact failed phone job. Given only the chronological succeeded-job outcome and natural request 'Please read the completed Hacker News headlines aloud,' Haiku's first and only tool was read_job_source with reference 'Hacker News headlines' plus the hidden exact job ID. The gateway returned a canonical source envelope with SHA-256 b24c944c55e6885269bb3f71e30f4d46750ace4d9cb3314e9e4dbf2beb49c3ff; model output was not accepted as evidence. Provider cost was about USD 0.005564. Ticket remains in progress for the operator's phone/TTS confirmation.
