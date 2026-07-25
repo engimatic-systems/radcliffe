@@ -22,6 +22,7 @@ PREVIEW_CHUNKS = 5
 SENTENCES_PER_CHUNK = 3
 MAX_RELATED_LINKS = 100
 USER_AGENT = "RadcliffePagePreview/1.0"
+MARKDOWN_LINK = re.compile(r"(?<!!)\[([^\]\n]+)\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]*)?\)")
 STOP_WORDS = frozenset(
     {
         "about",
@@ -96,6 +97,27 @@ def related_links(html: str, base_url: str) -> tuple[dict[str, str], ...]:
     return tuple(result)
 
 
+def related_markdown_links(markdown: str, base_url: str) -> tuple[dict[str, str], ...]:
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in MARKDOWN_LINK.finditer(markdown):
+        label = re.sub(r"<[^>]+>|[*_`]", "", match.group(1))
+        label = re.sub(r"\s+", " ", label).strip().strip("\"'")
+        if not label:
+            continue
+        try:
+            locator = normalized_public_url(urljoin(base_url, match.group(2) or match.group(3)))
+        except PreviewError:
+            continue
+        if locator in seen:
+            continue
+        seen.add(locator)
+        result.append({"label": label[:300], "locator": locator[:2_048]})
+        if len(result) >= MAX_RELATED_LINKS:
+            break
+    return tuple(result)
+
+
 def normalized_public_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     if (
@@ -111,12 +133,20 @@ def normalized_public_url(value: str) -> str:
 def fetch_page(url: str, *, timeout_seconds: int = 45) -> tuple[str, str, str, bytes]:
     request = urllib.request.Request(
         normalized_public_url(url),
-        headers={"accept": "text/html,application/xhtml+xml,text/plain", "user-agent": USER_AGENT},
+        headers={
+            "accept": "text/html,application/xhtml+xml,text/markdown,text/plain",
+            "user-agent": USER_AGENT,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             media_type = response.headers.get_content_type().lower()
-            if media_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+            if media_type not in {
+                "text/html",
+                "application/xhtml+xml",
+                "text/markdown",
+                "text/plain",
+            }:
                 raise PreviewError("unsupported_content_type")
             declared = response.headers.get("content-length")
             if declared is not None:
@@ -167,6 +197,30 @@ def extracted_page(html: str, url: str) -> tuple[str | None, str]:
     return title, normalized[:MAX_EXTRACTED_CHARS]
 
 
+def extracted_content(content: str, url: str, media_type: str) -> tuple[str | None, str]:
+    if media_type not in {"text/markdown", "text/plain"}:
+        return extracted_page(content, url)
+    normalized = re.sub(r"[\t\f\v ]+", " ", content)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    if not normalized:
+        raise PreviewError("no_extractable_text")
+    title: str | None = None
+    if media_type == "text/markdown":
+        frontmatter = re.match(r"\A---\s*\n(.*?)(?:\n(?:---|\.\.\.)\s*(?:\n|$))", normalized, re.S)
+        frontmatter_title = (
+            re.search(r"(?m)^title:\s*(.+?)\s*$", frontmatter.group(1))
+            if frontmatter is not None
+            else None
+        )
+        if frontmatter_title is not None:
+            title = frontmatter_title.group(1).strip().strip("\"'")[:300] or None
+        if title is None:
+            heading = re.search(r"(?m)^#\s+(.+?)\s*$", normalized)
+            if heading is not None:
+                title = heading.group(1).strip()[:300] or None
+    return title, normalized[:MAX_EXTRACTED_CHARS]
+
+
 def query_terms(query: str) -> tuple[str, ...]:
     terms = {
         term.casefold()
@@ -196,7 +250,37 @@ def _window(values: list[str], start: int) -> str:
     return f"{chunk[: MAX_CHUNK_CHARS - 1].rstrip()}…"
 
 
-def preview_chunks(text: str, query: str, *, count: int = PREVIEW_CHUNKS) -> tuple[str, ...]:
+def markdown_section_chunks(text: str) -> tuple[str, ...]:
+    lines = [line.strip() for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        if re.match(r"^#{1,6}\s+\S", line) is None:
+            continue
+        section = [line]
+        for candidate in lines[index + 1 :]:
+            if re.match(r"^#{1,6}\s+\S", candidate):
+                break
+            if not candidate or candidate.startswith("<!--") or candidate in {"-->", "</div>"}:
+                continue
+            section.append(candidate)
+            if len(section) >= SENTENCES_PER_CHUNK + 1:
+                break
+        if len(section) > 1:
+            chunk = " ".join(section)
+            return (
+                chunk
+                if len(chunk) <= MAX_CHUNK_CHARS
+                else f"{chunk[: MAX_CHUNK_CHARS - 1].rstrip()}…",
+            )
+    return ()
+
+
+def preview_chunks(
+    text: str,
+    query: str,
+    *,
+    count: int = PREVIEW_CHUNKS,
+    preferred: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     values = sentences(text)
     if not values:
         return ()
@@ -233,7 +317,17 @@ def preview_chunks(text: str, query: str, *, count: int = PREVIEW_CHUNKS) -> tup
             selected.append(start)
         if len(selected) >= count:
             break
-    chunks = tuple(_window(values, start) for start in sorted(selected[:count]))
+    candidates = (*preferred, *(_window(values, start) for start in sorted(selected[:count])))
+    chunks: list[str] = []
+    seen_chunks: set[str] = set()
+    for chunk in candidates:
+        normalized = re.sub(r"\s+", " ", chunk).strip()
+        marker = normalized.casefold()
+        if normalized and marker not in seen_chunks:
+            chunks.append(normalized)
+            seen_chunks.add(marker)
+        if len(chunks) >= count:
+            break
     bounded: list[str] = []
     used = 0
     for chunk in chunks:
@@ -254,7 +348,7 @@ def _write_private(path: Path, content: bytes) -> None:
 
 def build_preview(url: str, query: str, workspace: Path) -> dict[str, object]:
     final_url, media_type, html, encoded = fetch_page(url)
-    title, extracted = extracted_page(html, final_url)
+    title, extracted = extracted_content(html, final_url, media_type)
     digest = hashlib.sha256(final_url.encode() + b"\0" + encoded).hexdigest()[:16]
     pages = workspace.resolve() / "pages"
     pages.mkdir(mode=0o700, exist_ok=True)
@@ -268,7 +362,12 @@ def build_preview(url: str, query: str, workspace: Path) -> dict[str, object]:
         _write_private(html_path, encoded)
     if not text_path.exists():
         _write_private(text_path, extracted.encode())
-    links = related_links(html, final_url) if media_type != "text/plain" else ()
+    if media_type in {"text/html", "application/xhtml+xml"}:
+        links = related_links(html, final_url)
+    elif media_type == "text/markdown":
+        links = related_markdown_links(html, final_url)
+    else:
+        links = ()
     if not links_path.exists():
         _write_private(
             links_path,
@@ -282,7 +381,11 @@ def build_preview(url: str, query: str, workspace: Path) -> dict[str, object]:
                 + "\n"
             ).encode(),
         )
-    chunks = preview_chunks(extracted, query)
+    chunks = preview_chunks(
+        extracted,
+        query,
+        preferred=markdown_section_chunks(extracted) if media_type == "text/markdown" else (),
+    )
     return {
         "schemaVersion": 1,
         "untrusted": True,

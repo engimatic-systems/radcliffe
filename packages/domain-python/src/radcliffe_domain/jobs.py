@@ -268,7 +268,7 @@ class JobStore:
         notification_policy: JobNotificationPolicy = JobNotificationPolicy.NEXT_SAFE_PAUSE,
         priority: int = 2,
         budget_microusd: int | None = None,
-        max_runtime_seconds: int = 3600,
+        max_runtime_seconds: int = 300,
     ) -> JobMutationResult:
         if not instruction or len(instruction) > 12_000:
             raise JobError("job instruction must contain 1 through 12000 characters")

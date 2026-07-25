@@ -142,7 +142,6 @@ def test_run_job_accepts_promptly_replays_and_excludes_private_context(tmp_path)
                 "notificationPolicy": "next_safe_pause",
                 "priority": 1,
                 "budgetUsd": 0.5,
-                "maxRuntimeSeconds": 3600,
             },
         )
         elapsed = time.monotonic() - started
@@ -155,7 +154,6 @@ def test_run_job_accepts_promptly_replays_and_excludes_private_context(tmp_path)
                 "notificationPolicy": "next_safe_pause",
                 "priority": 1,
                 "budgetUsd": 0.5,
-                "maxRuntimeSeconds": 3600,
             },
         )
 
@@ -184,6 +182,7 @@ def test_run_job_accepts_promptly_replays_and_excludes_private_context(tmp_path)
         assert listed.status_code == 200
         assert listed.json()["items"][0]["job_id"] == job_id
         assert listed.json()["items"][0]["budget_usd"] == 0.5
+        assert listed.json()["items"][0]["max_runtime_seconds"] == 300
         assert "private" not in listed.text
         assert client.get("/v1/sessions/session-1/jobs").status_code == 401
 

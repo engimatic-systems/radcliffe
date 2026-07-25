@@ -164,7 +164,6 @@ export type ToolExecutionRequest =
         notificationPolicy?: JobNotificationPolicy;
         priority?: number;
         budgetUsd?: number;
-        maxRuntimeSeconds?: number;
       };
     })
   | (ToolExecutionRequestBase & {

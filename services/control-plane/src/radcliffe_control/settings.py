@@ -51,3 +51,4 @@ class Settings(BaseSettings):
     job_executor_lease_seconds: int = Field(default=30, ge=1, le=300)
     job_executor_stop_timeout_seconds: float = Field(default=5, ge=0.05, le=30)
     job_executor_max_output_bytes: int = Field(default=1_048_576, ge=1024, le=16_777_216)
+    job_executor_max_runtime_seconds: int = Field(default=300, ge=60, le=86_400)
