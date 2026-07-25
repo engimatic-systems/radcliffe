@@ -1,6 +1,6 @@
 ---
 id: rad-bbep
-status: in_progress
+status: closed
 deps: [rad-fksk]
 links: [rad-fksk]
 created: 2026-07-25T17:45:09Z
@@ -34,3 +34,7 @@ Source context packets show the model the boundary already read and the next bou
 2026-07-25 implemented the addressable reading position. label() in services/agent-sidecar/src/orchestrator.ts now renders the boundary already read and the next boundary to resume at for text_source packets, so the heard buffer the model already receives carries a usable position instead of dropping it. read_source and read_job_source accept an optional startAtBoundary through the sidecar schema, argument preparation (including the integer-valued string local models emit), the control-plane request models, the tool gateway, and the tool result details; it round-trips through tool-call replay so a duplicate call resumes identically. An explicit boundary overrides the ledger, which is what makes backing up and skipping ahead expressible; a boundary past the end of the source fails visibly rather than silently restarting.
 
 Covered by services/media-worker/tests/test_source_resume.py (plain resume, explicit resume, back up, skip ahead, out-of-range rejection, unheard document), packages/domain-python/tests/test_resume_boundary.py, and sidecar label/argument tests.
+
+**2026-07-25T21:36:22Z**
+
+2026-07-25 user acceptance passed on the Pixel with revision da0027b. This path had never been deployed before: the sidecar dist predated the change, which is why earlier phone attempts silently dropped the requested position. After rebuilding, repositioning worked in ses_c3ef928b38a19c18d656c8d145d6986c - boundaries moved both forward and backward across calls (42-43 then 43-44, and 60-63 then 63-65) rather than only advancing to the high-water mark, which is the affordance the ledger alone cannot express. The user confirmed fluent back-and-forth control during reading. Note for follow-up: the model still needed explicit instruction about tool usage on the first conversation of the session; a second conversation with looser wording had the background job summarize rather than extract, which the user is addressing by tightening the job wording. Closing.

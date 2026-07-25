@@ -1,6 +1,6 @@
 ---
 id: rad-fksk
-status: in_progress
+status: closed
 deps: []
 links: [rad-bbep]
 created: 2026-07-25T17:44:58Z
@@ -34,3 +34,7 @@ Resume position is resolved from the durable heard ledger by content hash, not b
 2026-07-25 implemented content-keyed resume. radcliffe_domain.projection gains heard_boundary/resume_boundary, which recover the furthest heard sentence for a document from the heard: ledger by content hash. VoicePipeline._persisted_source_boundary now takes the max of the existing per-segment acknowledgement lookup and the content-keyed lookup, clamped to the render plan, so pause/resume keeps its exact prior behaviour while a fresh read_source call for the same bytes continues instead of restarting. The tool_end path resolves a start boundary before speaking rather than always starting at zero.
 
 Verified against the reported failure: services/media-worker/tests/test_source_resume.py replays ses_853b2faaef57834a4319a00bd0adb0f6 from fixtures/sources/gwern-nicotine.md with no download or background job. Reverting the resolution to the old behaviour fails the plain-resume case with 'assert 0 == (9 + 1)', the same restart-at-sentence-zero seen on the Pixel. Full make check green: 389 Python passed (1 skipped), 109 sidecar tests, Android unit tests and lint.
+
+**2026-07-25T21:36:22Z**
+
+2026-07-25 user acceptance passed on the Pixel with revision da0027b. In ses_c3ef928b38a19c18d656c8d145d6986c the reader served one document (sha f70184a27d) across nine distinct read_source call IDs, and only the first began at boundary 0: subsequent calls resumed at 10, 11, 20, 20, 42, 43, 60, and 63. A tenth call read a different document (sha 38fb19d83f) at boundary 0, after which the original resumed at 43-44 rather than restarting, which is the content-keyed behaviour this ticket specifies: position is scoped to the document, not the call. The user reported going back and forth fluently once reading began. Closing.
