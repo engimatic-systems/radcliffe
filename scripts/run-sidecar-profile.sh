@@ -30,17 +30,17 @@ case "$profile" in
     unset ANTHROPIC_API_KEY OPENAI_API_KEY
     unset RADCLIFFE_ANTHROPIC_API_KEY RADCLIFFE_OPENAI_API_KEY
     ;;
-  live-haiku-4.5)
+  live-sonnet-5)
     if [[ "${RADCLIFFE_ALLOW_CLOUD_MODELS:-0}" != "1" ]]; then
       echo "Cloud model profile requires RADCLIFFE_ALLOW_CLOUD_MODELS=1 for this approved run" >&2
       exit 1
     fi
     if [[ -z "${RADCLIFFE_ANTHROPIC_API_KEY:-}" ]]; then
-      echo "Live Haiku profile requires the protected Radcliffe Anthropic key" >&2
+      echo "Live Sonnet profile requires the protected Radcliffe Anthropic key" >&2
       exit 1
     fi
     export RADCLIFFE_MODEL_PROVIDER=anthropic
-    export RADCLIFFE_MODEL_ID=claude-haiku-4-5-20251001
+    export RADCLIFFE_MODEL_ID=claude-sonnet-5
     export ANTHROPIC_API_KEY="$RADCLIFFE_ANTHROPIC_API_KEY"
     unset RADCLIFFE_ANTHROPIC_API_KEY OPENAI_API_KEY RADCLIFFE_OPENAI_API_KEY
     echo "Cloud profile active: conversation context is sent to Anthropic; no local fallback is automatic." >&2

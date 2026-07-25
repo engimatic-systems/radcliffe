@@ -41,8 +41,8 @@ describe("model provider cost guard", () => {
 
   it("fails closed if the pinned model pricing or context contract drifts", () => {
     const reviewed = {
-      contextWindow: 200_000,
-      cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+      contextWindow: 1_000_000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
     };
 
     expect(() => assertAnthropicDebugModelContract(reviewed)).not.toThrow();

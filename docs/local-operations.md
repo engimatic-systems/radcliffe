@@ -2,13 +2,13 @@
 
 This runbook operates the private single-owner macOS profile. Deterministic
 development keeps cloud providers disabled, while every operator/user acceptance
-run explicitly activates pinned Haiku for foreground conversation and an approved,
+run explicitly activates pinned Sonnet 5 for foreground conversation and an approved,
 locally pinned Anthropic background executor. Qwen is retained only as a deprecated
 development selector.
 
 `make services-install-local` installs the deprecated local-only sidecar and can
 be used for deterministic development. It must not be used for user acceptance.
-`make services-install-user-test` installs the separate pinned Haiku runner and
+`make services-install-user-test` installs the separate pinned Sonnet 5 runner and
 an owner-visible, non-secret cloud opt-in in the LaunchAgent; provider credentials
 remain only in protected `var/.env`.
 

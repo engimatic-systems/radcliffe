@@ -18,7 +18,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 SIDECAR_PROFILES = {
     "local-ollama": ("scripts/run-local-sidecar.sh", {}),
-    "live-haiku-4.5": (
+    "live-sonnet-5": (
         "scripts/run-live-sidecar.sh",
         {"RADCLIFFE_ALLOW_CLOUD_MODELS": "1"},
     ),

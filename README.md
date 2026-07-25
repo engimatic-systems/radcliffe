@@ -125,7 +125,7 @@ foreground-service behavior.
 
 This profile is retained as a deprecated, explicit development path. Qwen output
 is not accepted as operator/user-test evidence; deterministic tests should use
-fakes, and all physical acceptance uses the Haiku profile below.
+fakes, and all physical acceptance uses the Sonnet profile below.
 
 The LAN launcher defaults are:
 
@@ -165,7 +165,7 @@ a cloud model.
 ### Cloud-backed live-debug profile
 
 The separate `scripts/run-live-sidecar.sh` profile pins Anthropic
-`claude-haiku-4-5-20251001`. It starts only when the owner-only `var/.env`
+`claude-sonnet-5`. It starts only when the owner-only `var/.env`
 contains both `RADCLIFFE_ALLOW_CLOUD_MODELS=1` and the protected
 `RADCLIFFE_ANTHROPIC_API_KEY`. The launcher bridges that value into the one
 provider variable, removes the Radcliffe key name before starting Node, and
@@ -182,8 +182,8 @@ Provider, pinned model, accounting basis, and aggregate budget usage appear in
 `/healthz`, never prompts, responses, credentials, or raw session IDs.
 
 After a user separately authorizes one paid acceptance request, the doubly
-gated `make smoke-haiku-paid` records only provider, model, token usage, and
-estimated cost under `artifacts/cloud-haiku-smoke/`. It will not run without
+gated `make smoke-cloud-paid` records only provider, model, token usage, and
+estimated cost under `artifacts/cloud-paid-smoke/`. It will not run without
 both the normal cloud opt-in and the one-run approval phrase documented in the
 script. Ordinary tests use fakes and make no Anthropic calls.
 
@@ -195,8 +195,8 @@ make services-install-user-test
 make check-background-jobs-local
 ```
 
-The first command pins the foreground LaunchAgent to Haiku. The second rejects
-the handoff unless the foreground sidecar is pinned to Haiku and the background broker's
+The first command pins the foreground LaunchAgent to Sonnet. The second rejects
+the handoff unless the foreground sidecar is pinned to Sonnet and the background broker's
 locally configured Anthropic model, backend, and sandbox image agree with its command; it never
 makes a paid model request.
 The Qwen broker remains available only through an explicit deprecated
@@ -426,4 +426,4 @@ Ordinary model output also passes through the bounded
 remains in the durable model envelope and Android timeline, while TTS receives
 a truthful category-level alternative. Explicit exact/verbatim requests and
 canonical source envelopes bypass this substitution. The content-free Qwen and
-Haiku evaluation entry point is `scripts/spoken-output-conformance.py`.
+Cloud evaluation entry point is `scripts/spoken-output-conformance.py`.

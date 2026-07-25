@@ -2,4 +2,4 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec "$root/scripts/run-sidecar-profile.sh" live-haiku-4.5
+exec "$root/scripts/run-sidecar-profile.sh" live-sonnet-5

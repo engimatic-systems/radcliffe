@@ -21,7 +21,7 @@ def healthy_payloads(revision: str):
             "capabilities": ["background_jobs_v1", "promoted_job_results_v1"],
             "background_executor_backend": "custom-loop",
             "background_model_provider": "anthropic",
-            "background_model_id": "claude-haiku-4-5-20251001",
+            "background_model_id": "claude-sonnet-5",
         },
         "control_readiness": {
             "status": "ready",
@@ -38,7 +38,7 @@ def healthy_payloads(revision: str):
             "build_revision": revision,
             "capabilities": {"tools": ["list_sources", "run_job", "manage_job"]},
             "provider": "anthropic",
-            "model_id": "claude-haiku-4-5-20251001",
+            "model_id": "claude-sonnet-5",
             "data_boundary": "cloud_anthropic",
         },
         "image_available": True,
@@ -97,7 +97,7 @@ def test_preflight_rejects_qwen_in_either_user_test_model_role() -> None:
 
     checks = PREFLIGHT.validate_live(expected_revision="a" * 40, **payloads)
 
-    assert codes(checks)["foreground_model"] == "foreground_model_not_haiku"
+    assert codes(checks)["foreground_model"] == "foreground_model_not_pinned"
     assert codes(checks)["background_model"] == "background_model_not_approved"
 
 
@@ -105,7 +105,7 @@ def test_job_model_readiness_rejects_a_stale_embedded_sandbox_image() -> None:
     environment = {
         "RADCLIFFE_JOB_EXECUTOR_COMMAND": (
             "python -m radcliffe_control.sandbox_agent --provider anthropic "
-            "--model claude-haiku-4-5-20251001 --image radcliffe-job-sandbox:current"
+            "--model claude-sonnet-5 --image radcliffe-job-sandbox:current"
         ),
         "RADCLIFFE_JOB_SANDBOX_IMAGE": "radcliffe-job-sandbox:current",
         "RADCLIFFE_JOB_MODEL_PROVIDER": "anthropic",

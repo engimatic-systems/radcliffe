@@ -8,7 +8,7 @@
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
 	benchmark-stt-local benchmark-private-stt-local demo build-voice-dashboard \
-	generate-protocol smoke-haiku-paid test-python test-node
+	generate-protocol smoke-cloud-paid test-python test-node
 
 bootstrap:
 	uv sync --all-packages --all-groups
@@ -38,8 +38,8 @@ check-node:
 test-node:
 	npm test
 
-smoke-haiku-paid:
-	uv run python scripts/haiku_paid_smoke.py
+smoke-cloud-paid:
+	uv run python scripts/cloud_paid_smoke.py
 
 check-android:
 	JAVA_HOME="$${JAVA_HOME:-$$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home}" ANDROID_HOME="$${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}" ./apps/android/gradlew -p apps/android testDebugUnitTest lint
@@ -82,7 +82,7 @@ services-install-local:
 
 services-install-user-test:
 	uv run python scripts/radcliffe_services.py install --include-compat-worker \
-		--sidecar-profile live-haiku-4.5
+		--sidecar-profile live-sonnet-5
 
 services-status-local:
 	uv run python scripts/radcliffe_services.py status --include-compat-worker

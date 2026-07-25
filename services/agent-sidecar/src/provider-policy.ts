@@ -1,14 +1,17 @@
 const LOCAL_PROVIDERS = new Set(["ollama"]);
 
-export const ANTHROPIC_DEBUG_MODEL_ID = "claude-haiku-4-5-20251001";
-export const ANTHROPIC_DEBUG_PRICING_BASIS =
-  "anthropic/claude-haiku-4-5-20251001/usd-2026-05-27";
-export const ANTHROPIC_DEBUG_CONTEXT_WINDOW = 200_000;
+export const ANTHROPIC_DEBUG_MODEL_ID = "claude-sonnet-5";
+export const ANTHROPIC_DEBUG_PRICING_BASIS = "anthropic/claude-sonnet-5/usd-2026-07-25";
+export const ANTHROPIC_DEBUG_CONTEXT_WINDOW = 1_000_000;
+// Mirrors the provider registry exactly so the contract assertion stays a real tripwire.
+// These are Sonnet 5's promotional rates, which end 2026-08-31; standard rates are $3/$15.
+// The assertion is expected to fire when the registry moves to standard pricing — that is
+// the signal to re-review the budget basis, not a bug.
 export const ANTHROPIC_DEBUG_PRICING = Object.freeze({
-  input: 1,
-  output: 5,
-  cacheRead: 0.1,
-  cacheWrite: 1.25,
+  input: 2,
+  output: 10,
+  cacheRead: 0.2,
+  cacheWrite: 2.5,
 });
 
 export function assertProviderAllowed(provider: string, cloudOptIn: string | undefined): void {
@@ -27,8 +30,8 @@ export function assertSupportedModelProfile(provider: string, modelId: string): 
   }
   if (modelId !== ANTHROPIC_DEBUG_MODEL_ID) {
     throw new Error(
-      `Anthropic debug runs require pinned model ${ANTHROPIC_DEBUG_MODEL_ID}; ` +
-        "a production model or router requires a new reviewed profile",
+      `Anthropic runs require pinned model ${ANTHROPIC_DEBUG_MODEL_ID}; ` +
+        "a different model or a router requires a new reviewed profile",
     );
   }
 }

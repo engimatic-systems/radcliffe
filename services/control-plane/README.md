@@ -103,7 +103,7 @@ The command string is split into an argv without a shell. The wrapper is the
 user-owned containment boundary (for example a disposable VM or container);
 the control-plane adapter does not pretend that a scrubbed host subprocess is
 an OS sandbox. By default it passes no Radcliffe, provider, LiveKit, GitHub, or
-host-home credential. In the explicit Haiku user-test profile, the trusted host
+host-home credential. In the explicit Sonnet user-test profile, the trusted host
 broker receives only `ANTHROPIC_API_KEY`; that value is never placed in model
 arguments, transcripts, or the disposable command container. Each attempt
 receives a mode-0700 working directory used as its
@@ -122,7 +122,7 @@ control-plane restart terminates owned processes and lets their durable leases
 expire for an explicit recovered attempt.
 
 The repository keeps two selectable host brokers. `custom-loop` is the original
-bounded Haiku loop and remains the rollback profile. `claude-agent-sdk` uses
+bounded custom loop and remains the rollback profile. `claude-agent-sdk` uses
 Anthropic's pinned Agent SDK for its agent loop and native WebSearch/WebFetch,
 while retaining Radcliffe's durable lifecycle, artifact validation, and
 credential-free Docker downloader. Build the image with
@@ -138,9 +138,9 @@ RADCLIFFE_JOB_DOCKER_HOST=unix:///absolute/path/to/colima/docker.sock
 RADCLIFFE_JOB_SANDBOX_IMAGE=radcliffe-job-sandbox:<revision>
 RADCLIFFE_JOB_EXECUTOR_BACKEND=custom-loop
 RADCLIFFE_JOB_MODEL_PROVIDER=anthropic
-RADCLIFFE_JOB_MODEL_ID=claude-haiku-4-5-20251001
+RADCLIFFE_JOB_MODEL_ID=claude-sonnet-5
 RADCLIFFE_JOB_ALLOW_CLOUD_MODELS=1
-RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sandbox_agent --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-haiku-4-5-20251001 --max-model-cost-usd 0.25'
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.sandbox_agent --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-sonnet-5 --max-model-cost-usd 0.25'
 RADCLIFFE_JOB_WORKSPACE_ROOT=/absolute/path/to/radcliffe/var/jobs
 ```
 
@@ -150,9 +150,9 @@ dashboard-side prompt, tool, permission, or budget setup:
 ```sh
 RADCLIFFE_JOB_EXECUTOR_BACKEND=claude-agent-sdk
 RADCLIFFE_JOB_MODEL_PROVIDER=anthropic
-RADCLIFFE_JOB_MODEL_ID=claude-haiku-4-5-20251001
+RADCLIFFE_JOB_MODEL_ID=claude-sonnet-5
 RADCLIFFE_JOB_ALLOW_CLOUD_MODELS=1
-RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.agent_sdk_executor --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-haiku-4-5-20251001 --effort low --max-model-cost-usd 0.25 --system-prompt-file /absolute/path/to/radcliffe/services/control-plane/config/claude-agent-job-prompt.txt'
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.agent_sdk_executor --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-sonnet-5 --effort low --max-model-cost-usd 0.25 --system-prompt-file /absolute/path/to/radcliffe/services/control-plane/config/claude-agent-job-prompt.txt'
 ```
 
 The command flags locally pin the model, effort, spend cap, and prompt file. The five-minute job

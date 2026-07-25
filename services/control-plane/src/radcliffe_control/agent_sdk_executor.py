@@ -36,7 +36,7 @@ from radcliffe_control.job_results import (
     write_promoted_result,
 )
 from radcliffe_control.sandbox_agent import (
-    HAIKU_MODEL_ID,
+    JOB_MODEL_ID,
     DockerSandbox,
     FailJobArguments,
     FinishJobArguments,
@@ -648,7 +648,7 @@ async def run_agent_sdk(
     transcript: PrivateTranscript,
     system_prompt: str,
     model: str,
-    effort: Literal["low", "medium", "high"],
+    effort: Literal["low", "medium", "high", "xhigh", "max"],
     max_turns: int | None,
     max_budget_usd: float,
     client_factory: SdkClientFactory = ClaudeSDKClient,
@@ -828,8 +828,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--image", required=True)
     value.add_argument("--workspace-root", type=Path, required=True)
     value.add_argument("--provider", choices=("anthropic",), required=True)
-    value.add_argument("--model", default=HAIKU_MODEL_ID)
-    value.add_argument("--effort", choices=("low", "medium", "high"), default="low")
+    value.add_argument("--model", default=JOB_MODEL_ID)
+    value.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"), default="low")
     value.add_argument("--max-turns", type=int)
     value.add_argument("--max-model-cost-usd", type=float, default=0.25)
     value.add_argument("--system-prompt-file", type=Path, default=_default_prompt_path())

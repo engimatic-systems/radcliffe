@@ -4,10 +4,16 @@ Copy every Android APK produced for testing to `/Users/ravd/agent-share/radcliff
 
 Before sharing any network service with the user, run the Tailscale CLI to inspect the current Serve configuration and choose an available permitted port.
 
-Use the pinned Haiku profile for every operator or user acceptance test, including both the
-foreground conversational sidecar and the background job model. Treat Qwen as a deprecated,
-explicit development-only path; do not use it as user-test evidence unless the user reverses
-this instruction.
+Use the pinned Sonnet 5 profile (`claude-sonnet-5`) for every operator or user acceptance test,
+including both the foreground conversational sidecar and the background job model. This replaced
+the earlier Haiku 4.5 pin on 2026-07-25 at the user's direction: Haiku was not following the tool
+contract well enough for the source-reading workflow. Treat Qwen as a deprecated, explicit
+development-only path; do not use it as user-test evidence unless the user reverses this
+instruction.
+
+Sonnet 5 rejects non-default `temperature`, `top_p`, and `top_k` with a 400, and manual
+`budget_tokens` thinking config with a 400. Adaptive thinking is on by default when the
+`thinking` field is omitted. Do not reintroduce those parameters on the Anthropic request path.
 
 ## Conversation data
 
