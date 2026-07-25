@@ -2,7 +2,7 @@
 id: rad-erac
 status: closed
 deps: [rad-7t9h]
-links: [rad-7t9h, rad-tg8o]
+links: [rad-7t9h, rad-tg8o, rad-orob]
 created: 2026-07-19T20:51:44Z
 type: feature
 priority: 0

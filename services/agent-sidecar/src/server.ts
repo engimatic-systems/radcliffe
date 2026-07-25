@@ -6,7 +6,6 @@ import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/a
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { hasApi, type Model } from "@earendil-works/pi-ai";
 
-import { CloudBudgetController, CloudBudgetLedger } from "./cloud-budget.js";
 import {
   AnthropicContextMeter,
   AnthropicPayloadMeter,
@@ -16,7 +15,6 @@ import { PiAgentOrchestrator, RADCLIFFE_TOOL_NAMES } from "./orchestrator.js";
 import { createOllamaModel } from "./ollama-model.js";
 import { warmOllama } from "./ollama-runtime.js";
 import {
-  ANTHROPIC_DEBUG_PRICING_BASIS,
   assertAnthropicDebugModelContract,
   assertProviderAllowed,
   assertSupportedModelProfile,
@@ -169,7 +167,6 @@ async function executeTool(
   return (await response.json()) as ToolExecutionResult;
 }
 
-let cloudBudget: CloudBudgetController | undefined;
 let contextMeter;
 if (provider === "ollama") {
   contextMeter = new OllamaContextMeter({ model: ollamaModel });
@@ -179,33 +176,12 @@ if (provider === "ollama") {
   }
   const payloadMeter = new AnthropicPayloadMeter({ model, apiKey: anthropicApiKey! });
   contextMeter = new AnthropicContextMeter(model, payloadMeter);
-  const sessionBudgetUsd = positiveNumber(
-    "RADCLIFFE_CLOUD_SESSION_BUDGET_USD",
-    process.env.RADCLIFFE_CLOUD_SESSION_BUDGET_USD ?? "0.25",
-  );
-  const conservativeInputRate = Math.max(
-    model.cost.input,
-    model.cost.cacheWrite,
-    model.cost.input * 2,
-  );
-  cloudBudget = new CloudBudgetController(
-    payloadMeter,
-    new CloudBudgetLedger(
-      ANTHROPIC_DEBUG_PRICING_BASIS,
-      sessionBudgetUsd,
-      model.maxTokens,
-      conservativeInputRate,
-      model.cost.output,
-      process.env.RADCLIFFE_CLOUD_BUDGET_LEDGER_PATH ?? "var/cloud-budget.json",
-    ),
-  );
 }
 const orchestrator = new PiAgentOrchestrator(
   model,
   streamFn,
   executeTool,
   contextMeter,
-  cloudBudget ? (request) => cloudBudget.streamForTurn(streamFn, request.sessionId) : undefined,
 );
 let activeTurns = 0;
 let cancelledTurns = 0;
@@ -222,14 +198,6 @@ function positiveInteger(name: string, value: string): number {
   return parsed;
 }
 
-function positiveNumber(name: string, value: string): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive number`);
-  }
-  return parsed;
-}
-
 function deploymentRevision(value: string | undefined): string {
   const revision = value ?? "development";
   if (revision !== "development" && !/^[a-f0-9]{7,64}$/.test(revision)) {
@@ -240,7 +208,6 @@ function deploymentRevision(value: string | undefined): string {
 
 createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/healthz") {
-    const budget = cloudBudget?.ledger.summary();
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
       JSON.stringify({
@@ -256,20 +223,7 @@ createServer(async (request, response) => {
           provider === "ollama"
             ? "ollama_openai_prompt_tokens_exact"
             : "anthropic_count_tokens_conservative_estimate",
-        ...(budget
-          ? {
-              cloud_budget: {
-                basis: budget.basis,
-                limit_usd: budget.limitUsd,
-                max_output_tokens_per_turn: budget.maxOutputTokensPerTurn,
-                session_count: budget.sessionCount,
-                spent_usd: budget.spentUsd,
-                held_usd: budget.heldUsd,
-                requests: budget.requests,
-                recovered_reservations: budget.recoveredReservations,
-              },
-            }
-          : {}),
+        foreground_budget_enforcement: "none",
       }),
     );
     return;

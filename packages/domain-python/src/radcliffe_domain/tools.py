@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import re
@@ -10,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePath
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_domain.envelope import MessageEnvelope, Provenance, SourceKind
 from radcliffe_domain.projection import SpeechDelivery, with_delivery_rate_for_all
@@ -178,7 +180,6 @@ class ToolGateway:
                         source_envelope,
                         arguments.rate,
                     )
-                await self.store.append(source_envelope)
                 result_content = json.dumps(
                     {
                         "source_message_id": source_envelope.message_id,
@@ -205,8 +206,10 @@ class ToolGateway:
                     {
                         "call_message_id": call_envelope.message_id,
                         "source_message_id": source_envelope.message_id,
+                        "source_envelope_proto_base64": base64.b64encode(
+                            source_envelope.to_proto().SerializeToString(deterministic=True)
+                        ).decode("ascii"),
                         "result_message_id": result_envelope.message_id,
-                        "canonical_text": text,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -476,10 +479,16 @@ class ToolGateway:
         envelopes = await self.store.replay(audit.session_id)
         indexed = {envelope.message_id: envelope for envelope in envelopes}
         call = indexed[payload["call_message_id"]]
-        source = indexed[payload["source_message_id"]]
+        encoded_source = payload.get("source_envelope_proto_base64")
+        if isinstance(encoded_source, str):
+            source = MessageEnvelope.from_proto(
+                protocol_pb2.MessageEnvelope.FromString(base64.b64decode(encoded_source))
+            )
+        else:
+            source = indexed[payload["source_message_id"]]
         result = indexed[payload["result_message_id"]]
         return ReadSourceResult(
-            call, source, result, payload["canonical_text"].encode(), replayed=True
+            call, source, result, source.content.canonical_bytes(), replayed=True
         )
 
     async def _replay_catalog(self, audit: ToolAudit) -> ListSourcesResult:

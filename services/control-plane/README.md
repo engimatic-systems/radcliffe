@@ -150,18 +150,21 @@ dashboard-side prompt, tool, permission, or budget setup:
 ```sh
 RADCLIFFE_JOB_EXECUTOR_BACKEND=claude-agent-sdk
 RADCLIFFE_JOB_MODEL_PROVIDER=anthropic
-RADCLIFFE_JOB_MODEL_ID=claude-sonnet-4-6
+RADCLIFFE_JOB_MODEL_ID=claude-haiku-4-5-20251001
 RADCLIFFE_JOB_ALLOW_CLOUD_MODELS=1
-RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.agent_sdk_executor --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-sonnet-4-6 --effort low --max-turns 8 --max-model-cost-usd 0.10 --system-prompt-file /absolute/path/to/radcliffe/services/control-plane/config/claude-agent-job-prompt.txt'
+RADCLIFFE_JOB_EXECUTOR_COMMAND='/absolute/path/to/python -m radcliffe_control.agent_sdk_executor --docker /absolute/path/to/docker --docker-host unix:///absolute/path/to/colima/docker.sock --image radcliffe-job-sandbox:<revision> --workspace-root /absolute/path/to/radcliffe/var/jobs --provider anthropic --model claude-haiku-4-5-20251001 --effort low --max-model-cost-usd 0.25 --system-prompt-file /absolute/path/to/radcliffe/services/control-plane/config/claude-agent-job-prompt.txt'
 ```
 
-The command flags locally pin the model, effort, turn cap, spend cap, and prompt file. To tune
-wording without changing Python, copy the tracked prompt to an ignored owner-only file under
-`var/`, point `--system-prompt-file` at that copy, and restart the control service. The SDK is
-pinned in `uv.lock`; user/project settings, skills, plugins, subagents, Bash, and host filesystem
-tools are disabled. Only native WebSearch/WebFetch and bounded in-process Radcliffe tools are
-visible. The real API key remains in the trusted executor process; selected pages are downloaded
-inside the existing credential-free container.
+The command flags locally pin the model, effort, spend cap, and prompt file. The five-minute job
+runtime remains the normal complexity bound; `--max-turns` is available as an optional operator
+override but is not set by the user-test profile. To tune wording without changing Python, copy
+the tracked prompt to an ignored owner-only file under `var/`, point `--system-prompt-file` at
+that copy, and restart the control service. The SDK is
+pinned in `uv.lock`; user/project settings, skills, plugins, subagents, native Bash, and host
+filesystem tools are disabled. Native WebSearch/WebFetch and bounded Radcliffe tools are visible.
+The custom `run_command` tool executes only inside the existing credential-free Docker workspace;
+`publish_markdown` accepts a path rather than document content. The real API key remains in the
+trusted executor process and is never inherited by that container.
 
 The private macOS launcher reads these non-secret machine-specific values from
 ignored, mode-0600 `var/job-executor.env` when present; application and provider

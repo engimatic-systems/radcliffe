@@ -2,7 +2,7 @@
 id: rad-2e0w
 status: open
 deps: []
-links: []
+links: [rad-1w52]
 created: 2026-07-21T04:04:49Z
 type: bug
 priority: 2

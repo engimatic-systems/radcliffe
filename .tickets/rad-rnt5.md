@@ -2,7 +2,7 @@
 id: rad-rnt5
 status: closed
 deps: []
-links: [rad-25m0, rad-e9wi, rad-u96k]
+links: [rad-25m0, rad-e9wi, rad-u96k, rad-orob]
 created: 2026-07-22T02:30:39Z
 type: feature
 priority: 0

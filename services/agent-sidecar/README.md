@@ -72,15 +72,11 @@ from Anthropic's [model overview](https://platform.claude.com/docs/en/about-clau
 the estimate semantics come from its
 [token-counting contract](https://platform.claude.com/docs/en/build-with-claude/token-counting).
 
-`RADCLIFFE_CLOUD_SESSION_BUDGET_USD` defaults to $0.25. Each call reserves a
-conservative maximum cost before generation, using the higher cache-write
-input rate and the reported output rate. Reported Pi usage settles that
-reservation. The mode-`0600` ledger at
-`RADCLIFFE_CLOUD_BUDGET_LEDGER_PATH` (default `var/cloud-budget.json`) stores
-only a session pseudonym, accounting basis, token totals, cost, and outstanding
-reservations. Startup charges abandoned reservations conservatively, preventing
-a restart from resetting the ceiling. Exhaustion becomes a visible sidecar
-error before another paid request.
+Foreground Haiku conversations have no accumulated dollar ceiling. Context
+preflight, the per-call output limit, and content-free usage events remain in
+force, but a long conversation is not disabled merely because earlier turns
+cost more than a fixed session allowance. Dollar caps belong to individual
+background jobs, whose executor enforces them independently.
 
 `PiAgentOrchestrator` is the replacement seam. Another loop can implement the
 same `run(TurnRequest, emit, signal)` contract without changing envelopes,
@@ -93,8 +89,8 @@ detail needs a listening-friendly alternative. The media worker persists
 the alternative, and canonical source envelopes bypass model deltas entirely.
 
 `GET /healthz` exposes the provider, pinned model, local/cloud boundary,
-accounting basis, content-free `active_turns` and cumulative `cancelled_turns`
-counters, plus aggregate budget state for cloud runs. The external conformance
-suite uses the counters to prove that speech replacement closes the abandoned
-HTTP stream; prompts, model output, credentials, and raw session IDs are never
-included.
+accounting basis, the absence of foreground budget enforcement, and content-free
+`active_turns` and cumulative `cancelled_turns` counters. The external
+conformance suite uses the counters to prove that speech replacement closes the
+abandoned HTTP stream; prompts, model output, credentials, and raw session IDs
+are never included.

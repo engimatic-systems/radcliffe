@@ -15,9 +15,7 @@ APPROVAL_PHRASE = "I_APPROVE_ONE_BOUNDED_HAIKU_SMOKE"
 
 
 def arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run one explicitly approved, budget-capped Haiku smoke turn."
-    )
+    parser = argparse.ArgumentParser(description="Run one explicitly approved Haiku smoke turn.")
     parser.add_argument("--sidecar-url", default="http://127.0.0.1:8787")
     parser.add_argument(
         "--report",
@@ -120,14 +118,13 @@ def main() -> None:
     ):
         raise SystemExit("the paid smoke did not return pinned-provider usage")
     report = {
-        "schema": "radcliffe-cloud-paid-smoke-v1",
+        "schema": "radcliffe-cloud-paid-smoke-v2",
         "occurred_at": datetime.now(UTC).isoformat(),
         "status": "passed",
         "provider": provider,
         "model_id": model_id,
         "usage": usage,
-        "budget_basis": diagnostic["cloud_budget"]["basis"],
-        "session_budget_usd": diagnostic["cloud_budget"]["limit_usd"],
+        "foreground_budget_enforcement": diagnostic["foreground_budget_enforcement"],
         "prompt_or_response_stored": False,
     }
     write_report(options.report, report)

@@ -2,7 +2,7 @@
 id: rad-l386
 status: closed
 deps: []
-links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i]
+links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i, rad-1w52]
 created: 2026-07-21T14:12:34Z
 type: bug
 priority: 0

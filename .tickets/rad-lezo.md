@@ -2,7 +2,7 @@
 id: rad-lezo
 status: closed
 deps: [rad-au20, rad-ihso]
-links: [rad-l1jc, rad-ncdz]
+links: [rad-l1jc, rad-ncdz, rad-1w52]
 created: 2026-07-15T03:44:49Z
 type: task
 priority: 1

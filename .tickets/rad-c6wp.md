@@ -2,7 +2,7 @@
 id: rad-c6wp
 status: closed
 deps: []
-links: []
+links: [rad-1w52]
 created: 2026-07-17T00:45:17Z
 type: bug
 priority: 1
