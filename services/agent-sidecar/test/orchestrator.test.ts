@@ -738,6 +738,28 @@ describe("PiAgentOrchestrator", () => {
     });
   });
 
+  it("accepts a start boundary and rejects one that cannot address a sentence", () => {
+    expect(prepareReadSourceArguments({ path: "demo.md", startAtBoundary: 10 })).toEqual({
+      path: "demo.md",
+      startAtBoundary: 10,
+    });
+    // Local models routinely emit an integer-valued string for a numeric field.
+    expect(prepareReadSourceArguments({ path: "demo.md", startAtBoundary: "10" })).toEqual({
+      path: "demo.md",
+      startAtBoundary: 10,
+    });
+    expect(prepareReadSourceArguments({ path: "demo.md" })).toEqual({ path: "demo.md" });
+    expect(
+      prepareReadJobSourceArguments({ reference: "nicotine.md", startAtBoundary: 3 }),
+    ).toEqual({ reference: "nicotine.md", startAtBoundary: 3 });
+
+    for (const invalid of [-1, 1.5, "later", "", true, null, 100_001]) {
+      expect(() =>
+        prepareReadSourceArguments({ path: "demo.md", startAtBoundary: invalid }),
+      ).toThrow("tool_argument_invalid:read_source:start_at_boundary");
+    }
+  });
+
   it("emits one redacted recoverable diagnostic for a malformed model tool call", async () => {
     const faux = createFauxCore({ provider: "radcliffe-invalid-tool-test" });
     faux.setResponses([
@@ -1535,6 +1557,52 @@ describe("PiAgentOrchestrator", () => {
     expect(converted).toHaveLength(1);
     expect(converted[0]?.role).toBe("user");
     expect(converted[0]?.content).toContain("[Radcliffe text_source from demo.md]");
+  });
+
+  it("tells the model where a heard source stopped so it can resume exactly", () => {
+    const heard = (boundaryIndex: string, complete: string) =>
+      convertRadcliffeContext([
+        {
+          role: "radcliffe",
+          packet: packet("heard", "Obvious enough.", {
+            role: "source",
+            source: "text_source",
+            annotations: [
+              ["locator", "nicotine.md"],
+              ["radcliffe.playback.boundary_index", boundaryIndex],
+              ["radcliffe.playback.complete", complete],
+            ],
+          }),
+        },
+      ])[0]?.content;
+
+    // A finished sentence resumes at the next one.
+    expect(heard("9", "true")).toContain(
+      "[Radcliffe text_source from nicotine.md, sentence 9, resume at startAtBoundary 10]",
+    );
+    // A sentence cut off mid-playback is replayed from its own start.
+    expect(heard("9", "false")).toContain(
+      "[Radcliffe text_source from nicotine.md, part of sentence 9, resume at startAtBoundary 9]",
+    );
+  });
+
+  it("leaves non-source packets and unmarked sources without a reading position", () => {
+    const converted = convertRadcliffeContext([
+      {
+        role: "radcliffe",
+        packet: packet("plain", "Canonical", {
+          role: "source",
+          source: "text_source",
+          annotations: [["locator", "demo.md"]],
+        }),
+      },
+      { role: "radcliffe", packet: packet("user", "Do you know why?") },
+    ]);
+
+    expect(converted.map((message) => message.content)).toEqual([
+      "[Radcliffe text_source from demo.md]\nCanonical",
+      "[Radcliffe user]\nDo you know why?",
+    ]);
   });
 
   it("preserves harness job speech and outcome ahead of the next user message", () => {

@@ -18,6 +18,7 @@ from radcliffe_domain.projection import SpeechDelivery, with_delivery_rate_for_a
 from radcliffe_domain.store import EventStore, ToolAudit
 
 MAX_SOURCE_BYTES = 1024 * 1024
+MAX_SOURCE_BOUNDARY = 100_000
 MAX_SOURCE_CATALOG_ENTRIES = 200
 MAX_SOURCE_CATALOG_DEPTH = 4
 MAX_SOURCE_CATALOG_SCANNED_ENTRIES = 2000
@@ -38,6 +39,7 @@ class ReadSourceArguments(BaseModel):
 
     path: str = Field(min_length=1, max_length=4096)
     rate: str | float | None = None
+    start_at_boundary: int | None = Field(default=None, ge=0, le=MAX_SOURCE_BOUNDARY)
 
     @field_validator("rate", mode="before")
     @classmethod
@@ -69,6 +71,7 @@ class ReadSourceResult:
     result_envelope: MessageEnvelope
     canonical_bytes: bytes
     replayed: bool = False
+    start_at_boundary: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +213,11 @@ class ToolGateway:
                             source_envelope.to_proto().SerializeToString(deterministic=True)
                         ).decode("ascii"),
                         "result_message_id": result_envelope.message_id,
+                        **(
+                            {"start_at_boundary": arguments.start_at_boundary}
+                            if arguments.start_at_boundary is not None
+                            else {}
+                        ),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -224,7 +232,13 @@ class ToolGateway:
                         result_json=result_json,
                     )
                 )
-                return ReadSourceResult(call_envelope, source_envelope, result_envelope, canonical)
+                return ReadSourceResult(
+                    call_envelope,
+                    source_envelope,
+                    result_envelope,
+                    canonical,
+                    start_at_boundary=arguments.start_at_boundary,
+                )
             except BaseException as exc:
                 outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "denied"
                 await self.store.finish_tool_audit(
@@ -487,8 +501,14 @@ class ToolGateway:
         else:
             source = indexed[payload["source_message_id"]]
         result = indexed[payload["result_message_id"]]
+        requested_boundary = payload.get("start_at_boundary")
         return ReadSourceResult(
-            call, source, result, source.content.canonical_bytes(), replayed=True
+            call,
+            source,
+            result,
+            source.content.canonical_bytes(),
+            replayed=True,
+            start_at_boundary=(requested_boundary if isinstance(requested_boundary, int) else None),
         )
 
     async def _replay_catalog(self, audit: ToolAudit) -> ListSourcesResult:

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import radcliffe_domain.tools as tool_module
+from pydantic import ValidationError
 from radcliffe_domain.envelope import SourceKind
 from radcliffe_domain.projection import render_projection
 from radcliffe_domain.store import EventStore
@@ -76,6 +77,59 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
         SourceKind.CALL,
         SourceKind.CALL,
     ]
+
+
+@pytest.mark.asyncio
+async def test_read_source_round_trips_a_start_boundary_through_replay(tmp_path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    (source_root / "demo.md").write_bytes(b"First. Second. Third.\n")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    gateway = ToolGateway(store)
+
+    async def read(call_id: str, **extra: object):
+        return await gateway.read_source(
+            call_id=call_id,
+            idempotency_key=call_id,
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "demo.md", **extra},
+        )
+
+    requested = await read("call-1", start_at_boundary=2)
+    replay = await read("call-1", start_at_boundary=2)
+    plain = await read("call-2")
+
+    assert requested.start_at_boundary == 2
+    # A duplicate call must resume identically rather than restarting the source.
+    assert replay.replayed and replay.start_at_boundary == 2
+    assert plain.start_at_boundary is None
+    # The boundary is a playback instruction; it must not change source identity.
+    assert requested.source_envelope.content_sha256 == plain.source_envelope.content_sha256
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", [-1, 100_001])
+async def test_read_source_rejects_an_unaddressable_start_boundary(tmp_path, boundary) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    (source_root / "demo.md").write_bytes(b"First. Second.\n")
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+
+    with pytest.raises(ValidationError):
+        await ToolGateway(store).read_source(
+            call_id="call-1",
+            idempotency_key="idem-1",
+            session_id="s1",
+            generation=1,
+            grant=grant(source_root),
+            raw_arguments={"path": "demo.md", "start_at_boundary": boundary},
+        )
+
+    assert await store.replay("s1") == ()
 
 
 @pytest.mark.asyncio

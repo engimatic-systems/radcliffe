@@ -22,6 +22,11 @@ TOOL_FAILURE_EVENT = "tool_failure"
 BACKGROUND_JOB_REFERENCE_EVENT = "background_job_reference"
 BACKGROUND_JOB_ANNOUNCEMENT_EVENT = "background_job_announcement"
 BACKGROUND_JOB_OUTCOME_EVENT = "background_job_outcome"
+SOURCE_PLAYBACK_EVENT = "source_playback"
+SOURCE_MESSAGE_ID_METADATA = "radcliffe.source.message_id"
+SOURCE_CONTENT_SHA256_METADATA = "radcliffe.source.content_sha256"
+PLAYBACK_BOUNDARY_INDEX_METADATA = "radcliffe.playback.boundary_index"
+PLAYBACK_COMPLETE_METADATA = "radcliffe.playback.complete"
 EXCLUDED_TURN_DISPOSITIONS = frozenset({"interrupted", "superseded", "failed"})
 DELIVERY_RATE_METADATA_PREFIX = "radcliffe.delivery.rate."
 DELIVERY_SUMMARY_METADATA = "radcliffe.delivery.summary"
@@ -242,6 +247,47 @@ def render_projection(envelope: MessageEnvelope) -> RenderPlan:
         segments=segments,
         delivery_summary=delivery_summary(envelope.metadata),
     )
+
+
+def heard_boundary(metadata: Mapping[str, str]) -> int | None:
+    """Return the first unread boundary implied by one heard-playback envelope."""
+
+    if metadata.get(TURN_EVENT_METADATA) != SOURCE_PLAYBACK_EVENT:
+        return None
+    raw_index = metadata.get(PLAYBACK_BOUNDARY_INDEX_METADATA)
+    if raw_index is None:
+        return None
+    try:
+        boundary_index = int(raw_index)
+    except ValueError:
+        return None
+    if boundary_index < 0:
+        return None
+    complete = metadata.get(PLAYBACK_COMPLETE_METADATA) == "true"
+    # A partially heard sentence is replayed from its own start.
+    return boundary_index + 1 if complete else boundary_index
+
+
+def resume_boundary(
+    envelopes: tuple[MessageEnvelope, ...],
+    content_sha256: bytes,
+) -> int:
+    """Return the first unheard boundary for a document, keyed by content rather than call.
+
+    Identical bytes always produce an identical sentence split, so boundaries recorded
+    under one read_source call remain valid for any later call reading the same source.
+    """
+
+    if not content_sha256:
+        return 0
+    digest = content_sha256.hex()
+    boundaries = [
+        boundary
+        for envelope in envelopes
+        if envelope.metadata.get(SOURCE_CONTENT_SHA256_METADATA) == digest
+        and (boundary := heard_boundary(envelope.metadata)) is not None
+    ]
+    return max(boundaries, default=0)
 
 
 def context_projection(envelope: MessageEnvelope) -> ContextPacket:
