@@ -1,6 +1,6 @@
 ---
 id: rad-l386
-status: closed
+status: in_progress
 deps: []
 links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i, rad-1w52]
 created: 2026-07-21T14:12:34Z
@@ -52,3 +52,7 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T15:54:25Z**
 
 2026-07-21 final Pixel acceptance ses_0871ab859cecd63c47447826759d2c0e: job_ec6362e939637b66034f6b30b80efca1 downloaded Hacker News, extracted 30 headline-only rows, automatically promoted the 1,626-byte UTF-8 hacker_news_headlines.md source, and completed at revision 7. The next voice turn resolved it through a session/job-scoped capability, persisted canonical source bytes with matching SHA-256 and provenance, and read the full result aloud. There were no denied or repeated tool calls, and the operator explicitly confirmed this was the desired result.
+
+**2026-07-25T16:31:26Z**
+
+2026-07-25 physical regression ses_802b2b0bd8b7d1b0ce276b3d3e990dd8: Haiku selected read_job_source at least six times for succeeded job job_ae71375432f558547c819b90d4e97148, but every call returned not_found and the model fell back to conversational output. The promoted source exists at hn_headlines.md. Root cause: the prompt/tool contract advertises Markdown artifact filenames while _resolve_job_source matched only source names/entity IDs; manage_job also omitted the source path/artifact mapping from modelContent. Reopened pending a real foreground Haiku read_job_source acceptance.

@@ -702,6 +702,15 @@ def test_unsourced_markdown_job_artifact_is_status_visible_and_readable(tmp_path
         assert envelope.content.inline_text.encode() == canonical
         assert envelope.provenance.locator.startswith("radcliffe-job-output:")
 
+        informal = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-generated-source-informally",
+            arguments={"reference": "the downloaded headlines", "jobId": job_id},
+        )
+        assert informal.status_code == 200
+        assert informal.json()["details"]["contentSha256"] == digest
+
 
 def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) -> None:
     workspace_root = tmp_path / "jobs"
@@ -809,6 +818,24 @@ def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) ->
         )
         assert job_status.status_code == 200
         result = json.loads(job_status.json()["modelContent"])["result"]
+        assert result["sources"] == [
+            {
+                "artifactId": artifact.artifact_id,
+                "contentSha256": digest,
+                "entityId": source.entity_id,
+                "locator": source.locator,
+                "name": source.name,
+                "path": source.path,
+            },
+            {
+                "artifactId": other_artifact.artifact_id,
+                "contentSha256": other_digest,
+                "entityId": other_source.entity_id,
+                "locator": other_source.locator,
+                "name": other_source.name,
+                "path": other_source.path,
+            },
+        ]
         assert result["findings"] == [
             {
                 "entityId": direct_finding.entity_id,
@@ -846,6 +873,24 @@ def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) ->
         assert envelope.provenance.locator == source.locator
         assert envelope.provenance.extractor == "promoted-job-source"
         assert body["details"]["contentSha256"] == digest
+
+        by_path = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-paper-by-path",
+            arguments={"reference": source.path, "jobId": job_id},
+        )
+        assert by_path.status_code == 200
+        assert by_path.json()["details"]["contentSha256"] == digest
+
+        by_artifact_id = tool(
+            client,
+            tool_name="read_job_source",
+            call_id="read-paper-by-artifact-id",
+            arguments={"reference": source.artifact_id, "jobId": job_id},
+        )
+        assert by_artifact_id.status_code == 200
+        assert by_artifact_id.json()["details"]["contentSha256"] == digest
 
         ambiguous = tool(
             client,
