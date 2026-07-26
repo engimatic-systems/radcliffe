@@ -1,6 +1,6 @@
 ---
 id: rad-86le
-status: in_progress
+status: closed
 deps: []
 links: [rad-oy5k]
 created: 2026-07-26T03:25:21Z
