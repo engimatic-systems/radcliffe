@@ -2,7 +2,7 @@
 id: rad-57f3
 status: open
 deps: []
-links: [rad-fksk]
+links: [rad-fksk, rad-oy5k]
 created: 2026-07-25T21:41:14Z
 type: feature
 priority: 1

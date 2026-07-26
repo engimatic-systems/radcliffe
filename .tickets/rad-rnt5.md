@@ -35,11 +35,11 @@ Deployment hardening: the first preflight run exposed that RADCLIFFE_JOB_SANDBOX
 
 **2026-07-22T02:36:46Z**
 
-Final deployed Haiku 4.5 smoke on revision 58dff0a used preview_page exactly once against the public Gettysburg page, then read the saved extraction, wrote and verified report.md, and finished with a promoted artifact and source. The bounded result contained 5 chunks / 2,241 preview characters versus 12,277 extracted characters from 18,599 downloaded bytes. Four model responses cost /bin/zsh.017651 cumulatively under a deliberately tighter /bin/zsh.05 smoke cap; no sandbox container or network remained afterward.
+Final deployed Haiku 4.5 smoke on revision 58dff0a used download_and_preview_page exactly once against the public Gettysburg page, then read the saved extraction, wrote and verified report.md, and finished with a promoted artifact and source. The bounded result contained 5 chunks / 2,241 preview characters versus 12,277 extracted characters from 18,599 downloaded bytes. Four model responses cost /bin/zsh.017651 cumulatively under a deliberately tighter /bin/zsh.05 smoke cap; no sandbox container or network remained afterward.
 
 **2026-07-22T02:56:01Z**
 
-2026-07-21 phone regression: preview_page failed on multiple otherwise usable pages because the sandbox fsize ulimit was 262,144 bytes. Each failed attempt left an HTML file exactly 262,144 bytes long and no extracted text, after which Haiku fell back to repeated curl output and ultimately memory. Raised the per-file sandbox boundary to the existing 64 MiB artifact cap. A real Colima smoke now extracts a 591,029-byte HISTORY page successfully into 8,935 clean characters, returns five bounded preview chunks, and saves both HTML and text.
+2026-07-21 phone regression: download_and_preview_page failed on multiple otherwise usable pages because the sandbox fsize ulimit was 262,144 bytes. Each failed attempt left an HTML file exactly 262,144 bytes long and no extracted text, after which Haiku fell back to repeated curl output and ultimately memory. Raised the per-file sandbox boundary to the existing 64 MiB artifact cap. A real Colima smoke now extracts a 591,029-byte HISTORY page successfully into 8,935 clean characters, returns five bounded preview chunks, and saves both HTML and text.
 
 **2026-07-22T03:00:25Z**
 
