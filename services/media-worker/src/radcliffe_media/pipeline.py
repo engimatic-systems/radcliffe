@@ -5,7 +5,8 @@ import base64
 import binascii
 import hashlib
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -39,6 +40,7 @@ from radcliffe_domain.projection import (
     TURN_DISPOSITION_METADATA,
     TURN_EVENT_METADATA,
     TURN_ID_METADATA,
+    RenderSegment,
     SpeechDelivery,
     context_replay,
     render_projection,
@@ -193,6 +195,21 @@ class _PausedSource:
     operation: Operation
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedSpeech:
+    """Audio synthesized ahead of playback, carrying the rate it was rendered at.
+
+    Only audio is prepared early. Nothing here registers playback or advances a boundary,
+    because synthesis is a pure function of text and rate while registration is not.
+    """
+
+    segment_id: str
+    boundary_index: int
+    canonical_text: str
+    delivery: SpeechDelivery
+    audio: bytes
+
+
 @dataclass(slots=True)
 class _PendingPlayback:
     operation: Operation
@@ -280,6 +297,7 @@ class VoicePipeline:
         model_chunk_chars: int = 240,
         client_playback_acknowledgements: bool = False,
         playback_ack_timeout_seconds: float = 2.0,
+        source_prefetch_depth: int = 2,
         defer_readiness_until_input: bool = False,
         configuration_registry: ConfigurationRegistry | None = None,
         configuration_owner_id: str = "local-owner",
@@ -289,6 +307,8 @@ class VoicePipeline:
             raise ValueError("model chunk size must be positive")
         if playback_ack_timeout_seconds <= 0:
             raise ValueError("playback acknowledgement timeout must be positive")
+        if source_prefetch_depth <= 0:
+            raise ValueError("source prefetch depth must be positive")
         self.store = store
         self.engine = SessionEngine(session_id, store)
         self.orchestrator = orchestrator
@@ -299,6 +319,7 @@ class VoicePipeline:
         self.model_chunk_chars = model_chunk_chars
         self.client_playback_acknowledgements = client_playback_acknowledgements
         self.playback_ack_timeout_seconds = playback_ack_timeout_seconds
+        self.source_prefetch_depth = source_prefetch_depth
         self.defer_readiness_until_input = defer_readiness_until_input
         self.configuration_registry = configuration_registry
         self.configuration_owner_id = configuration_owner_id
@@ -1060,31 +1081,84 @@ class VoicePipeline:
                 operation,
             )
 
+    async def _prefetch_source_audio(
+        self,
+        segments: Sequence[RenderSegment],
+        turn: _ActiveTurn,
+        queue: asyncio.Queue[_PreparedSpeech | BaseException],
+    ) -> None:
+        """Synthesize ahead of playback. The queue's maxsize is what bounds the look-ahead."""
+
+        try:
+            for segment in segments:
+                delivery = await self._segment_delivery(segment, turn)
+                audio = await self._synthesize(segment.canonical_text, delivery)
+                await queue.put(
+                    _PreparedSpeech(
+                        segment_id=segment.segment_id,
+                        boundary_index=segment.boundary_index,
+                        canonical_text=segment.canonical_text,
+                        delivery=delivery,
+                        audio=audio,
+                    )
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - handed to the reader rather than swallowed
+            # Without this the reader would wait forever on a queue nobody will fill again.
+            await queue.put(error)
+
     async def _speak_plan(
         self, envelope: MessageEnvelope, operation: Operation, turn: _ActiveTurn
     ) -> None:
         plan = render_projection(envelope)
         turn.source_envelope = envelope
-        for segment in plan.segments:
-            if segment.boundary_index < turn.next_source_boundary:
-                continue
-            if not segment.canonical_text.strip():
-                # Navigation and link-only lines normalize away to nothing. Advance the
-                # boundary anyway so resume positions keep lining up with the document.
+        remaining = [
+            segment
+            for segment in plan.segments
+            if segment.boundary_index >= turn.next_source_boundary
+        ]
+        # Empty segments are never synthesized, so the look-ahead walks only what is spoken.
+        spoken = [segment for segment in remaining if segment.canonical_text.strip()]
+        if not spoken:
+            for segment in remaining:
                 turn.next_source_boundary = segment.boundary_index + 1
-                continue
-            await self._speak(
-                segment.canonical_text,
-                segment.segment_id,
-                segment.boundary_index,
-                operation,
-                turn,
-                source=SourceKind.TEXT_SOURCE,
-                delivery=segment.delivery if segment.delivery_overridden else None,
-                wait_for_playback=True,
-                source_envelope=envelope,
-            )
-            turn.next_source_boundary = segment.boundary_index + 1
+            return
+        queue: asyncio.Queue[_PreparedSpeech | BaseException] = asyncio.Queue(
+            maxsize=self.source_prefetch_depth
+        )
+        prefetch = asyncio.create_task(self._prefetch_source_audio(spoken, turn, queue))
+        try:
+            for segment in remaining:
+                if not segment.canonical_text.strip():
+                    # Navigation and link-only lines normalize away to nothing. Advance the
+                    # boundary anyway so resume positions keep lining up with the document.
+                    turn.next_source_boundary = segment.boundary_index + 1
+                    continue
+                prepared = await queue.get()
+                if isinstance(prepared, BaseException):
+                    raise prepared
+                if prepared.segment_id != segment.segment_id:
+                    raise RuntimeError("prefetched audio arrived out of order")
+                await self._speak(
+                    segment.canonical_text,
+                    segment.segment_id,
+                    segment.boundary_index,
+                    operation,
+                    turn,
+                    source=SourceKind.TEXT_SOURCE,
+                    wait_for_playback=True,
+                    source_envelope=envelope,
+                    prepared=prepared,
+                )
+                turn.next_source_boundary = segment.boundary_index + 1
+        finally:
+            # An interruption unwinds through here, discarding every sentence rendered ahead.
+            # A speech rate or voice change can only reach the pipeline through such an
+            # interruption, which is why the look-ahead needs no separate staleness check.
+            prefetch.cancel()
+            with suppress(asyncio.CancelledError):
+                await prefetch
 
     async def _resume_source(self, paused: _PausedSource) -> None:
         task = cast(asyncio.Task[None], asyncio.current_task())
@@ -1133,6 +1207,25 @@ class VoicePipeline:
         )
         return min(max(*boundaries, heard, 0), len(plan.segments))
 
+    async def _synthesize(self, canonical_text: str, delivery: SpeechDelivery) -> bytes:
+        """Render text to audio. Pure with respect to playback state, so it is safe to run ahead."""
+
+        if getattr(self.synthesizer, "supports_speech_rate", False):
+            return await self.synthesizer.synthesize(canonical_text, rate=delivery.multiplier)
+        if delivery.is_default:
+            return await self.synthesizer.synthesize(canonical_text)
+        raise RuntimeError("speech provider does not support a non-default delivery rate")
+
+    async def _segment_delivery(self, segment: RenderSegment, turn: _ActiveTurn) -> SpeechDelivery:
+        if segment.delivery_overridden:
+            return segment.delivery
+        return SpeechDelivery.parse(
+            await self._effective_configuration(
+                ConfigurationKey.DEFAULT_SPEECH_RATE,
+                turn.turn_id,
+            )
+        )
+
     async def _speak(
         self,
         canonical_text: str,
@@ -1145,24 +1238,23 @@ class VoicePipeline:
         delivery: SpeechDelivery | None = None,
         wait_for_playback: bool = False,
         source_envelope: MessageEnvelope | None = None,
+        prepared: _PreparedSpeech | None = None,
     ) -> None:
         self._assert_owner(turn, operation)
-        delivery = delivery or SpeechDelivery.parse(
-            await self._effective_configuration(
-                ConfigurationKey.DEFAULT_SPEECH_RATE,
-                turn.turn_id,
-            )
-        )
         synth_started = monotonic()
-        if getattr(self.synthesizer, "supports_speech_rate", False):
-            audio = await self.synthesizer.synthesize(
-                canonical_text,
-                rate=delivery.multiplier,
-            )
-        elif delivery.is_default:
-            audio = await self.synthesizer.synthesize(canonical_text)
+        if prepared is not None:
+            # Already rendered by the look-ahead. Everything below this point - registration,
+            # acknowledgement, the heard ledger - still happens here, in play order.
+            delivery = prepared.delivery
+            audio = prepared.audio
         else:
-            raise RuntimeError("speech provider does not support a non-default delivery rate")
+            delivery = delivery or SpeechDelivery.parse(
+                await self._effective_configuration(
+                    ConfigurationKey.DEFAULT_SPEECH_RATE,
+                    turn.turn_id,
+                )
+            )
+            audio = await self._synthesize(canonical_text, delivery)
         duration = self.publisher.duration_ms(audio)
         playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)

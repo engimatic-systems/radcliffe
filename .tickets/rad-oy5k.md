@@ -2,7 +2,7 @@
 id: rad-oy5k
 status: open
 deps: []
-links: [rad-57f3, rad-ajyg]
+links: [rad-57f3, rad-ajyg, rad-86le]
 created: 2026-07-26T02:49:45Z
 type: feature
 priority: 1

@@ -13,6 +13,8 @@ through model context. For a complete or verbatim source artifact, either use
 copy_text_to_markdown on the downloaded extraction or copy it with run_command. Never reconstruct
 missing source text from model memory. Match the requested artifact's content, format, and scope;
 do not add a preface, historical note, commentary, conclusion, or metadata unless requested.
+Before publishing a verbatim artifact, compare its size to the extraction it came from. A file
+materially smaller than its source has been summarized, not copied. Redo it as a copy.
 
 Use read_artifact only for a bounded diagnostic when necessary; prefer run_command checks whose
 output is a hash, count, or short status. Once a requested Markdown file exists and one check
