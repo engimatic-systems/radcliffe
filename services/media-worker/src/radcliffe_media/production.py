@@ -34,9 +34,12 @@ from radcliffe_media.pipeline import VoicePipeline
 from radcliffe_media.session_actions import SessionActionClient
 from radcliffe_media.sidecar import SidecarClient
 from radcliffe_media.speech import (
+    DEFAULT_KOKORO_MODEL,
+    DEFAULT_KOKORO_VOICE,
     DEFAULT_PARAKEET_MODEL,
     DEFAULT_WHISPER_INITIAL_PROMPT,
     DetailedTranscriber,
+    KokoroSpeechProvider,
     LocalAppleSpeechProvider,
     OpenAISpeechProvider,
     ParakeetAppleSpeechProvider,
@@ -784,7 +787,15 @@ class EndpointProcessor(FrameProcessor):
 
 
 def speech_provider_from_environment() -> SpeechProvider:
-    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "local")
+    speech_provider = os.environ.get("RADCLIFFE_SPEECH_PROVIDER", "kokoro")
+    if speech_provider == "kokoro":
+        return KokoroSpeechProvider(
+            parakeet_model=os.environ.get("RADCLIFFE_PARAKEET_MODEL", DEFAULT_PARAKEET_MODEL),
+            kokoro_model=os.environ.get("RADCLIFFE_KOKORO_MODEL", DEFAULT_KOKORO_MODEL),
+            kokoro_voice=os.environ.get("RADCLIFFE_KOKORO_VOICE", DEFAULT_KOKORO_VOICE),
+            chunk_duration=float(os.environ.get("RADCLIFFE_PARAKEET_CHUNK_SECONDS", "120")),
+            overlap_duration=float(os.environ.get("RADCLIFFE_PARAKEET_OVERLAP_SECONDS", "15")),
+        )
     if speech_provider in {"local", "parakeet"}:
         return ParakeetAppleSpeechProvider(
             parakeet_model=os.environ.get("RADCLIFFE_PARAKEET_MODEL", DEFAULT_PARAKEET_MODEL),

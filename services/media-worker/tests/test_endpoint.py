@@ -394,7 +394,8 @@ def test_local_speech_profile_defaults_to_parakeet(monkeypatch, provider_name: s
 
     provider = speech_provider_from_environment()
 
-    assert isinstance(provider, ParakeetAppleSpeechProvider)
+    # Exact type: KokoroSpeechProvider subclasses this, so isinstance no longer discriminates.
+    assert type(provider) is ParakeetAppleSpeechProvider
     assert provider.parakeet_model == "test-parakeet"
     assert provider.chunk_duration == 90
     assert provider.overlap_duration == 10
