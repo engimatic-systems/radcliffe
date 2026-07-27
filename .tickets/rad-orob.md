@@ -1,6 +1,6 @@
 ---
 id: rad-orob
-status: in_progress
+status: closed
 deps: []
 links: [rad-erac, rad-7t9h, rad-u96k, rad-e9wi, rad-rnt5, rad-tg8o, rad-wobn, rad-1w52]
 created: 2026-07-25T15:19:17Z
@@ -36,3 +36,7 @@ Agent SDK Haiku can download HTML, transform it with sandboxed CLI tools, and pu
 **2026-07-25T15:41:12Z**
 
 2026-07-25 pinned-Haiku integration passed after removing the default turn ceiling. The exact Hacker News regression completed in 12 SDK turns at $0.04050375: download_page persisted the page, eight Docker run_command calls transformed/verified it, publish_markdown ran once, and the promoted artifact contained exactly three bullet lines with zero other non-empty lines. No corrective turn was needed; native host tools remained disabled.
+
+**2026-07-27T04:13:17Z**
+
+PR #63 is merged. Sandboxed run_command, path-only atomic Markdown publication, bounded corrective turns, staged inputs, and operator-owned runtime/budget policy passed the final integrated repository gate. The operator authorized closure.

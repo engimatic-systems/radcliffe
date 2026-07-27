@@ -1,6 +1,6 @@
 ---
 id: rad-c2tv
-status: in_progress
+status: closed
 deps: []
 links: [rad-0ax4]
 created: 2026-07-21T04:04:49Z
@@ -27,3 +27,7 @@ TalkBack announces that visual technical detail is available without reading raw
 **2026-07-23T03:27:58Z**
 
 Implementation complete on 1f76665. Automated evidence: make check passed (376 Python passed, 1 skipped; 107 sidecar tests; Android unit tests and lint; TypeScript, Ruff, and mypy). Review APK: /Users/ravd/agent-share/radcliffe/radcliffe-0.6.0-v10-1f76665-debug.apk, SHA-256 01275e294caeef214d2c904d3de718e866c1988de1349080342234984c721151. Leave in_progress for the acceptance criterion requiring a physical-phone TalkBack check of focus order, safe labels, exact-detail modal, and dismissal.
+
+**2026-07-27T04:13:17Z**
+
+PRs #59 and #60 are merged, and the operator confirmed personal verification of the TalkBack flow. The safe exact-detail affordance and review-build path are accepted; closing.

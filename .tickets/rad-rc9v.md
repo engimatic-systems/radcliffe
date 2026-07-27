@@ -1,6 +1,6 @@
 ---
 id: rad-rc9v
-status: in_progress
+status: closed
 deps: []
 links: [rad-fvx9, rad-9e2z, rad-0mws]
 created: 2026-07-21T18:19:39Z
@@ -39,3 +39,7 @@ Deployment correction 2026-07-21: the first generated-session dispatch smoke exp
 **2026-07-21T18:40:55Z**
 
 Dynamic deployment acceptance 2026-07-21: after the in-memory correction, make check-worker-dispatch-local created ses_810b32bef22f3053f6d1117bafaca1e0. Its restricted-environment worker preloaded Parakeet in 1646.81 ms, connected to LiveKit only after preload, reached pipeline ready, and logged no ffmpeg, permission, traceback, or provider error. Control /healthz and /readyz were green on revision 4676f2a with Haiku 4.5. Keep this operator-final-check ticket in progress for the requested target-speaker Pixel Gettysburg/natural-pause A/B.
+
+**2026-07-27T04:13:18Z**
+
+The operator explicitly tested the deployed Parakeet path and judged it up to standard. The local Parakeet provider, preload/readiness path, deployment dispatch, evidence mapping, and Whisper rollback are implemented; closing.

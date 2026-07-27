@@ -6,6 +6,7 @@ import math
 import tempfile
 import threading
 import wave
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
@@ -25,6 +26,12 @@ from parakeet_mlx.audio import get_logmel as get_parakeet_logmel  # type: ignore
 
 DEFAULT_PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+# A safetensors repack of hexgrad/Kokoro-82M, the official release. Verified equal tensor by
+# tensor: 548 on each side, none missing, all within 1e-5 once the DataParallel prefix is
+# stripped. mlx-audio cannot read the official repo directly because it ships PyTorch .pth.
+DEFAULT_KOKORO_MODEL = "prince-canuma/Kokoro-82M"
+DEFAULT_KOKORO_VOICE = "bf_emma"
+KOKORO_SAMPLE_RATE = 24000
 DEFAULT_WHISPER_INITIAL_PROMPT = (
     "Radcliffe vocabulary: dash, bold, Markdown, Cosmic touch, voice controls work, "
     "read source, metadata."
@@ -125,6 +132,22 @@ class _ParakeetModel(Protocol):
     preprocessor_config: _ParakeetPreprocessor
 
     def generate(self, mel: object) -> list[_ParakeetResult]: ...
+
+
+class _KokoroSegment(Protocol):
+    audio: object
+
+
+class _KokoroModel(Protocol):
+    def generate(
+        self,
+        *,
+        text: str,
+        voice: str,
+        speed: float,
+        lang_code: str,
+        verbose: bool,
+    ) -> Iterable[_KokoroSegment]: ...
 
 
 class LocalAppleSpeechProvider:
@@ -391,6 +414,103 @@ class ParakeetAppleSpeechProvider(LocalAppleSpeechProvider):
             no_speech_probability=None,
             compression_ratio=None,
         )
+
+
+class KokoroSpeechProvider(ParakeetAppleSpeechProvider):
+    """Parakeet STT with Kokoro speech, replacing the macOS `say` voice.
+
+    Kokoro's native output is 24 kHz mono, which is exactly what the publisher already
+    consumes, so nothing is resampled on the way out.
+    """
+
+    def __init__(
+        self,
+        *,
+        parakeet_model: str = DEFAULT_PARAKEET_MODEL,
+        kokoro_model: str = DEFAULT_KOKORO_MODEL,
+        kokoro_voice: str = DEFAULT_KOKORO_VOICE,
+        chunk_duration: float = 120.0,
+        overlap_duration: float = 15.0,
+    ) -> None:
+        if not kokoro_voice:
+            raise ValueError("a Kokoro voice name is required")
+        super().__init__(
+            parakeet_model=parakeet_model,
+            chunk_duration=chunk_duration,
+            overlap_duration=overlap_duration,
+        )
+        self.kokoro_model = kokoro_model
+        self.kokoro_voice = kokoro_voice
+        self.model_identity = f"{parakeet_model}+{kokoro_model}:{kokoro_voice}"
+        self._kokoro: object | None = None
+        # MLX Metal state is process-global, so one synthesis at a time.
+        self._synthesis_lock = threading.Lock()
+
+    @property
+    def language_code(self) -> str:
+        """Kokoro voices are named <language><gender>_<name>, so bf_emma is British female.
+
+        Derived rather than hardcoded: pinning "b" would mispronounce every American voice.
+        """
+
+        return self.kokoro_voice[0]
+
+    async def prepare(self) -> None:
+        """Pay Kokoro's cold start before the worker reports readiness.
+
+        The first synthesis costs seconds: spaCy loads, the pipeline is built, and Metal
+        kernels compile. Warm calls are milliseconds. Parakeet warms up here for the same
+        reason, which is why this hook already exists and is already awaited.
+        """
+
+        await super().prepare()
+        await asyncio.to_thread(self._warm_kokoro)
+
+    async def synthesize(self, canonical_text: str, *, rate: float = 1.0) -> bytes:
+        if not math.isfinite(rate) or not 0.75 <= rate <= 1.5:
+            raise ValueError("Kokoro TTS rate must be between 0.75x and 1.5x")
+        if not canonical_text.strip():
+            # Kokoro asserts on empty input, and silence is the honest rendering anyway.
+            return b""
+        return await asyncio.to_thread(self._synthesize_sync, canonical_text, rate)
+
+    def _warm_kokoro(self) -> None:
+        with self._synthesis_lock:
+            self._synthesize_locked("Ready.", 1.0)
+
+    def _synthesize_sync(self, canonical_text: str, rate: float) -> bytes:
+        with self._synthesis_lock:
+            return self._synthesize_locked(canonical_text, rate)
+
+    def _synthesize_locked(self, canonical_text: str, rate: float) -> bytes:
+        if self._kokoro is None:
+            from mlx_audio.tts.utils import load_model  # type: ignore[import-untyped]
+
+            self._kokoro = load_model(self.kokoro_model)
+        model = cast(_KokoroModel, self._kokoro)
+        segments = list(
+            model.generate(
+                text=canonical_text,
+                voice=self.kokoro_voice,
+                speed=rate,
+                lang_code=self.language_code,
+                verbose=False,
+            )
+        )
+        if not segments:
+            return b""
+        # Long input is split internally; the pieces are consecutive audio for one utterance.
+        waveform = np.concatenate(
+            [np.asarray(segment.audio, dtype=np.float32).reshape(-1) for segment in segments]
+        )
+        return pcm_from_waveform(waveform)
+
+
+def pcm_from_waveform(waveform: np.ndarray) -> bytes:
+    """Convert float samples in [-1, 1] to the little-endian 16-bit PCM the publisher wants."""
+
+    clipped = np.clip(waveform, -1.0, 1.0)
+    return bytes((clipped * 32767.0).astype("<i2").tobytes())
 
 
 class OpenAISpeechProvider:
