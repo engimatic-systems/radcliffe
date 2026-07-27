@@ -422,8 +422,10 @@ class SessionConformance:
             "source_envelope_is_byte_exact",
             source_envelope.content.inline_text is not None
             and source_envelope.content.inline_text.encode() == canonical
-            and source_envelope.content_sha256 == hashlib.sha256(canonical).digest(),
-            "protocol envelope bytes and both content hashes match the randomized fixture",
+            and source_envelope.content_sha256 == hashlib.sha256(canonical).digest()
+            and source_envelope.provenance is not None
+            and source_envelope.provenance.display_name == "conformance-source.md",
+            "transferred envelope retains exact bytes, hashes, and visible provenance",
             {"byte_length": len(canonical), "sha256": hashlib.sha256(canonical).hexdigest()},
         )
 
@@ -437,12 +439,9 @@ class SessionConformance:
         sequences = [int(item["sequence"]) for item in message_items]
         source_items = [item for item in message_items if item["source"] == "text_source"]
         self.check(
-            "timeline_is_chronological_and_provenance_visible",
-            sequences == sorted(sequences)
-            and len(source_items) == 1
-            and source_items[0]["text"].encode() == canonical
-            and source_items[0]["provenance_label"] == "conformance-source.md",
-            "public timeline retained one canonical source with visible provenance",
+            "unheard_source_is_not_persisted",
+            sequences == sorted(sequences) and not source_items,
+            "direct tool use retained chronological audit without persisting unheard source text",
         )
 
         usage = await self.request(
@@ -452,16 +451,24 @@ class SessionConformance:
             headers=self.headers,
         )
         usage_body = usage.json()
+        accounting_contract = (
+            usage_body.get("exact") is True
+            and usage_body.get("measurement_basis") == "ollama-openai-prompt_tokens-v1"
+        ) or (
+            usage_body.get("exact") is False
+            and usage_body.get("measurement_basis") == "anthropic-count-tokens-plus-2pct-32-v1"
+        )
         self.require(
-            "exact_context_usage_is_available",
+            "bounded_context_usage_is_available",
             usage.status_code == 200
-            and usage_body["exact"] is True
+            and accounting_contract
             and usage_body["projected_input_tokens"] > 0
             and usage_body["projection_version"] == "context-v2",
             f"context endpoint returned HTTP {usage.status_code}",
             {
                 "projected_input_tokens": usage_body.get("projected_input_tokens"),
                 "percentage": usage_body.get("percentage"),
+                "measurement_basis": usage_body.get("measurement_basis"),
             },
         )
         self.check(
@@ -503,13 +510,10 @@ class SessionConformance:
             f"{server.url}/v1/sessions/{session_ids[0]}/messages",
             headers=self.headers,
         )
-        restored_sources = [
-            item for item in restored_messages.json()["items"] if item["source"] == "text_source"
-        ]
         self.check(
             "conversation_timeline_survives_control_plane_restart",
-            len(restored_sources) == 1 and restored_sources[0]["text"].encode() == canonical,
-            "canonical source timeline was restored from SQLite",
+            restored_messages.json()["items"] == message_items,
+            "chronological tool audit and unheard-source exclusion were restored from SQLite",
         )
 
         restored_credentials = await self.request(
