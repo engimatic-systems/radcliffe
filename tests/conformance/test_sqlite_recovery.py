@@ -258,7 +258,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 12,
+        "schema_migrations": 13,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
@@ -274,6 +274,7 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
         "background_job_events": 2,
         "background_job_notification_deliveries": 0,
         "background_job_attempt_contexts": 0,
+        "background_job_inputs": 0,
     }
     with pytest.raises(RECOVERY.RecoveryError, match="cannot replace the live"):
         RECOVERY.restore_backup(
