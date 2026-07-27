@@ -875,20 +875,20 @@ describe("PiAgentOrchestrator", () => {
       type: "string",
       enum: ["immediate", "next_safe_pause", "silent", "user_waiting"],
     });
+    expect(runJobSchema.properties).not.toHaveProperty("maxRuntimeSeconds");
   });
 
-  it("normalizes the observed safe weak-model arguments and rejects destructive aliases", () => {
+  it("ignores the stale 30-second limit observed in the latest phone conversation", () => {
     expect(
       prepareRunJobArguments({
-        instruction: "Create and test a Fibonacci script.",
+        instruction: "Get a numbered list of the top headlines on Hacker News.",
         notificationPolicy: "email",
         priority: 5,
         budgetUsd: 0,
         maxRuntimeSeconds: 30,
       }),
     ).toEqual({
-      instruction: "Create and test a Fibonacci script.",
-      maxRuntimeSeconds: 30,
+      instruction: "Get a numbered list of the top headlines on Hacker News.",
     });
     expect(prepareManageSessionArguments({ action: "create" })).toEqual({
       operation: "create",
@@ -909,14 +909,14 @@ describe("PiAgentOrchestrator", () => {
     ).toEqual({ reference: "headlines.md", jobId: "job-1", rate: "1.25x" });
   });
 
-  it("applies safe argument preparation before executing a weak-model run_job call", async () => {
+  it("keeps the foreground model from shortening a phone-requested job", async () => {
     const faux = createFauxCore({ provider: "radcliffe-weak-tool-test" });
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall(
           "run_job",
           {
-            instruction: "Create and test a Fibonacci script.",
+            instruction: "Get a numbered list of the top headlines on Hacker News.",
             notificationPolicy: "email",
             priority: 5,
             budgetUsd: 0,
@@ -934,15 +934,23 @@ describe("PiAgentOrchestrator", () => {
     }));
     const orchestrator = new PiAgentOrchestrator(faux.getModel(), faux.streamSimple, tool);
 
-    await orchestrator.run(request([packet("user-1", "Run a Fibonacci job")]), () => undefined);
+    await orchestrator.run(
+      request([
+        packet(
+          "user-1",
+          "Hey there, can you get a numbered list of the top headlines on Hacker News right now and then read it out loud to me",
+        ),
+      ]),
+      () => undefined,
+    );
 
     expect(tool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "run_job",
-        userMessage: "Run a Fibonacci job",
+        userMessage:
+          "Hey there, can you get a numbered list of the top headlines on Hacker News right now and then read it out loud to me",
         arguments: {
-          instruction: "Create and test a Fibonacci script.",
-          maxRuntimeSeconds: 30,
+          instruction: "Get a numbered list of the top headlines on Hacker News.",
         },
       }),
       expect.anything(),
@@ -1005,7 +1013,6 @@ describe("PiAgentOrchestrator", () => {
             notificationPolicy: "next_safe_pause",
             priority: 1,
             budgetUsd: 0.5,
-            maxRuntimeSeconds: 3600,
           },
           { id: "run-job-1" },
         ),
@@ -1051,7 +1058,6 @@ describe("PiAgentOrchestrator", () => {
           notificationPolicy: "next_safe_pause",
           priority: 1,
           budgetUsd: 0.5,
-          maxRuntimeSeconds: 3600,
         },
       }),
       expect.anything(),

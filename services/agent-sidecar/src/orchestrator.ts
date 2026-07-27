@@ -578,11 +578,14 @@ export function prepareManageSessionArguments(value: unknown): ManageSessionArgu
 
 export function prepareRunJobArguments(value: unknown): RunJobArguments {
   const item = { ...argumentRecord(value, "run_job") };
+  // Older prompts allowed the foreground model to choose this policy value. Ignore a
+  // stale model-supplied value so it cannot shorten or extend the harness-owned deadline.
+  delete item.maxRuntimeSeconds;
   if (
     !exactKeys(
       item,
       ["instruction"],
-      ["inputs", "notificationPolicy", "priority", "budgetUsd", "maxRuntimeSeconds"],
+      ["inputs", "notificationPolicy", "priority", "budgetUsd"],
     ) ||
     typeof item.instruction !== "string" ||
     item.instruction.length < 1 ||
@@ -626,13 +629,6 @@ export function prepareRunJobArguments(value: unknown): RunJobArguments {
     item.budgetUsd > 100
   ) {
     delete item.budgetUsd;
-  }
-  if (
-    !Number.isInteger(item.maxRuntimeSeconds) ||
-    Number(item.maxRuntimeSeconds) < 1 ||
-    Number(item.maxRuntimeSeconds) > 86_400
-  ) {
-    delete item.maxRuntimeSeconds;
   }
   return item as RunJobArguments;
 }
@@ -960,7 +956,6 @@ export const RUN_JOB_PARAMETERS = Type.Unsafe<RunJobArguments>(
       notificationPolicy: Type.Optional(stringEnum(JOB_NOTIFICATION_POLICIES)),
       priority: Type.Optional(Type.Integer({ minimum: 0, maximum: 4 })),
       budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 100 })),
-      maxRuntimeSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })),
     },
     { additionalProperties: false },
   ),

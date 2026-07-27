@@ -416,7 +416,6 @@ class RunJobArguments(BaseModel):
     )
     priority: int = Field(default=2, ge=0, le=4)
     budget_usd: float | None = Field(default=None, gt=0, le=100)
-    max_runtime_seconds: int = Field(default=3600, ge=1, le=86_400)
     inputs: tuple[RunJobInputArguments, ...] = Field(default=(), max_length=8)
 
 
@@ -1091,7 +1090,7 @@ async def _execute_run_job_tool(
         notification_policy=JobNotificationPolicy(arguments.notification_policy),
         priority=arguments.priority,
         budget_microusd=budget_microusd,
-        max_runtime_seconds=arguments.max_runtime_seconds,
+        max_runtime_seconds=active.settings.job_executor_max_runtime_seconds,
     )
     return _job_tool_response(result)
 

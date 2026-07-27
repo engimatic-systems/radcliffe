@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,75 @@ def test_build_preview_saves_full_page_and_returns_only_extracted_passages(
     ]
     assert "relatedLinks" not in result
     assert len(json.dumps(result)) < page_preview.MAX_PREVIEW_CHARS + 1_000
+
+
+def test_latest_phone_gwern_markdown_is_downloaded_and_previewed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markdown = (
+        "---\n"
+        "title: Essays\n"
+        "description: A categorized list of Gwern.net pages.\n"
+        "...\n\n"
+        "This is the website of **Gwern Branwen**. "
+        "It contains writing about AI, psychology, and statistics.\n\n"
+        "# Newest\n\n"
+        "- [Idea: Lean scaling laws](/lean-scaling){.link-modified-recently}\n"
+        '- ["Sand, Rain, Wood"](/fiction/walking){.link-modified-recently}\n'
+        "- [External essay](https://example.test/essay)\n"
+    )
+    encoded = markdown.encode()
+    requested: dict[str, object] = {}
+
+    class MarkdownResponse:
+        def __init__(self) -> None:
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/markdown; charset=utf-8"
+            self.headers["Content-Length"] = str(len(encoded))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://gwern.net/"
+
+        def read(self, _limit: int) -> bytes:
+            return encoded
+
+    def urlopen(request, *, timeout: int):
+        requested["url"] = request.full_url
+        requested["accept"] = request.get_header("Accept")
+        requested["timeout"] = timeout
+        return MarkdownResponse()
+
+    monkeypatch.setattr(page_preview.urllib.request, "urlopen", urlopen)
+
+    result = page_preview.build_preview(
+        "https://gwern.net/",
+        "Um, that's fine. Can you go ahead and get me a uh an article by Gwern, G-W-E-R-N.net, "
+        "and uh find something interesting and read to me. Just give me the first essay that's "
+        "found.",
+        tmp_path,
+    )
+
+    assert requested["url"] == "https://gwern.net/"
+    assert "text/markdown" in str(requested["accept"])
+    assert requested["timeout"] == 45
+    assert result["mediaType"] == "text/markdown"
+    assert result["title"] == "Essays"
+    assert "Idea: Lean scaling laws" in str(result["preview"])
+    assert tmp_path.joinpath(str(result["htmlPath"])).read_bytes() == encoded
+    assert tmp_path.joinpath(str(result["textPath"])).read_text() == markdown.strip()
+    assert result["relatedLinkCount"] == 3
+    manifest = json.loads(next(tmp_path.glob("pages/*.links.json")).read_text())
+    assert manifest["links"][0] == {
+        "label": "Idea: Lean scaling laws",
+        "locator": "https://gwern.net/lean-scaling",
+    }
 
 
 def test_relevant_match_starts_the_chunk_instead_of_being_truncated_at_its_end() -> None:

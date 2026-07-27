@@ -126,6 +126,7 @@ async def test_supervisor_reports_progress_and_success_without_blocking_acceptan
     process = launcher.processes[0]
     assert process.frames[0]["type"] == "start"
     assert process.frames[0]["instruction"] == "private executor instruction"
+    assert process.frames[0]["limits"]["maxRuntimeSeconds"] == 300
     process.emit({"type": "event", "kind": "progress", "detailCode": "searching"})
     process.emit(
         {

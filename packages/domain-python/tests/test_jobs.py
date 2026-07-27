@@ -61,6 +61,7 @@ async def test_accept_is_idempotent_and_events_exclude_private_instruction(tmp_p
     assert replay.replayed
     assert replay.record == accepted.record
     assert accepted.record.status is JobStatus.QUEUED
+    assert accepted.record.max_runtime_seconds == 300
     assert accepted.record.revision == 1
     assert not hasattr(accepted.record, "instruction")
     events = await store.events(accepted.record.job_id)
