@@ -1,6 +1,6 @@
 ---
 id: rad-e9wi
-status: in_progress
+status: closed
 deps: []
 links: [rad-25m0, rad-rnt5, rad-u96k, rad-orob]
 created: 2026-07-22T02:55:49Z
@@ -32,3 +32,7 @@ Root cause evidence from job_f28b26ea8773e7586d72914f84e61dcd: the saved HTML wa
 **2026-07-22T03:00:26Z**
 
 A controlled Haiku 4.5 run with the repaired large-page preview sourced the speech from the saved HISTORY extraction, wrote an artifact with no title, metadata, preface, Historical Note, commentary, or conclusion, and ran an exact source comparison successfully. The deliberately tight /bin/zsh.06 smoke cap stopped the run after a redundant final read at /bin/zsh.068884, before finish_job; production remains capped at /bin/zsh.25. Added bounded verification guidance and improved preview ranking to surface the full-text passage directly. Keep open for the next operator phone check.
+
+**2026-07-27T04:13:18Z**
+
+PR #65 is merged. Foreground and background instructions now require tool-sourced verbatim extraction, exact requested scope, and no unrequested commentary or model-memory reconstruction. The operator authorized closure.

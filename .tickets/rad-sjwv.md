@@ -1,6 +1,6 @@
 ---
 id: rad-sjwv
-status: in_progress
+status: closed
 deps: []
 links: [rad-86le]
 created: 2026-07-26T04:05:45Z
@@ -40,3 +40,9 @@ Out of scope: switching voices mid-session by tool command. That needs the prefe
 
 Spoken output uses Kokoro bf_emma rather than macOS Samantha, and the operator judges it naturalistic and understandable at elevated speech rates. Synthesis stays comfortably ahead of playback so reading remains continuous. The requested speech rate range of 0.75x to 1.5x is honoured through Kokoro's own speed control rather than by resampling. Audio reaches the publisher as 24 kHz mono 16-bit PCM, unchanged in format from the previous provider, and the exact-source guarantee is untouched since synthesis consumes canonical text and produces audio only. Model weights are verified equal to the official hexgrad release. Cold-start cost is paid in prepare() before the worker reports readiness, so the first utterance of a session is not slow. The provider is selectable by environment variable and the previous say-based path still works when selected. Verified by a Pixel listen-through of a multi-paragraph article.
 
+
+## Notes
+
+**2026-07-26T18:59:02Z**
+
+Verified on the Pixel: the operator listened through in-app and judged the voice good. Closing. Deployed via var/.env RADCLIFFE_SPEECH_PROVIDER=kokoro (gitignored, backup at var/.env.bak-kokoro); cold start measured 15.2s inside prepare(), before input readiness. PR #67.

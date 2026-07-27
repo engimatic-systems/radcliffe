@@ -1,6 +1,6 @@
 ---
 id: rad-57f3
-status: open
+status: closed
 deps: []
 links: [rad-fksk, rad-oy5k]
 created: 2026-07-25T21:41:14Z
@@ -36,3 +36,9 @@ The user's constraint is that brackets and parentheses cannot simply be deleted,
 
 Spoken source text contains no URLs, no markdown link or emphasis syntax, and no navigation or table-of-contents scaffolding; genuine parenthetical and bracketed prose is preserved verbatim; the canonical source hash and the exact-source guarantee are unaffected by any render-time normalization; word spacing around unwrapped links and punctuation is correct; normalization is deterministic and unit-tested against the gwern fixtures; and a Pixel listen-through of a gwern article is judged listenable by the operator.
 
+
+## Notes
+
+**2026-07-27T04:13:18Z**
+
+PR #64 is merged. Deterministic render-time markup normalization makes links and emphasis speakable without changing canonical source bytes or hashes. The operator authorized closure of the merged-chain behavior.

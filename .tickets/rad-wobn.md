@@ -1,6 +1,6 @@
 ---
 id: rad-wobn
-status: in_progress
+status: closed
 deps: []
 links: [rad-orob, rad-1w52]
 created: 2026-07-25T15:19:17Z
@@ -28,3 +28,7 @@ Foreground Haiku calls are not rejected because of accumulated session dollar sp
 **2026-07-25T15:36:40Z**
 
 2026-07-25 implementation is locally green. The foreground sidecar no longer constructs or enforces CloudBudgetController; context preflight, per-call output limits, and usage events remain. Agent SDK CLI/default profile and active ignored operator configuration now cap each job independently at $0.25 and pin Haiku. Full Python suite: 372 passed, 1 skipped; Node: 106 passed; Ruff and mypy passed.
+
+**2026-07-27T04:13:17Z**
+
+PR #63 is merged. Foreground accumulated-dollar enforcement is removed while usage and context controls remain, and each background Agent SDK job retains its independent spend cap. The operator authorized closure.
