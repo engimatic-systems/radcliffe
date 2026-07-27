@@ -65,26 +65,18 @@ function request(packets: ContextPacket[]): TurnRequest {
 }
 
 describe("PiAgentOrchestrator", () => {
-  it("instructs the model to normalize spoken filename punctuation", () => {
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dot M D");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("dash");
+  it("keeps concise job and structured tool guidance", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("list_sources first");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("run_job");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("in one short sentence using only a few words");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("do not omit it");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("5 words or less");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("when a job is done, say so very succinctly");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("without a preamble");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("never speak or reproduce the job ID");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("matching manage_job call succeeds");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("read_job_source");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("ambiguous title must be clarified");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("inference flag is true");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("source entity IDs");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Optimize ordinary responses for listening");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("raw URLs");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("explicitly requests exact delivery");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Any time the user asks you to read something");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("provider's structured tool channel");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Follow the schema exactly");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Never print XML");

@@ -5,7 +5,7 @@ deps: []
 links: [rad-0ax4]
 created: 2026-07-21T04:04:49Z
 type: feature
-priority: 2
+priority: 3
 assignee: coopwilliams
 parent: rad-cnrg
 tags: [android, accessibility, spoken-output, operator-final-check]
