@@ -852,6 +852,12 @@ const EMPTY_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+const TOOL_FAILURE_CONTEXT_INSTRUCTION =
+  " Historical tool-failure records describe past attempts, not pending user requests. " +
+  "Use one when the current user asks about that failure or continues the failed task. " +
+  "When the current user changes topics or makes an unrelated request, answer the current " +
+  "request directly and do not repeat or explain the old failure.";
+
 export const RADCLIFFE_SYSTEM_PROMPT =
   "The voice-agent harness is called Radcliffe. You are the selected conversational model " +
   "operating inside it. You may inspect, set, reset, or undo only response_detail and " +
@@ -1053,7 +1059,11 @@ function label(packet: ContextPacket): string {
   const annotations = Object.fromEntries(packet.annotations);
   const provenance = annotations.locator ? ` from ${annotations.locator}` : "";
   const position = packet.source === "text_source" ? readingPosition(annotations) : "";
-  return `[Radcliffe ${packet.source}${provenance}${position}]\n${packet.content}`;
+  const historicalFailure =
+    annotations["radcliffe.event"] === "tool_failure"
+      ? " historical tool failure; past event, not a pending user request"
+      : "";
+  return `[Radcliffe ${packet.source}${historicalFailure}${provenance}${position}]\n${packet.content}`;
 }
 
 export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {
@@ -1102,8 +1112,14 @@ function systemPrompt(
   delivery?: DeliveryPreparation,
   exactOutput?: ExactOutputIntent,
 ): string {
+  const hasHistoricalToolFailure = request.packets.some(
+    (packet) =>
+      packet.include &&
+      Object.fromEntries(packet.annotations)["radcliffe.event"] === "tool_failure",
+  );
   return (
     RADCLIFFE_SYSTEM_PROMPT +
+    (hasHistoricalToolFailure ? TOOL_FAILURE_CONTEXT_INSTRUCTION : "") +
     (request.responseDetail === "brief"
       ? " Keep this response brief."
       : request.responseDetail === "detailed"

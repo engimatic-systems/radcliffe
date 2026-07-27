@@ -91,6 +91,106 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).not.toMatch(/\bimpersonate Radcliffe\b/i);
   });
 
+  it("keeps tool failures for relevant follow-ups while marking them as past events", () => {
+    const context = modelContextFromRequest(
+      request([
+        packet("old-request", "Create a new conversation."),
+        packet(
+          "old-failure",
+          "Tool call failed because the operation conflicts with the current state.",
+          {
+            role: "system",
+            source: "system",
+            annotations: [
+              ["projection", "context-v2"],
+              ["radcliffe.event", "tool_failure"],
+              ["radcliffe.tool.name", "manage_session"],
+            ],
+          },
+        ),
+        packet("current-user", "Why did that fail?"),
+      ]),
+    );
+
+    expect(context.systemPrompt).toContain(
+      "Historical tool-failure records describe past attempts, not pending user requests",
+    );
+    expect(context.systemPrompt).toContain(
+      "Use one when the current user asks about that failure",
+    );
+    expect(context.messages).toContainEqual({
+      role: "user",
+      content:
+        "[Radcliffe system historical tool failure; past event, not a pending user request]\n" +
+        "Tool call failed because the operation conflicts with the current state.",
+      timestamp: 1,
+    });
+    expect(context.messages.at(-1)).toEqual({
+      role: "user",
+      content: "[Radcliffe user]\nWhy did that fail?",
+      timestamp: 1,
+    });
+  });
+
+  it("prioritizes an unrelated resumed request over repeated historical tool failures", () => {
+    const failure = (messageId: string) =>
+      packet(
+        messageId,
+        "Tool call failed because the operation conflicts with the current state.",
+        {
+          role: "system",
+          source: "system",
+          annotations: [
+            ["projection", "context-v2"],
+            ["radcliffe.event", "tool_failure"],
+            ["radcliffe.tool.name", "manage_session"],
+          ],
+        },
+      );
+    const context = modelContextFromRequest(
+      request([
+        packet("old-request-one", "Create a new conversation."),
+        failure("old-failure-one"),
+        packet("old-model-one", "I hit an error creating it.", {
+          role: "assistant",
+          source: "model",
+        }),
+        packet("old-request-two", "Try it again."),
+        failure("old-failure-two"),
+        packet("old-model-two", "That failed again.", {
+          role: "assistant",
+          source: "model",
+        }),
+        packet(
+          "current-user",
+          "We are moving to something else. Explain why the sky is blue in several sentences.",
+        ),
+      ]),
+    );
+
+    expect(context.systemPrompt).toContain(
+      "When the current user changes topics or makes an unrelated request",
+    );
+    expect(context.systemPrompt).toContain(
+      "answer the current request directly and do not repeat or explain the old failure",
+    );
+    expect(
+      context.messages.filter(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.includes("historical tool failure; past event"),
+      ),
+    ).toHaveLength(2);
+    expect(context.messages.at(-1)).toEqual({
+      role: "user",
+      content:
+        "[Radcliffe user]\n" +
+        "We are moving to something else. Explain why the sky is blue in several sentences.",
+      timestamp: 1,
+    });
+  });
+
   it("recognizes explicit job management while leaving how-to questions non-mutating", () => {
     expect(
       explicitJobManagementOperation(
