@@ -499,6 +499,16 @@ object SessionApi {
                         "text_source" -> MessageKind.SOURCE
                         else -> MessageKind.SYSTEM
                     }
+                    val rawCategories = item.optJSONArray("technical_detail_categories")
+                    val categories = buildList {
+                        if (rawCategories != null) {
+                            for (categoryIndex in 0 until rawCategories.length()) {
+                                rawCategories.optString(categoryIndex)
+                                    .takeIf { it.isNotBlank() }
+                                    ?.let(::add)
+                            }
+                        }
+                    }
                     add(
                         DisplayMessage(
                             id = item.getString("message_id"),
@@ -516,6 +526,10 @@ object SessionApi {
                             },
                             createdAt = Instant.parse(item.getString("created_at")),
                             sequence = item.getLong("sequence"),
+                            technicalDetailCategories = technicalDetailCategories(
+                                kind,
+                                categories,
+                            ),
                         ),
                     )
                 }

@@ -525,9 +525,21 @@ v3.
 
 Long research, analysis, download, and coding work crosses a separate bounded
 job boundary. The foreground model calls `run_job` with a private instruction,
-notification policy, priority, runtime limit, and optional USD budget. The
-control plane durably accepts the request and returns a `job_id` immediately;
-it does not hold the foreground tool turn open while an executor works.
+notification policy, priority, runtime limit, optional USD budget, and up to
+eight explicit input references. A foreground source input resolves through
+the current session's source grant. A prior artifact input resolves only
+against a succeeded job in that same session. Ambiguous names, cross-session
+job IDs, traversal, symlinks, hash changes, oversized files, and duplicate
+inputs fail closed.
+
+The control plane snapshots each accepted input into the job record with its
+kind, original reference, producer identity when applicable, byte length, and
+SHA-256. Every attempt receives a new read-only copy under
+`/workspace/inputs`; it never mounts a configured source root or another job's
+workspace. Retries therefore consume the same accepted bytes even if the
+original foreground file later changes. The control plane durably accepts the
+request and returns a `job_id` immediately; it does not hold the foreground
+tool turn open while an executor works.
 
 Each job has an independent monotonic revision, status (`queued`, `running`,
 `waiting`, `succeeded`, `failed`, or `cancelled`), execution attempt, and

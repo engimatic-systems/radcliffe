@@ -166,6 +166,10 @@ export type ToolExecutionRequest =
       userMessage: string;
       arguments: {
         instruction: string;
+        inputs?: Array<
+          | { kind: "source"; reference: string }
+          | { kind: "artifact"; reference: string; jobId?: string }
+        >;
         notificationPolicy?: JobNotificationPolicy;
         priority?: number;
         budgetUsd?: number;
