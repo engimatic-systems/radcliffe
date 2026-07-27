@@ -314,6 +314,20 @@ describe("PiAgentOrchestrator", () => {
 
     await orchestrator.run(turn, () => undefined);
 
+    const modelMessages = stream.mock.calls[0]?.[1].messages;
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: `[Radcliffe user]\n${first}`,
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "[Radcliffe user]\nVerbatim.",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(modelMessages).match(/Gettysburg Address/g)).toHaveLength(1);
     expect(stream.mock.calls[0]?.[2]).toMatchObject({
       toolChoice: { type: "tool", name: "run_job" },
     });
@@ -329,6 +343,50 @@ describe("PiAgentOrchestrator", () => {
       expect.anything(),
       expect.any(Function),
     );
+  });
+
+  it("sends every buffered user fragment to the model exactly once in chronological order", () => {
+    const fragments = [
+      "This is a test of the Gettysburg Address.",
+      "Four score and seven years ago.",
+      "Now we are engaged in a great civil war.",
+      "What did I say?",
+    ];
+    const turn = request(
+      fragments.map((content, index) =>
+        packet(`user-${index + 1}`, content, {
+          annotations: [
+            [
+              "radcliffe.turn_disposition",
+              index === fragments.length - 1 ? "completed" : "interrupted",
+            ],
+            ["radcliffe.turn_id", `turn-${index + 1}`],
+          ],
+          timestamp: index + 1,
+        }),
+      ),
+    );
+    turn.userMessage = fragments.join("\n");
+
+    const context = modelContextFromRequest(turn);
+
+    expect(context.messages).toEqual(
+      fragments.map((content, index) => ({
+        role: "user",
+        content: `[Radcliffe user]\n${content}`,
+        timestamp: index + 1,
+      })),
+    );
+    for (const fragment of fragments) {
+      expect(
+        context.messages.filter(
+          (message) =>
+            message.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.includes(fragment),
+        ),
+      ).toHaveLength(1);
+    }
   });
 
   it("keeps every schema available when a first-turn job request mentions later verbatim delivery", async () => {
