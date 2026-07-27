@@ -32,6 +32,17 @@ class ConnectionProfileTest {
         assertTrue(ConnectionProfile("localhost", "token").validationError() != null)
         assertTrue(ConnectionProfile("http://localhost", "token", "bad session").validationError() != null)
         assertNull(ConnectionProfile("http://localhost", "token", "").validationError())
+        assertEquals(
+            "Review builds require an https:// control URL",
+            ConnectionProfile("http://localhost", "token").validationError(
+                allowCleartextControl = false,
+            ),
+        )
+        assertNull(
+            ConnectionProfile("https://control.example.test", "token").validationError(
+                allowCleartextControl = false,
+            ),
+        )
     }
 
     @Test

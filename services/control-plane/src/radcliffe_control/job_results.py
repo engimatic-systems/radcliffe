@@ -16,6 +16,7 @@ RESULT_FILENAME = "promoted-result.json"
 RESULT_LIMIT_BYTES = 64 * 1024
 RELATED_LINK_MANIFEST_LIMIT_BYTES = 64 * 1024
 MAX_RELATED_LINKS = 100
+MAX_STAGED_ARTIFACT_BYTES = 8 * 1024 * 1024
 
 
 class PromotedArtifact(BaseModel):
@@ -152,6 +153,14 @@ def read_workspace_related_links(workspace: Path) -> tuple[PromotedRelatedLink, 
 @dataclass(frozen=True, slots=True)
 class PromotedSourceFile:
     source: PromotedSource
+    root: Path
+    path: Path
+    canonical_bytes: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class PromotedArtifactFile:
+    artifact: PromotedArtifact
     root: Path
     path: Path
     canonical_bytes: bytes
@@ -307,6 +316,30 @@ def read_promoted_sources(
     return tuple(promoted)
 
 
+def read_promoted_artifacts(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+) -> tuple[PromotedArtifactFile, ...]:
+    result = read_promoted_result(workspace_root, job_id=job_id, attempt=attempt)
+    if result is None:
+        return ()
+    return tuple(
+        resolved
+        for artifact in result.artifacts
+        if (
+            resolved := _read_promoted_artifact_file(
+                workspace_root,
+                job_id=job_id,
+                attempt=attempt,
+                artifact=artifact,
+            )
+        )
+        is not None
+    )
+
+
 def _read_promoted_source_file(
     workspace_root: Path,
     *,
@@ -321,7 +354,35 @@ def _read_promoted_source_file(
         or artifact.byte_length > 1024 * 1024
     ):
         return None
+    resolved = _read_promoted_artifact_file(
+        workspace_root,
+        job_id=job_id,
+        attempt=attempt,
+        artifact=artifact,
+    )
+    if resolved is None:
+        return None
+    try:
+        resolved.canonical_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return PromotedSourceFile(
+        source,
+        resolved.root,
+        resolved.path,
+        resolved.canonical_bytes,
+    )
 
+
+def _read_promoted_artifact_file(
+    workspace_root: Path,
+    *,
+    job_id: str,
+    attempt: int,
+    artifact: PromotedArtifact,
+) -> PromotedArtifactFile | None:
+    if artifact.byte_length < 1 or artifact.byte_length > MAX_STAGED_ARTIFACT_BYTES:
+        return None
     root = workspace_root.resolve()
     job_root = root / job_id
     attempt_root = job_root / f"attempt-{attempt}"
@@ -332,7 +393,7 @@ def _read_promoted_source_file(
         resolved_files = files_root.resolve(strict=True)
     except OSError:
         return None
-    relative = Path(source.path)
+    relative = Path(artifact.path)
     if relative.is_absolute() or ".." in relative.parts:
         return None
     candidate = resolved_files / relative
@@ -354,19 +415,15 @@ def _read_promoted_source_file(
         return None
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size != source.byte_length:
+        if not stat.S_ISREG(info.st_mode) or info.st_size != artifact.byte_length:
             os.close(descriptor)
             return None
         with os.fdopen(descriptor, "rb") as content:
-            canonical = content.read(1024 * 1024 + 1)
+            canonical = content.read(MAX_STAGED_ARTIFACT_BYTES + 1)
     except OSError:
         return None
-    try:
-        canonical.decode("utf-8")
-    except UnicodeDecodeError:
+    if len(canonical) != artifact.byte_length:
         return None
-    if len(canonical) != source.byte_length:
+    if hashlib.sha256(canonical).hexdigest() != artifact.sha256:
         return None
-    if hashlib.sha256(canonical).hexdigest() != source.sha256:
-        return None
-    return PromotedSourceFile(source, resolved_files, resolved, canonical)
+    return PromotedArtifactFile(artifact, resolved_files, resolved, canonical)

@@ -79,6 +79,48 @@ class SessionModelTest {
     }
 
     @Test
+    fun machineDetailAffordanceNeverPlacesRawDetailInDefaultTalkBackLabels() {
+        val raw = "Job job_0123456789abcdef wrote /srv/private/report.json"
+        val message = DisplayMessage(
+            id = "model-detail",
+            kind = MessageKind.MODEL,
+            text = raw,
+            technicalDetailCategories = setOf("identifier", "path", "host-secret"),
+        )
+
+        val model = machineDetailUiModel(message)!!
+
+        assertEquals("Technical detail available", model.visibleLabel)
+        assertEquals("Read exact technical detail", model.actionLabel)
+        assertTrue(model.accessibilityLabel.contains("not read automatically"))
+        assertFalse(model.accessibilityLabel.contains("job_0123456789abcdef"))
+        assertFalse(model.accessibilityLabel.contains("/srv/private/report.json"))
+        assertEquals(
+            setOf("identifier", "path"),
+            technicalDetailCategories(message.kind, message.technicalDetailCategories),
+        )
+    }
+
+    @Test
+    fun ordinaryAndNonModelMessagesKeepTheirExistingTimelineSemantics() {
+        assertEquals(
+            null,
+            machineDetailUiModel(DisplayMessage("ordinary", MessageKind.MODEL, "Ordinary answer")),
+        )
+        assertEquals(
+            null,
+            machineDetailUiModel(
+                DisplayMessage(
+                    id = "user",
+                    kind = MessageKind.USER,
+                    text = "job_0123456789abcdef",
+                    technicalDetailCategories = setOf("identifier"),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun prepareClearsThePreviousConversationBeforeLoadingOrConnecting() {
         SessionModel.open(
             "old-session",

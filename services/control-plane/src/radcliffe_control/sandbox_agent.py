@@ -103,6 +103,32 @@ class StartRelatedLink(BaseModel):
         )
 
 
+class StartInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["source", "artifact"]
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+    path: str = Field(pattern=r"^inputs/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+    source_reference: str = Field(alias="sourceReference", min_length=1, max_length=2_048)
+    producer_job_id: str | None = Field(
+        default=None,
+        alias="producerJobId",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+    )
+    entity_id: str | None = Field(
+        default=None,
+        alias="entityId",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+    )
+    artifact_id: str | None = Field(
+        default=None,
+        alias="artifactId",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+    )
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    byte_length: int = Field(alias="byteLength", ge=1, le=8 * 1024 * 1024)
+
+
 class StartFrame(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -115,6 +141,7 @@ class StartFrame(BaseModel):
     related_links: tuple[StartRelatedLink, ...] = Field(
         default=(), alias="relatedLinks", max_length=100
     )
+    inputs: tuple[StartInput, ...] = Field(default=(), max_length=8)
     follow_ups: tuple[StartFollowUp, ...] = Field(default=(), alias="followUps", max_length=100)
     limits: StartLimits
 
@@ -984,8 +1011,9 @@ available only through a policy proxy. Host files, credentials, keychains, Docke
 and private/LAN endpoints are deliberately unavailable. Inspect actual command output before
 parsing it, never
 repeat an identical failed command, and prefer a short Python script over a fragile shell pipeline
-for structured web data.
-
+for structured web data. Explicit authorized inputs are immutable verified copies under
+/workspace/inputs. Consume them directly when the instruction names them; do not redownload,
+replace, or treat them as generated output.
 Match the requested artifact's content, format, and scope exactly. Do not add a preface, historical
 note, commentary, conclusion, metadata, or analysis unless the user requested it or the specified
 format requires it. For complete or verbatim content, copy only text obtained from a saved source
@@ -1051,6 +1079,8 @@ def safe_artifacts(workspace: Path, paths: Sequence[str]) -> tuple[PromotedArtif
         try:
             relative = PurePosixPath(workspace_relative_artifact(value))
         except ValueError:
+            continue
+        if relative.parts[0] == "inputs":
             continue
         raw_candidate = workspace / Path(*relative.parts)
         if any(
@@ -1189,6 +1219,14 @@ def run_agent(
         initial_parts.append(
             "Related links from prior jobs:\n"
             + "\n".join(f"- {item.label}: {item.locator}" for item in start.related_links)
+        )
+    if start.inputs:
+        initial_parts.append(
+            "Authorized immutable inputs already staged in the workspace:\n"
+            + "\n".join(
+                f"- /workspace/{item.path} ({item.kind}; requested as {item.source_reference})"
+                for item in start.inputs
+            )
         )
     messages: list[dict[str, object]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -1591,7 +1629,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         start = StartFrame.model_validate_json(line)
         attempt_workspace = Path.cwd().resolve()
         artifact_workspace = attempt_workspace / "files"
-        artifact_workspace.mkdir(mode=0o700, exist_ok=False)
+        artifact_workspace.mkdir(mode=0o700, exist_ok=True)
+        if artifact_workspace.is_symlink() or not artifact_workspace.is_dir():
+            raise ValueError("artifact workspace is unavailable")
         transcript = PrivateTranscript(attempt_workspace)
         transcript.append("start", start.model_dump(by_alias=True))
         sandbox = DockerSandbox(

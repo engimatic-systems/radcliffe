@@ -156,6 +156,31 @@ class JsonLineJobLauncher:
             if key in self._PROVIDER_ENVIRONMENT_KEYS and value
         }
 
+    @staticmethod
+    def _stage_inputs(workspace: Path, claim: JobClaim) -> None:
+        if not claim.inputs:
+            return
+        artifact_workspace = workspace / "files"
+        artifact_workspace.mkdir(mode=0o700, exist_ok=False)
+        inputs_root = artifact_workspace / "inputs"
+        inputs_root.mkdir(mode=0o700, exist_ok=False)
+        for item in claim.inputs:
+            target = inputs_root / item.name
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(target, flags, 0o400)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(item.canonical_bytes)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except Exception:
+                target.unlink(missing_ok=True)
+                raise
+            target.chmod(0o444)
+        inputs_root.chmod(0o555)
+
     async def __call__(self, claim: JobClaim) -> JobProcess:
         root = self.workspace_root.resolve()
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -168,6 +193,7 @@ class JsonLineJobLauncher:
             raise JobExecutorConfigurationError("job attempt workspace escaped its job root")
         workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
         workspace.chmod(0o700)
+        self._stage_inputs(workspace, claim)
         temporary = workspace / "tmp"
         temporary.mkdir(mode=0o700, exist_ok=True)
         temporary.chmod(0o700)
@@ -305,6 +331,20 @@ class JobExecutorSupervisor:
                         "relatedLinks": [
                             {"label": item.label, "locator": item.locator}
                             for item in claim.related_links
+                        ],
+                        "inputs": [
+                            {
+                                "kind": item.kind,
+                                "name": item.name,
+                                "path": f"inputs/{item.name}",
+                                "sourceReference": item.source_reference,
+                                "producerJobId": item.producer_job_id,
+                                "entityId": item.entity_id,
+                                "artifactId": item.artifact_id,
+                                "sha256": item.sha256,
+                                "byteLength": item.byte_length,
+                            }
+                            for item in claim.inputs
                         ],
                         "followUps": [
                             {"id": item.follow_up_id, "instruction": item.instruction}
