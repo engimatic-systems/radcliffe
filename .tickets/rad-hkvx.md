@@ -2,7 +2,7 @@
 id: rad-hkvx
 status: open
 deps: []
-links: []
+links: [rad-pwvo]
 created: 2026-07-25T17:45:19Z
 type: bug
 priority: 2
