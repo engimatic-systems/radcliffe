@@ -1,6 +1,6 @@
 ---
 id: rad-25m0
-status: in_progress
+status: closed
 deps: []
 links: [rad-e9wi, rad-rnt5, rad-u96k]
 created: 2026-07-22T02:30:39Z
@@ -40,3 +40,7 @@ Regression coverage now uses the exact fenced form observed on the phone (run_jo
 **2026-07-22T13:43:49Z**
 
 Newest two phone sessions isolated a schema-lifecycle root cause, not another missing syntax regex. Requests that mentioned later verbatim delivery were falsely classified as immediate exact-output; the orchestrator then removed every native tool schema and bypassed textual-protocol quarantine. Changed the invariant so all seven schemas are attached on the first and every exact-output provider request, while provider toolChoice=none separately prevents execution for a true literal response. Exact-output classification now requires an identifiable literal or sequence. Plain 'run a job' and 'start a new job' requests now force native run_job. Regression coverage uses both observed phone phrasings, verifies schemas on the first turn, quarantines run_job(...) before speech, and confirms structured Anthropic tool choice. Sidecar suite: 105 passing; TypeScript check and build pass.
+
+**2026-07-27T04:43:08Z**
+
+2026-07-26 physical-phone acceptance: three explicit Gettysburg background-job requests in sessions ses_d64f6e964d5540c826f673d2ac333efc, ses_7da030ca4c5e333a33eab20667659cfc, and ses_71a4b92e9ef5a9e9b784554f17058938 all produced native run_job reference envelopes and durable succeeded jobs. No textual/fenced tool imitation reached model speech. Operator confirmed the native routing behavior. Acceptance evidence is sufficient to close.

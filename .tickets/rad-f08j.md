@@ -32,3 +32,11 @@ Implemented and deployed in b1bf61e: run_job tool-result prompting now requires 
 **2026-07-20T03:40:42Z**
 
 Refined in 11ae071 after user review: successful run_job and manage_job mutations now instruct the model to describe the tool action in one short sentence, then deliver all additional requested context normally. Machine-oriented mutation tool results no longer expose IDs or serialized metadata to the response model, while durable internal job references remain available for later exact management. Failures and omitted/mismatched tool calls remain fail-closed. Full make check passed (300 Python, 1 skipped; 54 sidecar; Android unit/lint). Live Haiku mixed-response acceptance emitted: 'Background job launched. The foreground conversation remains available for your next request.'
+
+**2026-07-27T04:43:08Z**
+
+Reopened after 2026-07-26 Sonnet 5 phone UAT and a revised operator requirement: after a successful run_job, the foreground response should be only a terse acknowledgement, with no follow-on context or suggestions. Three native run_job trials succeeded but spoke 96, 162, and 206-character acknowledgements. The immediate tool-result instruction still says 'Then provide any additional useful context the user requested; do not omit it,' directly conflicting with the desired bounded acknowledgement. The active source edit also was not present in the running dist bundle and currently omits a string-concatenation '+', truncating RADCLIFFE_SYSTEM_PROMPT in source tests. Prefer restoring a deterministic sidecar-owned success acknowledgement and regression coverage over relying on another model prompt.
+
+**2026-07-27T04:57:01Z**
+
+2026-07-26 physical-phone acceptance after rebuilding and restarting the sidecar from the active source: session ses_1606ba8a43d29f5ba7463625bd551ba4 launched run_job and spoke only the single acknowledgement 'Working on grabbing the Gettysburg Address for you.' Operator confirmed the revised acknowledgement behavior passes. Close.

@@ -2,7 +2,7 @@
 id: rad-0mws
 status: in_progress
 deps: []
-links: [rad-fvx9, rad-9e2z, rad-rc9v]
+links: [rad-fvx9, rad-9e2z, rad-rc9v, rad-wbza]
 created: 2026-07-17T23:53:05Z
 type: bug
 priority: 0
@@ -48,3 +48,11 @@ Latest phone evidence 2026-07-21: the 120-second cap fixed the original hard-bou
 **2026-07-21T18:54:22Z**
 
 Barge-in lifecycle fix 2026-07-21: endpoint capture/STT completion is no longer cancelled when verified speech stops an active model/playback turn. Completion tasks are tracked independently, processed in capture order, and hand accepted text to a separately owned model task only after the USER envelope is persisted and active. Speech beginning within a configurable 750 ms of an endpoint is marked continued rather than interrupted; continued user/model fragments remain in chronological context, while genuine later interruptions retain the existing excluded-turn behavior. If STT remains blocked until the entire following clause endpoints, the ordered verified handoff explicitly marks the prior turn continued before submitting the next transcript. Deterministic regressions reproduce the observed 422 ms and 571 ms phone resumptions, the slower-than-following-clause STT race, context inclusion of both Gettysburg fragments, and a later true interruption. Full make check passes: 349 Python tests with 1 skipped, 98 sidecar tests, TypeScript, Android unit/lint, ruff, formatting, and strict mypy. Keep open only for a future quiet-time physical phone acceptance; no APK change is required.
+
+**2026-07-27T04:43:08Z**
+
+2026-07-26 physical-phone natural-pause review did not satisfy the context-preservation portion of acceptance. Session ses_407155ef8e43d090e3a5737382aad8b9 retained all three spoken fragments accurately, but the first two turns were marked interrupted rather than continued; the final Sonnet turn replied that it had no prior context. Worker telemetry classified both post-endpoint resumptions as disposition=interrupted under the 750 ms continuation grace. Keep open: transport/STT retention is verified, but natural-pause fragments still fall out of model context.
+
+**2026-07-27T04:57:01Z**
+
+2026-07-26 follow-up phone session ses_1606ba8a43d29f5ba7463625bd551ba4 provides a second deterministic natural-pause failure. The complete first request was persisted at 04:50:29.868Z. The one-word addendum 'Verbatim.' began while generation 1 was active but before any model delta, synthesized audio, playback segment, tool call, or model envelope existed. Because speech resumed outside the 750 ms post-endpoint grace, production classified it as disposition=interrupted at 04:50:29.997Z. context_replay then excluded the first USER envelope, so generation 2 truly received only the addendum and denied having request context. This is not a swallowed-response problem. Mitigation should separate response cancellation from user-context retention: treat verified speech before any client-heard assistant output as semantic continuation regardless of endpoint grace, carry unanswered user fragments into the next effective userMessage, and retain accepted USER envelopes while persisting only client-heard assistant prefixes. Add exact phone-timing regressions for no model delta, generated-but-unheard output, partially heard output, and an actual replacement request.
