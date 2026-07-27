@@ -980,6 +980,50 @@ describe("PiAgentOrchestrator", () => {
     );
   });
 
+  it("accepts only explicit bounded same-session job input references", () => {
+    expect(
+      prepareRunJobArguments({
+        instruction: "Extract the staged HTML without downloading it again.",
+        inputs: [
+          { kind: "source", reference: "radcliffe-demo.md" },
+          {
+            kind: "artifact",
+            reference: "downloaded-page.html",
+            jobId: "job-prior",
+          },
+        ],
+      }),
+    ).toEqual({
+      instruction: "Extract the staged HTML without downloading it again.",
+      inputs: [
+        { kind: "source", reference: "radcliffe-demo.md" },
+        {
+          kind: "artifact",
+          reference: "downloaded-page.html",
+          jobId: "job-prior",
+        },
+      ],
+    });
+    expect(() =>
+      prepareRunJobArguments({
+        instruction: "Try a cross-boundary path.",
+        inputs: [{ kind: "source", reference: "../secret.md" }],
+      }),
+    ).toThrow(/authorized source or artifact/);
+    expect(() =>
+      prepareRunJobArguments({
+        instruction: "A source cannot come from a job ID.",
+        inputs: [{ kind: "source", reference: "source.md", jobId: "job-other" }],
+      }),
+    ).toThrow(/authorized source or artifact/);
+    expect(() =>
+      prepareRunJobArguments({
+        instruction: "Unknown input controls fail closed.",
+        inputs: [{ kind: "artifact", reference: "page.html", hostPath: "/tmp/page.html" }],
+      }),
+    ).toThrow(/authorized source or artifact/);
+  });
+
   it("accepts a background job without folding its private context into the response", async () => {
     const faux = createFauxCore({ provider: "radcliffe-background-job-test" });
     faux.setResponses([

@@ -604,6 +604,14 @@ def _prompt(start: StartFrame) -> str:
             "Related links from prior jobs:\n"
             + "\n".join(f"- {item.label}: {item.locator}" for item in start.related_links)
         )
+    if start.inputs:
+        parts.append(
+            "Authorized immutable inputs already staged in the workspace:\n"
+            + "\n".join(
+                f"- /workspace/{item.path} ({item.kind}; requested as {item.source_reference})"
+                for item in start.inputs
+            )
+        )
     parts.extend("User follow-up:\n" + item.instruction for item in start.follow_ups)
     return "\n\n".join(parts)
 
@@ -848,7 +856,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         start = StartFrame.model_validate_json(sys.stdin.readline())
         attempt_workspace = Path.cwd().resolve()
         artifact_workspace = attempt_workspace / "files"
-        artifact_workspace.mkdir(mode=0o700, exist_ok=False)
+        artifact_workspace.mkdir(mode=0o700, exist_ok=True)
+        if artifact_workspace.is_symlink() or not artifact_workspace.is_dir():
+            raise ValueError("artifact workspace is unavailable")
         transcript = PrivateTranscript(attempt_workspace)
         transcript.append("start", start.model_dump(by_alias=True))
         sandbox = DockerSandbox(
