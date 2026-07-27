@@ -190,6 +190,33 @@ class SessionApiTest {
     }
 
     @Test
+    fun timelineParserMarksOnlyAllowlistedModelTechnicalDetail() {
+        val page = SessionApi.parseTimelinePage(
+            JSONObject(
+                """{
+                    "items": [{
+                        "sequence": 1,
+                        "message_id": "model-detail",
+                        "created_at": "2026-07-22T10:00:00Z",
+                        "source": "model",
+                        "text": "Job job_0123456789abcdef wrote /srv/private/report.json",
+                        "provenance_label": null,
+                        "delivery_label": null,
+                        "technical_detail_categories": ["identifier", "path", "host-secret"]
+                    }],
+                    "next_after": null
+                }""".trimIndent(),
+            ),
+        )
+
+        assertEquals(
+            setOf("identifier", "path"),
+            page.messages.single().technicalDetailCategories,
+        )
+        assertTrue(machineDetailUiModel(page.messages.single()) != null)
+    }
+
+    @Test
     fun statusUpdateParserPreservesTitleAndArchiveState() {
         val summary = SessionApi.parseSessionSummary(
             JSONObject(

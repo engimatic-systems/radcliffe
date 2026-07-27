@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -1063,6 +1064,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun MessageCard(message: DisplayMessage) {
+        val machineDetail = machineDetailUiModel(message)
+        var showExactDetail by remember(message.id) { mutableStateOf(false) }
         val (containerColor, contentColor) = when (message.kind) {
             MessageKind.USER -> MaterialTheme.colorScheme.secondaryContainer to
                 MaterialTheme.colorScheme.onSecondaryContainer
@@ -1078,26 +1081,82 @@ class MainActivity : ComponentActivity() {
         } else {
             message.kind.name.lowercase().replaceFirstChar(Char::uppercase)
         }
+        val cardModifier = if (machineDetail == null) {
+            Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}
+        } else {
+            Modifier.fillMaxWidth()
+        }
         Card(
-            modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+            modifier = cardModifier,
             colors = CardDefaults.cardColors(
                 containerColor = containerColor,
                 contentColor = contentColor,
             ),
         ) {
-            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                Text(label, style = MaterialTheme.typography.titleSmall)
-                message.deliveryLabel?.let { deliveryLabel ->
-                    Text(
-                        "Speech delivery · $deliveryLabel",
-                        modifier = Modifier.semantics {
-                            contentDescription = speechDeliveryDescription(deliveryLabel)
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+            Column(Modifier.fillMaxWidth()) {
+                val contentModifier = if (machineDetail == null) {
+                    Modifier.fillMaxWidth().padding(12.dp)
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .clearAndSetSemantics {
+                            contentDescription = machineDetail.accessibilityLabel
+                        }
+                        .padding(12.dp)
                 }
-                Text(message.text)
+                Column(contentModifier) {
+                    Text(label, style = MaterialTheme.typography.titleSmall)
+                    message.deliveryLabel?.let { deliveryLabel ->
+                        Text(
+                            "Speech delivery · $deliveryLabel",
+                            modifier = if (machineDetail == null) {
+                                Modifier.semantics {
+                                    contentDescription = speechDeliveryDescription(deliveryLabel)
+                                }
+                            } else {
+                                Modifier
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    Text(message.text)
+                    machineDetail?.let {
+                        Text(
+                            it.visibleLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                machineDetail?.let {
+                    TextButton(
+                        onClick = { showExactDetail = true },
+                        modifier = Modifier.semantics {
+                            contentDescription = it.actionLabel
+                        },
+                    ) {
+                        Text("Read exact")
+                    }
+                }
             }
+        }
+        if (showExactDetail) {
+            AlertDialog(
+                onDismissRequest = { showExactDetail = false },
+                title = { Text("Exact technical detail") },
+                text = {
+                    Text(
+                        message.text,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Assertive
+                        },
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showExactDetail = false }) {
+                        Text("Done")
+                    }
+                },
+            )
         }
     }
 

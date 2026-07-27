@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -6,6 +8,7 @@ from radcliffe_domain.catalog import SessionCatalog
 from radcliffe_domain.jobs import (
     JobConflictError,
     JobEventKind,
+    JobInput,
     JobLeaseError,
     JobNotificationDisposition,
     JobNotificationPolicy,
@@ -71,6 +74,102 @@ async def test_accept_is_idempotent_and_events_exclude_private_instruction(tmp_p
             generation=1,
             idempotency_key="accept-1",
             instruction="different private request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_job_inputs_are_hash_verified_persisted_and_claimed(tmp_path) -> None:
+    _path, session, store = await job_store(tmp_path)
+    canonical = b"<html><title>Prior result</title></html>\n"
+    artifact_input = JobInput(
+        kind="artifact",
+        name="input-1-page.html",
+        source_session_id=session.session_id,
+        source_reference="job-prior:page.html",
+        producer_job_id="job-prior",
+        artifact_id="artifact:file:page",
+        sha256=hashlib.sha256(canonical).hexdigest(),
+        byte_length=len(canonical),
+        canonical_bytes=canonical,
+    )
+
+    accepted = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-with-input",
+        instruction="extract the prior title without downloading it",
+        inputs=(artifact_input,),
+    )
+    replay = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="accept-with-input",
+        instruction="extract the prior title without downloading it",
+        inputs=(artifact_input,),
+    )
+    claim = await store.claim_next(lease_owner="input-worker")
+
+    assert replay.replayed
+    assert replay.record == accepted.record
+    assert claim is not None
+    assert claim.inputs == (artifact_input,)
+    assert canonical.decode() not in repr(claim)
+
+
+@pytest.mark.asyncio
+async def test_job_inputs_reject_cross_session_mutable_and_ambiguous_snapshots(tmp_path) -> None:
+    _path, session, store = await job_store(tmp_path)
+    canonical = b"# Authorized source\n"
+    valid = JobInput(
+        kind="source",
+        name="input-1-authorized.md",
+        source_session_id=session.session_id,
+        source_reference="authorized.md",
+        sha256=hashlib.sha256(canonical).hexdigest(),
+        byte_length=len(canonical),
+        canonical_bytes=canonical,
+    )
+
+    for invalid, message in (
+        (
+            replace(valid, source_session_id="session-other"),
+            "another session",
+        ),
+        (
+            replace(valid, sha256="0" * 64),
+            "does not match",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            await store.accept(
+                principal_id="owner",
+                session_id=session.session_id,
+                generation=1,
+                idempotency_key=f"invalid-{message}",
+                instruction="must fail closed",
+                inputs=(invalid,),
+            )
+    with pytest.raises(ValueError, match="repeat"):
+        await store.accept(
+            principal_id="owner",
+            session_id=session.session_id,
+            generation=1,
+            idempotency_key="duplicate-input",
+            instruction="must fail closed",
+            inputs=(
+                valid,
+                JobInput(
+                    kind="source",
+                    name="input-2-authorized.md",
+                    source_session_id=session.session_id,
+                    source_reference=valid.source_reference,
+                    sha256=valid.sha256,
+                    byte_length=valid.byte_length,
+                    canonical_bytes=valid.canonical_bytes,
+                ),
+            ),
         )
 
 

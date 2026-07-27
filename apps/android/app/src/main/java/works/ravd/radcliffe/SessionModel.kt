@@ -16,7 +16,53 @@ data class DisplayMessage(
     val deliveryLabel: String? = null,
     val createdAt: Instant? = null,
     val sequence: Long? = null,
+    val technicalDetailCategories: Set<String> = emptySet(),
 )
+
+private val technicalDetailCategoryIds = setOf(
+    "hash",
+    "identifier",
+    "url",
+    "path",
+    "timestamp",
+    "stack_trace",
+    "serialized_data",
+    "long_number",
+    "code",
+    "citation",
+    "repeated_punctuation",
+    "acronym_metadata",
+)
+
+internal fun technicalDetailCategories(
+    kind: MessageKind,
+    values: Iterable<String>,
+): Set<String> = if (kind == MessageKind.MODEL) {
+    values.toSet().intersect(technicalDetailCategoryIds)
+} else {
+    emptySet()
+}
+
+data class MachineDetailUiModel(
+    val accessibilityLabel: String,
+    val actionLabel: String,
+    val visibleLabel: String,
+)
+
+internal fun machineDetailUiModel(message: DisplayMessage): MachineDetailUiModel? {
+    if (
+        message.kind != MessageKind.MODEL ||
+        technicalDetailCategories(message.kind, message.technicalDetailCategories).isEmpty()
+    ) {
+        return null
+    }
+    return MachineDetailUiModel(
+        accessibilityLabel = "Model response. Technical detail is available. " +
+            "The original detail is not read automatically.",
+        actionLabel = "Read exact technical detail",
+        visibleLabel = "Technical detail available",
+    )
+}
 
 data class ConfigurationUpdate(
     val key: String,

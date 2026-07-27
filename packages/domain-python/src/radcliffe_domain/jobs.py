@@ -4,11 +4,12 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from secrets import token_hex
+from typing import Literal
 
 import aiosqlite
 
@@ -74,6 +75,10 @@ class JobNotificationDisposition(StrEnum):
 
 TERMINAL_JOB_STATUSES = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED})
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_INPUT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+MAX_JOB_INPUTS = 8
+MAX_JOB_INPUT_BYTES = 8 * 1024 * 1024
+MAX_JOB_INPUT_TOTAL_BYTES = 16 * 1024 * 1024
 _EXECUTOR_DETAIL_CODES = {
     JobEventKind.PROGRESS: frozenset(
         {"searching", "downloading", "analyzing", "coding", "testing", "compacting"}
@@ -161,11 +166,26 @@ class JobRelatedLink:
 
 
 @dataclass(frozen=True, slots=True)
+class JobInput:
+    kind: Literal["source", "artifact"]
+    name: str
+    source_session_id: str
+    source_reference: str
+    sha256: str
+    byte_length: int
+    canonical_bytes: bytes = field(repr=False)
+    producer_job_id: str | None = None
+    entity_id: str | None = None
+    artifact_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class JobClaim:
     record: JobRecord
     instruction: str
     user_message: str
     related_links: tuple[JobRelatedLink, ...]
+    inputs: tuple[JobInput, ...]
     follow_ups: tuple[JobFollowUp, ...]
     recovered: bool
 
@@ -265,6 +285,7 @@ class JobStore:
         instruction: str,
         user_message: str = "",
         related_links: tuple[JobRelatedLink, ...] = (),
+        inputs: tuple[JobInput, ...] = (),
         notification_policy: JobNotificationPolicy = JobNotificationPolicy.NEXT_SAFE_PAUSE,
         priority: int = 2,
         budget_microusd: int | None = None,
@@ -281,12 +302,27 @@ class JobStore:
             raise JobError("job budget must be positive")
         if not 1 <= max_runtime_seconds <= 86_400:
             raise JobError("job runtime limit must be between 1 and 86400 seconds")
+        self._validate_inputs(session_id, inputs)
         request_sha256 = _digest(
             {
                 "session_id": session_id,
                 "generation": generation,
                 "instruction": instruction,
                 "user_message": user_message,
+                "inputs": [
+                    {
+                        "kind": item.kind,
+                        "name": item.name,
+                        "source_session_id": item.source_session_id,
+                        "source_reference": item.source_reference,
+                        "producer_job_id": item.producer_job_id,
+                        "entity_id": item.entity_id,
+                        "artifact_id": item.artifact_id,
+                        "sha256": item.sha256,
+                        "byte_length": item.byte_length,
+                    }
+                    for item in inputs
+                ],
                 "notification_policy": notification_policy.value,
                 "priority": priority,
                 "budget_microusd": budget_microusd,
@@ -330,6 +366,30 @@ class JobStore:
                     max_runtime_seconds,
                     now,
                     now,
+                ),
+            )
+            await db.executemany(
+                """INSERT INTO background_job_inputs(
+                    job_id, position, kind, name, source_session_id, source_reference,
+                    producer_job_id, entity_id, artifact_id, sha256, byte_length,
+                    canonical_bytes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    (
+                        job_id,
+                        position,
+                        item.kind,
+                        item.name,
+                        item.source_session_id,
+                        item.source_reference,
+                        item.producer_job_id,
+                        item.entity_id,
+                        item.artifact_id,
+                        item.sha256,
+                        item.byte_length,
+                        item.canonical_bytes,
+                    )
+                    for position, item in enumerate(inputs)
                 ),
             )
             await self._insert_attempt_context(
@@ -693,6 +753,7 @@ class JobStore:
             user_message, related_links = await self._attempt_context(
                 db, str(row["job_id"]), attempt
             )
+            inputs = await self._inputs(db, str(row["job_id"]))
             await db.commit()
             current = await self._job_row(db, str(row["job_id"]))
             return JobClaim(
@@ -700,6 +761,7 @@ class JobStore:
                 instruction=str(row["instruction"]),
                 user_message=user_message,
                 related_links=related_links,
+                inputs=inputs,
                 follow_ups=tuple(_follow_up(item) for item in follow_up_rows),
                 recovered=recovered,
             )
@@ -1029,6 +1091,57 @@ class JobStore:
                 raise JobError("job related link locator must contain 1 through 2048 characters")
 
     @staticmethod
+    def _validate_inputs(session_id: str, inputs: tuple[JobInput, ...]) -> None:
+        if len(inputs) > MAX_JOB_INPUTS:
+            raise JobError(f"job inputs must contain at most {MAX_JOB_INPUTS} items")
+        names: set[str] = set()
+        identities: set[tuple[str, str, str | None]] = set()
+        total_bytes = 0
+        for item in inputs:
+            if item.kind not in {"source", "artifact"}:
+                raise JobError("job input kind is invalid")
+            if not _INPUT_NAME.fullmatch(item.name):
+                raise JobError("job input name is invalid")
+            folded_name = item.name.casefold()
+            if folded_name in names:
+                raise JobError("job input names must be unique")
+            names.add(folded_name)
+            if item.source_session_id != session_id:
+                raise JobError("job input belongs to another session")
+            if not item.source_reference or len(item.source_reference) > 2_048:
+                raise JobError("job input reference must contain 1 through 2048 characters")
+            if item.producer_job_id is not None and not _REFERENCE.fullmatch(item.producer_job_id):
+                raise JobError("job input producer ID is invalid")
+            if item.entity_id is not None and not _REFERENCE.fullmatch(item.entity_id):
+                raise JobError("job input entity ID is invalid")
+            if item.artifact_id is not None and not _REFERENCE.fullmatch(item.artifact_id):
+                raise JobError("job input artifact ID is invalid")
+            if item.kind == "source" and any(
+                value is not None
+                for value in (item.producer_job_id, item.entity_id, item.artifact_id)
+            ):
+                raise JobError("foreground source input has unexpected producer metadata")
+            if item.kind == "artifact" and (
+                item.producer_job_id is None or item.artifact_id is None
+            ):
+                raise JobError("artifact input requires producer and artifact IDs")
+            identity = (item.kind, item.source_reference, item.producer_job_id)
+            if identity in identities:
+                raise JobError("job inputs must not repeat the same source")
+            identities.add(identity)
+            if not 0 < item.byte_length <= MAX_JOB_INPUT_BYTES:
+                raise JobError("job input exceeds the per-file byte limit")
+            if len(item.canonical_bytes) != item.byte_length:
+                raise JobError("job input byte length does not match its snapshot")
+            if not re.fullmatch(r"[a-f0-9]{64}", item.sha256):
+                raise JobError("job input hash is invalid")
+            if hashlib.sha256(item.canonical_bytes).hexdigest() != item.sha256:
+                raise JobError("job input snapshot does not match its hash")
+            total_bytes += item.byte_length
+        if total_bytes > MAX_JOB_INPUT_TOTAL_BYTES:
+            raise JobError("job inputs exceed the aggregate byte limit")
+
+    @staticmethod
     async def _insert_attempt_context(
         db: aiosqlite.Connection,
         *,
@@ -1076,6 +1189,39 @@ class JobStore:
         return str(row["user_message"]), tuple(
             JobRelatedLink(label=str(item["label"]), locator=str(item["locator"]))
             for item in raw_links
+        )
+
+    @staticmethod
+    async def _inputs(
+        db: aiosqlite.Connection,
+        job_id: str,
+    ) -> tuple[JobInput, ...]:
+        rows = await (
+            await db.execute(
+                """SELECT kind, name, source_session_id, source_reference,
+                producer_job_id, entity_id, artifact_id, sha256, byte_length,
+                canonical_bytes
+                FROM background_job_inputs
+                WHERE job_id = ? ORDER BY position""",
+                (job_id,),
+            )
+        ).fetchall()
+        return tuple(
+            JobInput(
+                kind=str(row["kind"]),  # type: ignore[arg-type]
+                name=str(row["name"]),
+                source_session_id=str(row["source_session_id"]),
+                source_reference=str(row["source_reference"]),
+                producer_job_id=(
+                    str(row["producer_job_id"]) if row["producer_job_id"] is not None else None
+                ),
+                entity_id=str(row["entity_id"]) if row["entity_id"] is not None else None,
+                artifact_id=(str(row["artifact_id"]) if row["artifact_id"] is not None else None),
+                sha256=str(row["sha256"]),
+                byte_length=int(row["byte_length"]),
+                canonical_bytes=bytes(row["canonical_bytes"]),
+            )
+            for row in rows
         )
 
     @staticmethod
