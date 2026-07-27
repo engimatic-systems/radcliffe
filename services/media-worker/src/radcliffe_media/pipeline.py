@@ -27,8 +27,13 @@ from radcliffe_domain.projection import (
     BACKGROUND_JOB_OUTCOME_EVENT,
     BACKGROUND_JOB_REFERENCE_EVENT,
     CONFIGURATION_EVENT,
+    PLAYBACK_BOUNDARY_INDEX_METADATA,
+    PLAYBACK_COMPLETE_METADATA,
     PROVIDER_BUDGET_EVENT,
     SESSION_TRANSITION_EVENT,
+    SOURCE_CONTENT_SHA256_METADATA,
+    SOURCE_MESSAGE_ID_METADATA,
+    SOURCE_PLAYBACK_EVENT,
     TOOL_FAILURE_EVENT,
     TURN_DISPOSITION_EVENT,
     TURN_DISPOSITION_METADATA,
@@ -37,6 +42,7 @@ from radcliffe_domain.projection import (
     SpeechDelivery,
     context_replay,
     render_projection,
+    resume_boundary,
 )
 from radcliffe_domain.session import (
     ConversationState,
@@ -951,6 +957,10 @@ class VoicePipeline:
                             operation,
                             turn,
                         )
+                    turn.next_source_boundary = await self._start_boundary(
+                        source,
+                        self._requested_start_boundary(event.payload.get("result")),
+                    )
                     await self._speak_plan(source, operation, turn)
                     source_rendered = True
                 else:
@@ -1094,6 +1104,11 @@ class VoicePipeline:
         for segment in plan.segments:
             if segment.boundary_index < turn.next_source_boundary:
                 continue
+            if not segment.canonical_text.strip():
+                # Navigation and link-only lines normalize away to nothing. Advance the
+                # boundary anyway so resume positions keep lining up with the document.
+                turn.next_source_boundary = segment.boundary_index + 1
+                continue
             await self._speak(
                 segment.canonical_text,
                 segment.segment_id,
@@ -1136,12 +1151,23 @@ class VoicePipeline:
                     self._active_turn = None
 
     async def _persisted_source_boundary(self, envelope: MessageEnvelope) -> int:
+        """Resolve how far this document was heard, across every call that read it.
+
+        The acknowledgement ledger is keyed by segment ID, which embeds the tool call ID,
+        so it only answers for the envelope that produced it. The heard ledger is keyed by
+        content hash and therefore survives a fresh read_source call for the same source.
+        """
+
         plan = render_projection(envelope)
         boundaries = [
             await self.store.playback_boundary(self.engine.session_id, segment.segment_id)
             for segment in plan.segments
         ]
-        return max(boundaries, default=0)
+        heard = resume_boundary(
+            await self.store.replay(self.engine.session_id),
+            envelope.content_sha256,
+        )
+        return min(max(*boundaries, heard, 0), len(plan.segments))
 
     async def _speak(
         self,
@@ -1425,16 +1451,16 @@ class VoicePipeline:
         if not text:
             return None
         metadata = {
-            TURN_EVENT_METADATA: "source_playback",
-            "radcliffe.source.message_id": source.message_id,
-            "radcliffe.source.content_sha256": source.content_sha256.hex(),
+            TURN_EVENT_METADATA: SOURCE_PLAYBACK_EVENT,
+            SOURCE_MESSAGE_ID_METADATA: source.message_id,
+            SOURCE_CONTENT_SHA256_METADATA: source.content_sha256.hex(),
             "radcliffe.playback.id": pending.playback_id,
             "radcliffe.playback.segment_id": pending.segment_id,
-            "radcliffe.playback.boundary_index": str(pending.boundary_index),
+            PLAYBACK_BOUNDARY_INDEX_METADATA: str(pending.boundary_index),
             "radcliffe.playback.position_ms": str(pending.latest_position_ms),
             "radcliffe.playback.duration_ms": str(pending.duration_ms),
             "radcliffe.playback.status": status.value,
-            "radcliffe.playback.complete": str(status is PlaybackStatus.COMPLETED).lower(),
+            PLAYBACK_COMPLETE_METADATA: str(status is PlaybackStatus.COMPLETED).lower(),
         }
         async with self._append_lock:
             envelope = MessageEnvelope.text(
@@ -2008,6 +2034,36 @@ class VoicePipeline:
             raise asyncio.CancelledError
         if operation is not None:
             self.engine.assert_current(operation)
+
+    async def _start_boundary(
+        self,
+        source: MessageEnvelope,
+        requested: int | None,
+    ) -> int:
+        """Choose where to begin reading: an explicit request, else the furthest heard point."""
+
+        if requested is None:
+            return await self._persisted_source_boundary(source)
+        segments = len(render_projection(source).segments)
+        if requested > segments:
+            raise ValueError("requested start boundary is beyond the end of the source")
+        return requested
+
+    @staticmethod
+    def _requested_start_boundary(result: object) -> int | None:
+        details = VoicePipeline._tool_details(result)
+        if details is None:
+            return None
+        raw = VoicePipeline._detail_text(details, "startAtBoundary")
+        if raw is None:
+            return None
+        try:
+            boundary = int(raw)
+        except ValueError as error:
+            raise ValueError("tool result carried an invalid start boundary") from error
+        if boundary < 0:
+            raise ValueError("tool result carried a negative start boundary")
+        return boundary
 
     async def _resolve_source(self, result: object) -> MessageEnvelope | None:
         details = self._tool_details(result)

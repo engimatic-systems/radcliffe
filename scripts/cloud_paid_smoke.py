@@ -10,17 +10,17 @@ from pathlib import Path
 
 import httpx
 
-MODEL_ID = "claude-haiku-4-5-20251001"
-APPROVAL_PHRASE = "I_APPROVE_ONE_BOUNDED_HAIKU_SMOKE"
+MODEL_ID = "claude-sonnet-5"
+APPROVAL_PHRASE = "I_APPROVE_ONE_BOUNDED_CLOUD_SMOKE"
 
 
 def arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run one explicitly approved Haiku smoke turn.")
+    parser = argparse.ArgumentParser(description="Run one explicitly approved cloud smoke turn.")
     parser.add_argument("--sidecar-url", default="http://127.0.0.1:8787")
     parser.add_argument(
         "--report",
         type=Path,
-        default=Path("artifacts/cloud-haiku-smoke/report.json"),
+        default=Path("artifacts/cloud-paid-smoke/report.json"),
     )
     return parser.parse_args()
 
@@ -66,21 +66,21 @@ def main() -> None:
         if diagnostic.get("provider") != "anthropic" or diagnostic.get("model_id") != MODEL_ID:
             raise SystemExit("sidecar is not running the pinned Anthropic live profile")
         request = {
-            "requestId": f"haiku-smoke-{request_nonce}",
-            "sessionId": f"haiku-smoke-{request_nonce}",
+            "requestId": f"cloud-smoke-{request_nonce}",
+            "sessionId": f"cloud-smoke-{request_nonce}",
             "generation": 1,
-            "operationId": f"haiku-smoke-operation-{request_nonce}",
-            "cancellationId": f"haiku-smoke-cancellation-{request_nonce}",
+            "operationId": f"cloud-smoke-operation-{request_nonce}",
+            "cancellationId": f"cloud-smoke-cancellation-{request_nonce}",
             "traceId": trace_id,
             "responseDetail": "brief",
             "packets": [
                 {
                     "projectionVersion": "context-v2",
-                    "messageId": f"haiku-smoke-message-{request_nonce}",
+                    "messageId": f"cloud-smoke-message-{request_nonce}",
                     "role": "user",
                     "content": "Reply with exactly: Radcliffe cloud smoke passed.",
                     "source": "user",
-                    "annotations": [["radcliffe.turn_id", f"haiku-smoke-turn-{request_nonce}"]],
+                    "annotations": [["radcliffe.turn_id", f"cloud-smoke-turn-{request_nonce}"]],
                     "include": True,
                     "timestamp": int(datetime.now(UTC).timestamp() * 1000),
                 }

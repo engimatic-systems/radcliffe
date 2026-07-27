@@ -118,11 +118,16 @@ export type ToolExecutionRequest =
     })
   | (ToolExecutionRequestBase & {
       toolName: "read_source";
-      arguments: { path: string; rate?: SpeechDeliveryRate };
+      arguments: { path: string; rate?: SpeechDeliveryRate; startAtBoundary?: number };
     })
   | (ToolExecutionRequestBase & {
       toolName: "read_job_source";
-      arguments: { reference: string; jobId?: string; rate?: SpeechDeliveryRate };
+      arguments: {
+        reference: string;
+        jobId?: string;
+        rate?: SpeechDeliveryRate;
+        startAtBoundary?: number;
+      };
     })
   | (ToolExecutionRequestBase & {
       toolName: "configure";

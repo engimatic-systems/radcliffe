@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "haiku_paid_smoke.py"
-SPEC = importlib.util.spec_from_file_location("haiku_paid_smoke", SCRIPT)
+SCRIPT = ROOT / "scripts" / "cloud_paid_smoke.py"
+SPEC = importlib.util.spec_from_file_location("cloud_paid_smoke", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 SMOKE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SMOKE)

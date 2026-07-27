@@ -24,8 +24,8 @@ from radcliffe_domain.store import EventStore
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CONTROL_CAPABILITIES = frozenset({"background_jobs_v1", "promoted_job_results_v1"})
 REQUIRED_SIDECAR_TOOLS = frozenset({"run_job", "manage_job"})
-REQUIRED_USER_TEST_MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_BACKGROUND_MODEL = "claude-haiku-4-5-20251001"
+REQUIRED_USER_TEST_MODEL = "claude-sonnet-5"
+DEFAULT_BACKGROUND_MODEL = "claude-sonnet-5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +112,7 @@ def foreground_model_check(payload: object) -> Check:
     return Check(
         "foreground_model",
         "ok" if ready else "failed",
-        "haiku_user_test_profile" if ready else "foreground_model_not_haiku",
+        "pinned_user_test_profile" if ready else "foreground_model_not_pinned",
     )
 
 

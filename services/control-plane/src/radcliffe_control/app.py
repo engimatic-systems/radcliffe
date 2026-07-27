@@ -99,7 +99,12 @@ from radcliffe_domain.session_actions import (
 )
 from radcliffe_domain.store import EventStore
 from radcliffe_domain.telemetry import TelemetrySink
-from radcliffe_domain.tools import CapabilityGrant, ToolDeniedError, ToolGateway
+from radcliffe_domain.tools import (
+    MAX_SOURCE_BOUNDARY,
+    CapabilityGrant,
+    ToolDeniedError,
+    ToolGateway,
+)
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_control.context_usage import (
@@ -324,10 +329,15 @@ class SessionMessageListResponse(BaseModel):
 
 
 class ReadSourceArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
 
     path: str
     rate: str | float | None = None
+    start_at_boundary: int | None = Field(default=None, ge=0, le=MAX_SOURCE_BOUNDARY)
 
     @field_validator("rate", mode="before")
     @classmethod
@@ -453,6 +463,7 @@ class ReadJobSourceArguments(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
     )
     rate: str | float | None = None
+    start_at_boundary: int | None = Field(default=None, ge=0, le=MAX_SOURCE_BOUNDARY)
 
     @field_validator("rate", mode="before")
     @classmethod
@@ -3045,6 +3056,11 @@ def create_app(
                         raw_arguments={
                             "path": promoted.source.path,
                             **({"rate": arguments.rate} if arguments.rate is not None else {}),
+                            **(
+                                {"start_at_boundary": arguments.start_at_boundary}
+                                if arguments.start_at_boundary is not None
+                                else {}
+                            ),
                         },
                         provenance=Provenance(
                             locator=promoted.source.locator,
@@ -3143,6 +3159,11 @@ def create_app(
                 "contentSha256": source.content_sha256.hex(),
                 "locator": source.provenance.locator,
                 "sourceEnvelopeProtoBase64": base64.b64encode(source_wire).decode("ascii"),
+                **(
+                    {"startAtBoundary": str(result.start_at_boundary)}
+                    if result.start_at_boundary is not None
+                    else {}
+                ),
             },
         )
 

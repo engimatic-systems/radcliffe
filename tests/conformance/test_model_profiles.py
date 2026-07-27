@@ -64,16 +64,16 @@ def run_profile(profile: str, configured: Path) -> subprocess.CompletedProcess[s
     )
 
 
-def test_live_profile_pins_haiku_and_bridges_one_key_name(tmp_path: Path) -> None:
+def test_live_profile_pins_sonnet_and_bridges_one_key_name(tmp_path: Path) -> None:
     result = run_profile(
-        "live-haiku-4.5",
+        "live-sonnet-5",
         environment_file(tmp_path, fake_node(tmp_path)),
     )
 
     assert result.returncode == 0
     assert json.loads(result.stdout) == {
         "provider": "anthropic",
-        "model_id": "claude-haiku-4-5-20251001",
+        "model_id": "claude-sonnet-5",
         "anthropic_key_present": True,
         "protected_key_present": False,
         "openai_key_present": False,
@@ -101,7 +101,7 @@ def test_local_profile_cannot_silently_inherit_cloud_configuration(tmp_path: Pat
 def test_profiles_reject_an_environment_file_that_is_not_owner_only(tmp_path: Path) -> None:
     configured = environment_file(tmp_path, fake_node(tmp_path), mode=0o644)
 
-    result = run_profile("live-haiku-4.5", configured)
+    result = run_profile("live-sonnet-5", configured)
 
     assert result.returncode != 0
     assert "mode 0600" in result.stderr

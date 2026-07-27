@@ -89,6 +89,8 @@ const JOB_NOTIFICATION_POLICIES = [
 ] as const;
 const JOB_OPERATIONS = ["status", "follow_up", "set_priority", "cancel", "retry"] as const;
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/;
+// Mirrors MAX_SOURCE_BOUNDARY in radcliffe_domain.tools.
+const MAX_SOURCE_BOUNDARY = 100_000;
 const TEXTUAL_TOOL_PROTOCOL =
   /<\/?(?:function_calls?|invoke|parameter|tool_calls?|tool_call)\b|```[^\n]*\n\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\b|(?:^|\n)\s*(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)\s*(?:\(|\n\s*(?:\{|[A-Za-z_][\w-]*\s*:))|"(?:name|tool|tool_name)"\s*:\s*"(?:configure|list_sources|manage_job|manage_session|read_job_source|read_source|run_job)"/i;
 
@@ -456,7 +458,7 @@ function prepareSourceRateArguments(
   identityField: "path" | "reference",
 ): Record<string, unknown> {
   const item = { ...argumentRecord(value, toolName) };
-  if (!exactKeys(item, [identityField], ["rate"])) {
+  if (!exactKeys(item, [identityField], ["rate", "startAtBoundary"])) {
     throw invalidToolArgument(toolName, "arguments");
   }
   if (
@@ -471,7 +473,27 @@ function prepareSourceRateArguments(
     if (!normalized) throw invalidToolArgument(toolName, "rate");
     item.rate = normalized;
   }
+  if (item.startAtBoundary !== undefined) {
+    item.startAtBoundary = normalizeStartBoundary(item.startAtBoundary, toolName);
+  }
   return item;
+}
+
+function normalizeStartBoundary(
+  value: unknown,
+  toolName: "read_source" | "read_job_source",
+): number {
+  // Local models routinely emit an integer-valued string for a numeric field.
+  const numeric = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (
+    typeof numeric !== "number" ||
+    !Number.isInteger(numeric) ||
+    numeric < 0 ||
+    numeric > MAX_SOURCE_BOUNDARY
+  ) {
+    throw invalidToolArgument(toolName, "start_at_boundary");
+  }
+  return numeric;
 }
 
 export function prepareReadSourceArguments(value: unknown): ReadSourceArguments {
@@ -480,11 +502,15 @@ export function prepareReadSourceArguments(value: unknown): ReadSourceArguments 
 
 export function prepareReadJobSourceArguments(value: unknown): ReadJobSourceArguments {
   const item = { ...argumentRecord(value, "read_job_source") };
-  if (!exactKeys(item, ["reference"], ["jobId", "rate"])) {
+  if (!exactKeys(item, ["reference"], ["jobId", "rate", "startAtBoundary"])) {
     throw invalidToolArgument("read_job_source", "arguments");
   }
   const prepared = prepareSourceRateArguments(
-    { reference: item.reference, ...(item.rate === undefined ? {} : { rate: item.rate }) },
+    {
+      reference: item.reference,
+      ...(item.rate === undefined ? {} : { rate: item.rate }),
+      ...(item.startAtBoundary === undefined ? {} : { startAtBoundary: item.startAtBoundary }),
+    },
     "read_job_source",
     "reference",
   );
@@ -872,15 +898,28 @@ export const LIST_SOURCES_DESCRIPTION =
   "List the bounded catalog of relative Markdown paths authorized for this session. " +
   "Returns filenames only, never file contents or absolute host paths.";
 export const LIST_SOURCES_PARAMETERS = Type.Object({}, { additionalProperties: false });
+export const START_AT_BOUNDARY_DESCRIPTION =
+  "Sentence to begin reading at, counting from 0. Omit it to continue from the furthest point " +
+  "the user has already heard, which is the right choice for a plain resume. Earlier source " +
+  "context is labelled with the sentence already read and the next one to resume at; use those " +
+  "numbers to resume exactly, to back up, or to skip ahead.";
 export const READ_SOURCE_DESCRIPTION =
   "Read a canonical UTF-8 Markdown source using a Radcliffe capability grant. " +
   "Normalize spoken filename punctuation before passing the path. An explicitly requested speech " +
-  "rate must be one of 0.75x, 1.0x, 1.25x, or 1.5x.";
+  "rate must be one of 0.75x, 1.0x, 1.25x, or 1.5x. Reading resumes where the user left off " +
+  "unless a start sentence is given.";
 export const READ_SOURCE_PARAMETERS = Type.Unsafe<ReadSourceArguments>(
   Type.Object(
     {
       path: Type.String({ minLength: 1, maxLength: 4096 }),
       rate: Type.Optional(stringEnum(SPEECH_RATES)),
+      startAtBoundary: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          maximum: MAX_SOURCE_BOUNDARY,
+          description: START_AT_BOUNDARY_DESCRIPTION,
+        }),
+      ),
     },
     { additionalProperties: false },
   ),
@@ -897,6 +936,13 @@ export const READ_JOB_SOURCE_PARAMETERS = Type.Unsafe<ReadJobSourceArguments>(
         Type.String({ minLength: 1, maxLength: 128, pattern: JOB_ID.source }),
       ),
       rate: Type.Optional(stringEnum(SPEECH_RATES)),
+      startAtBoundary: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          maximum: MAX_SOURCE_BOUNDARY,
+          description: START_AT_BOUNDARY_DESCRIPTION,
+        }),
+      ),
     },
     { additionalProperties: false },
   ),
@@ -980,10 +1026,23 @@ function isRadcliffeMessage(message: AgentMessage): message is RadcliffeContextM
   return "role" in message && message.role === "radcliffe";
 }
 
+function readingPosition(annotations: Record<string, string>): string {
+  const raw = annotations["radcliffe.playback.boundary_index"];
+  if (raw === undefined) return "";
+  const boundary = Number(raw);
+  if (!Number.isInteger(boundary) || boundary < 0) return "";
+  // A partially heard sentence is replayed from its own start, so it is not yet finished.
+  const complete = annotations["radcliffe.playback.complete"] === "true";
+  const resumeAt = complete ? boundary + 1 : boundary;
+  const heard = complete ? `sentence ${boundary}` : `part of sentence ${boundary}`;
+  return `, ${heard}, resume at startAtBoundary ${resumeAt}`;
+}
+
 function label(packet: ContextPacket): string {
   const annotations = Object.fromEntries(packet.annotations);
   const provenance = annotations.locator ? ` from ${annotations.locator}` : "";
-  return `[Radcliffe ${packet.source}${provenance}]\n${packet.content}`;
+  const position = packet.source === "text_source" ? readingPosition(annotations) : "";
+  return `[Radcliffe ${packet.source}${provenance}${position}]\n${packet.content}`;
 }
 
 export function convertRadcliffeContext(messages: AgentMessage[]): Message[] {

@@ -91,7 +91,7 @@ class CapturingEvents:
         self.items.append((kind, detail_code, tuple(entity_ids), tuple(artifact_ids)))
 
 
-def test_sdk_cli_defaults_to_pinned_haiku_and_a_quarter_dollar_per_job() -> None:
+def test_sdk_cli_defaults_to_the_pinned_model_and_a_quarter_dollar_per_job() -> None:
     options = parser().parse_args(
         [
             "--docker",
@@ -107,7 +107,7 @@ def test_sdk_cli_defaults_to_pinned_haiku_and_a_quarter_dollar_per_job() -> None
         ]
     )
 
-    assert options.model == "claude-haiku-4-5-20251001"
+    assert options.model == "claude-sonnet-5"
     assert options.max_model_cost_usd == 0.25
     assert options.max_turns is None
 

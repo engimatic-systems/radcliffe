@@ -7,7 +7,7 @@ import pytest
 from radcliffe_control.job_results import read_promoted_result
 from radcliffe_control.sandbox_agent import (
     COMMAND_OUTPUT_LIMIT,
-    HAIKU_MODEL_ID,
+    JOB_MODEL_ID,
     PREVIEW_OUTPUT_LIMIT,
     SANDBOX_FILE_SIZE_LIMIT,
     SYSTEM_PROMPT,
@@ -200,7 +200,7 @@ def test_anthropic_job_model_is_pinned_bounded_and_forces_one_tool(monkeypatch) 
         ]
     )
 
-    assert captured["model"] == HAIKU_MODEL_ID
+    assert captured["model"] == JOB_MODEL_ID
     assert captured["max_tokens"] == 1024
     assert captured["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
     assert captured["api_key"] == "fake-key"

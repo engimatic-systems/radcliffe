@@ -635,9 +635,9 @@ inexact overflow lower bound, not as an exact count. Provider adapters that
 cannot supply exact preflight accounting must label estimates and may not
 silently claim token precision.
 
-The temporary live-debug cloud profile is a separate explicit launch path. It
-accepts only Anthropic `claude-haiku-4-5-20251001`; an alias or different cloud
-model is a startup error until a new production profile is reviewed. Anthropic's
+The live cloud profile is a separate explicit launch path. It accepts only
+Anthropic `claude-sonnet-5`; an alias or different cloud model is a startup
+error until a new production profile is reviewed. Anthropic's
 token-count endpoint receives the same structured model context and is treated
 as an estimate: Radcliffe adds 2% plus 32 tokens, reports `exact=false`, and
 includes the provider/model in the accounting basis. No count is reused across
@@ -849,7 +849,7 @@ the deterministic local suite passes, should use a bounded scenario set, and
 should record provider, model, token usage, and reported cost so one controlled
 run can be evaluated before another is authorized.
 
-The Haiku acceptance smoke adds a second one-run approval phrase and writes an
+The cloud acceptance smoke adds a second one-run approval phrase and writes an
 owner-only, content-free report. The report may contain provider, pinned model,
 token classes, estimated USD cost, budget basis, and pass/fail status; it must
 not contain the prompt, model response, key, request payload, or raw session ID.

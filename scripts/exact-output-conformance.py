@@ -80,7 +80,7 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--sidecar-url", default="http://127.0.0.1:8787")
     parser.add_argument("--control-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--profile", choices=("qwen", "haiku"), required=True)
+    parser.add_argument("--profile", choices=("qwen", "sonnet"), required=True)
     parser.add_argument("--report", type=Path, required=True)
     return parser.parse_args()
 
@@ -180,7 +180,7 @@ def main() -> None:
     if not bootstrap_token or not internal_token:
         raise SystemExit("the protected bootstrap and internal tokens are required")
     expected_provider = "ollama" if options.profile == "qwen" else "anthropic"
-    expected_model = "qwen3:8b" if options.profile == "qwen" else "claude-haiku-4-5-20251001"
+    expected_model = "qwen3:8b" if options.profile == "qwen" else "claude-sonnet-5"
     usage = {
         "input_tokens": 0,
         "output_tokens": 0,

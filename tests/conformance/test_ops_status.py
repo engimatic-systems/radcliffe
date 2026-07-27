@@ -115,11 +115,11 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
                     "active_turns": 0,
                     "cancelled_turns": 2,
                     "provider": "anthropic",
-                    "model_id": "claude-haiku-4-5-20251001",
+                    "model_id": "claude-sonnet-5",
                     "data_boundary": "cloud_anthropic",
                     "context_accounting": "anthropic_count_tokens_conservative_estimate",
                     "cloud_budget": {
-                        "basis": "anthropic/claude-haiku-4-5-20251001/usd-2026-05-27",
+                        "basis": "anthropic/claude-sonnet-5/usd-2026-07-25",
                         "limit_usd": 0.25,
                         "spent_usd": 0.01,
                         "session_count": 1,
@@ -152,7 +152,7 @@ def test_status_report_is_ready_content_free_and_secret_scanned(tmp_path) -> Non
     assert str(root) not in encoded
     assert "schema_current" in encoded
     assert "active_turns" in encoded
-    assert "claude-haiku-4-5-20251001" in encoded
+    assert "claude-sonnet-5" in encoded
     assert "cloud_budget" in encoded
     assert "SERVICE_COMPAT" not in encoded
 

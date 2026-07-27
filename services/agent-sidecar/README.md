@@ -28,7 +28,7 @@ The launch profiles make the boundary explicit. `scripts/run-local-sidecar.sh`
 forces Ollama and removes cloud credentials from the child environment.
 `scripts/run-live-sidecar.sh` requires an owner-only environment file, the
 cloud opt-in, and `RADCLIFFE_ANTHROPIC_API_KEY`; it pins
-`claude-haiku-4-5-20251001`, bridges the key to `ANTHROPIC_API_KEY`, removes the
+`claude-sonnet-5`, bridges the key to `ANTHROPIC_API_KEY`, removes the
 original key name, and discloses that projected conversation context is sent to
 Anthropic. Node captures the key in the provider client closure and immediately
 removes it from its environment so later child processes cannot inherit it.
@@ -60,7 +60,7 @@ reserved output exceeds the limit. If Ollama reports or silently truncates an
 already-oversized prompt, the result is explicitly labeled an inexact lower
 bound and remains an overflow; it is never presented as an exact count.
 
-For the Haiku live-debug profile, the same endpoint submits the structured Pi
+For the Sonnet live cloud profile, the same endpoint submits the structured Pi
 payload to Anthropic's free token-count API. Anthropic documents that count as
 an estimate, so Radcliffe adds 2% plus 32 tokens, sets `exact=false`, and labels
 the measurement basis. The pinned model supplies the 200,000-token context
@@ -72,7 +72,7 @@ from Anthropic's [model overview](https://platform.claude.com/docs/en/about-clau
 the estimate semantics come from its
 [token-counting contract](https://platform.claude.com/docs/en/build-with-claude/token-counting).
 
-Foreground Haiku conversations have no accumulated dollar ceiling. Context
+Foreground cloud conversations have no accumulated dollar ceiling. Context
 preflight, the per-call output limit, and content-free usage events remain in
 force, but a long conversation is not disabled merely because earlier turns
 cost more than a fixed session allowance. Dollar caps belong to individual

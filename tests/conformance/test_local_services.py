@@ -84,7 +84,7 @@ def test_plist_is_repository_owned_and_contains_no_environment_or_secret(tmp_pat
     assert b"TOKEN" not in encoded
 
 
-def test_user_test_plist_pins_live_haiku_without_copying_provider_credentials(
+def test_user_test_plist_pins_live_sonnet_without_copying_provider_credentials(
     tmp_path,
 ) -> None:
     root = workspace(tmp_path)
@@ -92,7 +92,7 @@ def test_user_test_plist_pins_live_haiku_without_copying_provider_credentials(
     live_runner.write_text("#!/bin/sh\nexit 0\n")
     live_runner.chmod(0o755)
 
-    payload = build_plist(root, SERVICES[0], "live-haiku-4.5")
+    payload = build_plist(root, SERVICES[0], "live-sonnet-5")
     encoded = plistlib.dumps(payload)
 
     assert payload["ProgramArguments"] == [str(live_runner)]

@@ -40,7 +40,7 @@ MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 SANDBOX_FILE_SIZE_LIMIT = MAX_ARTIFACT_BYTES
 MAX_TOOL_ARGUMENT_CORRECTIONS = 3
 MAX_NO_ACTION_CORRECTIONS = 3
-HAIKU_MODEL_ID = "claude-haiku-4-5-20251001"
+JOB_MODEL_ID = "claude-sonnet-5"
 IMAGE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$")
 PURPOSES = frozenset({"searching", "downloading", "analyzing", "coding", "testing", "compacting"})
 PURPOSE_ALIASES = {
@@ -645,14 +645,14 @@ class AnthropicAgent:
         self,
         *,
         api_key: str,
-        model: str = HAIKU_MODEL_ID,
+        model: str = JOB_MODEL_ID,
         timeout_seconds: int = 120,
         budget_usd: float = 0.25,
     ) -> None:
         if not api_key:
             raise ValueError("the Anthropic job model requires an API key")
-        if model != HAIKU_MODEL_ID:
-            raise ValueError("the Anthropic job model must use pinned Haiku")
+        if model != JOB_MODEL_ID:
+            raise ValueError("the Anthropic job model must use the pinned reviewed model")
         if budget_usd <= 0 or budget_usd > 1:
             raise ValueError("the Anthropic job model budget must be between zero and one dollar")
         self.api_key = api_key
@@ -754,7 +754,6 @@ class AnthropicAgent:
                 {
                     "model": self.model,
                     "max_tokens": 1_024,
-                    "temperature": 0.1,
                     "system": system,
                     "messages": converted,
                     "tools": tools,
@@ -1642,7 +1641,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             requested_budget = start.limits.budget_usd or options.max_model_cost_usd
             agent: JobAgent = AnthropicAgent(
                 api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
-                model=options.model or HAIKU_MODEL_ID,
+                model=options.model or JOB_MODEL_ID,
                 budget_usd=min(requested_budget, options.max_model_cost_usd),
             )
         else:
