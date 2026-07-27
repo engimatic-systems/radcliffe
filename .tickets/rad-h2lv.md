@@ -1,6 +1,6 @@
 ---
 id: rad-h2lv
-status: in_progress
+status: closed
 deps: [rad-wnwh, rad-58mt, rad-8i08]
 links: [rad-lod5, rad-mp26, rad-yk82]
 created: 2026-07-13T01:37:25Z
@@ -39,3 +39,7 @@ User physically verified the v0.1.1 Pixel app connects, displays state, plays re
 **2026-07-17T23:27:52Z**
 
 2026-07-17 physical follow-up: with the Pixel screen locked, the active voice session continued to hear the user and respond. Headset hardware controls remain deferred because no headset was available.
+
+**2026-07-27T14:54:57Z**
+
+Milestone 1 Android connectivity acceptance is complete from cumulative physical Pixel evidence. The app has repeatedly created/joined/ended rooms, published microphone audio only after explicit user action, rendered distinct user/model/source events and states, and played agent audio. Physical acceptance covers on-screen and speech interruption, speaker operation, active locked-screen conversation, and app/media-control source pause/resume without replay (session ses_d94bbaad38276fc8a0c5076cfc6e2e9f). Notification media control satisfies the ticket's notification-or-hardware criterion; broader Bluetooth/headset route coverage remains post-M1 rad-g9yr.

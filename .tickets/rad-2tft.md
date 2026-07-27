@@ -16,3 +16,9 @@ Deliver a coherent vertical slice that proves the Radcliffe architecture on the 
 ## Acceptance Criteria
 
 The epic is complete when all child tickets are closed and the documented Milestone 1 demo passes on the target Pixel: a user starts a native Android session, asks an ordinary voice question and hears a frontier-model answer within five seconds, interrupts audible output within 500 ms, invokes read_source through the Tool Gateway, hears canonical fixture text sent exactly to TTS with visible provenance, pauses and resumes from the persisted playback boundary, and ends/restarts the session without orphaned work. A reproducible demo report records latency, state, canonical-text, and tool-audit evidence.
+
+## Notes
+
+**2026-07-27T14:57:32Z**
+
+2026-07-27 closeout sweep: all genuine M1 child tickets are closed. Evidence-complete component gates rad-0mws, rad-ghti, rad-h2lv, rad-l1jc, and rad-ncdz were closed from cumulative Sonnet 5 Pixel and conformance evidence. Post-M1 reliability and product enhancements were removed from the epic parent rather than being misrepresented as M1 blockers. Keep this epic in progress until the final consolidated Pixel run in docs/milestone-1-acceptance.md passes; then attach its session ID and close the epic.

@@ -7,8 +7,7 @@ created: 2026-07-26T02:53:41Z
 type: feature
 priority: 2
 assignee: coopwilliams
-parent: rad-2tft
-tags: [radcliffe, source, playback, seek, voice, semantic]
+tags: [radcliffe, source, playback, seek, voice, semantic, post-m1]
 ---
 # Semantic seek: move the playhead to a described location, not a literal phrase
 
@@ -46,4 +45,3 @@ DECISIONS TO SETTLE:
 ## Acceptance Criteria
 
 A spoken request to seek to a described location - not a literal phrase - moves playback to a sentence the operator judges correct, for at least the motivating cases ("where the interview begins in earnest", "past the preamble"). The tool pages through the source in bounded chunks and reports which sentence it selected and why. Any claimed anchor text is validated to occur verbatim in the examined chunk before the playhead moves, so a hallucinated location cannot cause a jump. When the criterion is not found within budget, the user is told plainly that the search was bounded and unsuccessful, and playback state is unchanged. Moving the playhead reuses the rad-oy5k seek marker so a later plain resume continues correctly. Playback itself still streams canonical bytes to TTS without passing through the model, and the content hash and exact-source guarantee are unaffected. Cost of a semantic seek over a long article is measured and recorded in the ticket before it is considered acceptable. Verified by a Pixel listen-through on a long article with a clear structural boundary.
-
