@@ -66,7 +66,7 @@ class FakeSandbox:
         self.workspace.joinpath("report.md").write_text("verified result\n")
         return 0, "private shell output", False
 
-    def preview_page(
+    def download_and_preview_page(
         self,
         url: str,
         query: str,
@@ -234,7 +234,7 @@ def test_agent_previews_a_page_without_putting_raw_html_in_model_context(
     agent = ScriptedOllama(
         [
             tool_call(
-                "preview_page",
+                "download_and_preview_page",
                 {
                     "url": "https://example.test/bancroft",
                     "query": "Bancroft Gettysburg",
@@ -863,7 +863,7 @@ def test_docker_sandbox_passes_preview_url_and_query_as_opaque_arguments(tmp_pat
 
     url = "https://example.test/page?q=$(not-executed)"
     query = "Bancroft; $(also-not-executed)"
-    assert sandbox.preview_page(url, query) == (0, '{"preview":"bounded"}', False)
+    assert sandbox.download_and_preview_page(url, query) == (0, '{"preview":"bounded"}', False)
     invocation = calls[-1]
     assert invocation[-4:] == ["--url", url, "--query", query]
     assert invocation[-1] == query

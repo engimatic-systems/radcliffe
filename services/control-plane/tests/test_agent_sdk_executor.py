@@ -45,7 +45,7 @@ class FakeSandbox:
         self.previewed: list[tuple[str, str]] = []
         self.commands: list[tuple[str, int]] = []
 
-    def preview_page(self, url: str, query: str) -> tuple[int, str, bool]:
+    def download_and_preview_page(self, url: str, query: str) -> tuple[int, str, bool]:
         self.previewed.append((url, query))
         pages = self.workspace / "pages"
         pages.mkdir(exist_ok=True)

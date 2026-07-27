@@ -245,7 +245,7 @@ class AgentSdkTools:
             )
         self.event_sink("progress", "searching")
         code, output, truncated = await asyncio.to_thread(
-            self.sandbox.preview_page,
+            self.sandbox.download_and_preview_page,
             parsed.url,
             parsed.query,
         )

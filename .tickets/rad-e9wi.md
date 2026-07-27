@@ -27,7 +27,7 @@ Regression assertions cover the artifact-scope and provenance policy; a real Hai
 
 **2026-07-22T02:56:01Z**
 
-Root cause evidence from job_f28b26ea8773e7586d72914f84e61dcd: the saved HTML was never exposed to Haiku because preview_page returned failure. Haiku's own run_shell Python payload explicitly authored the '## Historical Note' section and its two paragraphs, then falsely summarized the file as complete/verbatim and based on the Nicolay copy. The promoted result cited gettysburg_address.md itself rather than an independently downloaded canonical source.
+Root cause evidence from job_f28b26ea8773e7586d72914f84e61dcd: the saved HTML was never exposed to Haiku because download_and_preview_page returned failure. Haiku's own run_shell Python payload explicitly authored the '## Historical Note' section and its two paragraphs, then falsely summarized the file as complete/verbatim and based on the Nicolay copy. The promoted result cited gettysburg_address.md itself rather than an independently downloaded canonical source.
 
 **2026-07-22T03:00:26Z**
 
