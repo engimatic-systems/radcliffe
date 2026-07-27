@@ -340,6 +340,7 @@ class VoicePipeline:
         self._turn_serial = asyncio.Lock()
         self._append_lock = asyncio.Lock()
         self._latest_submission = 0
+        self._pending_unanswered_user_message: str | None = None
         self._paused_source: _PausedSource | None = None
         self._pending_playback: dict[str, _PendingPlayback] = {}
         self._playback_lock = asyncio.Lock()
@@ -406,6 +407,8 @@ class VoicePipeline:
             raise ValueError("barge-in disposition must be continued or interrupted")
         turn = self._active_turn
         operation = turn.operation if turn is not None else None
+        if turn is not None and turn.user_message and not turn.model_text and not turn.tool_started:
+            self._pending_unanswered_user_message = turn.user_message
         if operation is not None:
             self.telemetry.emit(
                 component="media_worker",
@@ -493,6 +496,7 @@ class VoicePipeline:
 
     async def stop(self) -> None:
         await self._cancel_active("interrupted", always_flush=True)
+        self._pending_unanswered_user_message = None
         self._paused_source = None
         previous = self.engine.state
         self.engine.end()
@@ -1586,6 +1590,7 @@ class VoicePipeline:
 
     async def _begin_submission(self) -> int:
         async with self._coordinator:
+            self._pending_unanswered_user_message = None
             self._latest_submission += 1
             submission = self._latest_submission
         await self._cancel_active("superseded")
@@ -1594,6 +1599,8 @@ class VoicePipeline:
     async def _begin_user_submission(self, text: str) -> tuple[int, str]:
         async with self._coordinator:
             active = self._active_turn
+            pending_user_message = self._pending_unanswered_user_message
+            self._pending_unanswered_user_message = None
             if (
                 active is not None
                 and active.user_message
@@ -1601,6 +1608,8 @@ class VoicePipeline:
                 and not active.tool_started
             ):
                 user_message = active.user_message + "\n" + text
+            elif pending_user_message:
+                user_message = pending_user_message + "\n" + text
             else:
                 user_message = text
             self._latest_submission += 1

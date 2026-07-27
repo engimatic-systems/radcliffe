@@ -273,6 +273,64 @@ describe("PiAgentOrchestrator", () => {
     );
   });
 
+  it("routes a retained interrupted job request together with its one-word addendum", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-interrupted-user-context-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          {
+            instruction:
+              "Download the Gettysburg Address and save only its verbatim text as Markdown.",
+          },
+          { id: "retained-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Working on it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const tool = vi.fn(async () => ({
+      modelContent: "accepted",
+      details: { jobId: "job-1" },
+    }));
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+    const first =
+      "Start a background job to get the Gettysburg Address and save it as Markdown.";
+    const userMessage = `${first}\nVerbatim.`;
+    const turn = request([
+      packet("prior-user", first, {
+        annotations: [
+          ["radcliffe.turn_disposition", "interrupted"],
+          ["radcliffe.turn_id", "turn-prior"],
+        ],
+      }),
+      packet("current-user", "Verbatim.", {
+        annotations: [["radcliffe.turn_id", "turn-current"]],
+      }),
+    ]);
+    turn.userMessage = userMessage;
+
+    await orchestrator.run(turn, () => undefined);
+
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        userMessage,
+        arguments: {
+          instruction:
+            "Download the Gettysburg Address and save only its verbatim text as Markdown.",
+        },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
   it("keeps every schema available when a first-turn job request mentions later verbatim delivery", async () => {
     const faux = createFauxCore({ provider: "radcliffe-first-turn-schema-test" });
     faux.setResponses([

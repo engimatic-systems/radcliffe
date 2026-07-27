@@ -2069,7 +2069,9 @@ async def test_transferred_source_from_another_session_fails_closed(tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp_path) -> None:
+async def test_superseded_turn_keeps_user_history_but_excludes_abandoned_model_output(
+    tmp_path,
+) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
     orchestrator = InterruptibleOrchestrator()
@@ -2093,7 +2095,7 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
     second_packets = orchestrator.requests[1]["packets"]
     assert isinstance(second_packets, list)
     included = [packet["content"] for packet in second_packets if packet["include"]]
-    assert included == ["What model are you?"]
+    assert included == ["Count from one to ten", "What model are you?"]
     replay = await store.replay("s1")
     assert "Count from one to ten" in [item.content.inline_text for item in replay]
     assert "One. " in [item.content.inline_text for item in replay]
@@ -2104,10 +2106,8 @@ async def test_superseded_turn_is_audited_but_cannot_bleed_into_next_request(tmp
     ]
     assert dispositions == ["superseded", "completed"]
     packets = context_replay(replay)
-    assert not any(
-        packet.include and packet.content in {"Count from one to ten", "One. "}
-        for packet in packets
-    )
+    assert any(packet.include and packet.content == "Count from one to ten" for packet in packets)
+    assert not any(packet.include and packet.content == "One. " for packet in packets)
     assert pipeline.engine.state is ConversationState.LISTENING
     assert publisher.flushed
     partial_messages = [
@@ -2142,6 +2142,43 @@ async def test_unanswered_user_fragments_form_one_current_instruction_batch(tmp_
     assert orchestrator.requests[1]["userMessage"] == (
         "Use the Bancroft version exactly.\nRun that as a background job."
     )
+
+
+@pytest.mark.asyncio
+async def test_interrupted_unanswered_addendum_retains_user_context_and_instruction_batch(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    orchestrator = PendingUserBatchOrchestrator()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+    )
+    await pipeline.start()
+
+    request_text = "Start a background job to get the Gettysburg Address and save it as Markdown."
+    first = asyncio.create_task(pipeline.handle_transcript(request_text))
+    await asyncio.wait_for(orchestrator.first_started.wait(), timeout=1)
+    await pipeline.barge_in(disposition="interrupted")
+    await asyncio.wait_for(first, timeout=1)
+    await pipeline.handle_transcript("Verbatim.")
+
+    assert orchestrator.requests[1]["userMessage"] == f"{request_text}\nVerbatim."
+    second_packets = orchestrator.requests[1]["packets"]
+    assert isinstance(second_packets, list)
+    included = [packet["content"] for packet in second_packets if packet["include"]]
+    assert included == [request_text, "Verbatim."]
+    replay = await store.replay("s1")
+    dispositions = [
+        item.metadata.get(TURN_DISPOSITION_METADATA)
+        for item in replay
+        if TURN_DISPOSITION_METADATA in item.metadata
+    ]
+    assert dispositions == ["interrupted", "completed"]
 
 
 @pytest.mark.asyncio
@@ -2184,7 +2221,9 @@ async def test_recent_endpoint_continuation_keeps_both_user_fragments_in_context
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancellation_races_never_reinclude_abandoned_prompts(tmp_path) -> None:
+async def test_repeated_cancellation_keeps_user_history_but_excludes_abandoned_model_output(
+    tmp_path,
+) -> None:
     store = EventStore(tmp_path / "events.sqlite3")
     await store.migrate()
     orchestrator = RepeatingInterruptOrchestrator()
@@ -2207,7 +2246,7 @@ async def test_repeated_cancellation_races_never_reinclude_abandoned_prompts(tmp
         latest_packets = orchestrator.requests[-1]["packets"]
         assert isinstance(latest_packets, list)
         included = [packet["content"] for packet in latest_packets if packet["include"]]
-        assert abandoned_text not in included
+        assert abandoned_text in included
         assert f"partial-{abandoned_text}. " not in included
 
     replay = await store.replay("s1")
@@ -2254,10 +2293,11 @@ async def test_failed_tts_publishes_heard_partial_and_next_turn_recovers(tmp_pat
         for item in replay
         if TURN_DISPOSITION_METADATA in item.metadata
     ] == ["failed"]
-    assert not any(
-        packet.include and packet.content in {"Give me a cosmic response", "Audible first. "}
-        for packet in context_replay(replay)
+    packets = context_replay(replay)
+    assert any(
+        packet.include and packet.content == "Give me a cosmic response" for packet in packets
     )
+    assert not any(packet.include and packet.content == "Audible first. " for packet in packets)
 
     await pipeline.handle_transcript("Try another turn")
 

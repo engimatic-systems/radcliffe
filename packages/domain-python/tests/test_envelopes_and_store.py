@@ -198,8 +198,9 @@ def test_delivery_rate_is_boundary_scoped_and_does_not_leak() -> None:
     assert first.delivery_overridden
 
 
-def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_content() -> None:
-    interrupted = MessageEnvelope.text(
+@pytest.mark.parametrize("turn_disposition", ["interrupted", "superseded", "failed"])
+def test_context_replay_never_excludes_accepted_user_speech(turn_disposition: str) -> None:
+    prior_user = MessageEnvelope.text(
         session_id="s1",
         sequence=1,
         source=SourceKind.USER,
@@ -212,11 +213,11 @@ def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_conten
         session_id="s1",
         sequence=2,
         source=SourceKind.SYSTEM,
-        text="Turn interrupted",
+        text=f"Turn {turn_disposition}",
         metadata={
             TURN_ID_METADATA: "turn-1",
             TURN_EVENT_METADATA: "turn_disposition",
-            TURN_DISPOSITION_METADATA: "interrupted",
+            TURN_DISPOSITION_METADATA: turn_disposition,
         },
         message_id="disposition-1",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -231,12 +232,12 @@ def test_context_replay_keeps_interrupted_turn_auditable_but_excludes_its_conten
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
-    packets = context_replay((interrupted, disposition, current))
+    packets = context_replay((prior_user, disposition, current))
 
-    assert [packet.include for packet in packets] == [False, False, True]
-    assert "Count from one to ten" not in packets[0].content
+    assert [packet.include for packet in packets] == [True, False, True]
+    assert packets[0].content == "Count from one to ten"
     assert packets[2].content == "What model are you?"
-    assert dict(packets[0].annotations)[TURN_DISPOSITION_METADATA] == "interrupted"
+    assert dict(packets[0].annotations)[TURN_DISPOSITION_METADATA] == turn_disposition
 
 
 def test_configuration_audit_is_durable_but_not_model_visible() -> None:
