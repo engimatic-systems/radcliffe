@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,7 @@ class _OwnedWorker:
     process: WorkerProcess
     monitor: asyncio.Task[None] | None = None
     stopping: bool = False
+    stop_protected_until: float = 0
 
 
 class WorkerSupervisor:
@@ -46,11 +48,13 @@ class WorkerSupervisor:
         principal_id: str,
         launcher: WorkerLauncher,
         stop_timeout_seconds: float = 5,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.catalog = catalog
         self.principal_id = principal_id
         self.launcher = launcher
         self.stop_timeout_seconds = stop_timeout_seconds
+        self.monotonic = monotonic
         self._owned: dict[str, _OwnedWorker] = {}
         self._lock = asyncio.Lock()
         self._closing = False
@@ -134,6 +138,15 @@ class WorkerSupervisor:
         if monitor is not None:
             await monitor
 
+    async def defer_stop(self, session_id: str, *, grace_seconds: float) -> None:
+        async with self._lock:
+            owned = self._owned.get(session_id)
+            if owned is not None:
+                owned.stop_protected_until = max(
+                    owned.stop_protected_until,
+                    self.monotonic() + grace_seconds,
+                )
+
     async def reconcile(self, records: tuple[SessionRecord, ...]) -> None:
         active_ids = {record.session_id for record in records}
         for record in records:
@@ -142,7 +155,12 @@ class WorkerSupervisor:
             except WorkerLaunchError:
                 continue
         async with self._lock:
-            stale_ids = tuple(set(self._owned) - active_ids)
+            now = self.monotonic()
+            stale_ids = tuple(
+                session_id
+                for session_id, owned in self._owned.items()
+                if session_id not in active_ids and owned.stop_protected_until <= now
+            )
         await asyncio.gather(*(self.stop(session_id) for session_id in stale_ids))
 
     async def close(self) -> None:

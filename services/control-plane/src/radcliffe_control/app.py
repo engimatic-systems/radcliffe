@@ -1621,6 +1621,15 @@ async def _apply_session_transition(
                 detail="media worker failed to start",
             ) from error
 
+    if active.workers is not None:
+        # The transition response still has to travel back through the sidecar and source
+        # media worker so the worker can persist and publish the handoff to Android.
+        # Protect that worker from a reconciliation sweep which happens to land between
+        # the durable commit and delivery of the response.
+        await active.workers.defer_stop(
+            source.session_id,
+            grace_seconds=active.settings.worker_handoff_grace_seconds,
+        )
     result = await active.session_transitions.commit(
         request_id=request.request_id,
         idempotency_key=request.idempotency_key,
