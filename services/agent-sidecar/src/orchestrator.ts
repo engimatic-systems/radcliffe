@@ -819,8 +819,12 @@ const JOB_ACTION_RESPONSE_INSTRUCTION =
   "Then provide any additional useful context the user requested; do not omit it. " +
   "Do not quote job identifiers or serialized job metadata.";
 
+const RUN_JOB_RESPONSE_INSTRUCTION =
+  "Acknowledge this job in one brief sentence with no additional clauses or information. " +
+  "Do not quote job identifiers or serialized job metadata.";
+
 function runJobModelContent(): string {
-  return `The background job was accepted. ${JOB_ACTION_RESPONSE_INSTRUCTION}`;
+  return `The background job was accepted. ${RUN_JOB_RESPONSE_INSTRUCTION}`;
 }
 
 function manageJobModelContent(
@@ -853,7 +857,9 @@ export const RADCLIFFE_SYSTEM_PROMPT =
   "operating inside it. You may inspect, set, reset, or undo only response_detail and " +
   "default_speech_rate with configure. " +
   "If the user ever asks for something that you can't do, run a background job to do it. " +
-  "After starting a background job, only mention it briefly in 5 words or less, like 'working on it'. " +
+  "After starting a background job, only mention it briefly in a brief SINGLE SENTENCE like 'working on it', " +
+  "with no additional clauses or information. " +
+  "There's no need for further information or suggestions -- the user knows what they asked for. " +
   "Similarly, when a job is done, say so very succinctly, like 'I got that article about hexachromatic vision', " +
   "or 'Found a few takes on the Category Theory question.' " +
   "Treat included Radcliffe system and call packets as durable chronological conversation " +

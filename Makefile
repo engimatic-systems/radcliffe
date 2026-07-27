@@ -2,6 +2,7 @@
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	check-background-jobs-local check-job-egress-local build-job-sandbox-local \
+	build-agent-sidecar-local \
 	services-install-local services-start-local services-status-local \
 	services-restart-local services-stop-local \
 	services-install-user-test \
@@ -65,6 +66,9 @@ check-operations-local:
 build-job-sandbox-local:
 	scripts/build-job-sandbox.sh
 
+build-agent-sidecar-local:
+	npm run build --workspace services/agent-sidecar
+
 check-background-jobs-local:
 	set -a; . var/.env; . var/job-executor.env; set +a; \
 		uv run python scripts/background_job_preflight.py --wait 30
@@ -77,21 +81,21 @@ check-job-egress-local:
 			--image "$$RADCLIFFE_JOB_SANDBOX_IMAGE" \
 			--workspace-root "$$RADCLIFFE_JOB_WORKSPACE_ROOT"
 
-services-install-local:
+services-install-local: build-agent-sidecar-local
 	uv run python scripts/radcliffe_services.py install --include-compat-worker
 
-services-install-user-test:
+services-install-user-test: build-agent-sidecar-local
 	uv run python scripts/radcliffe_services.py install --include-compat-worker \
 		--sidecar-profile live-sonnet-5
 
 services-status-local:
 	uv run python scripts/radcliffe_services.py status --include-compat-worker
 
-services-start-local:
+services-start-local: build-agent-sidecar-local
 	uv run python scripts/radcliffe_services.py start --include-compat-worker
 	@$(MAKE) --no-print-directory services-status-local
 
-services-restart-local:
+services-restart-local: build-agent-sidecar-local
 	uv run python scripts/radcliffe_services.py restart --include-compat-worker
 	@$(MAKE) --no-print-directory services-status-local
 
