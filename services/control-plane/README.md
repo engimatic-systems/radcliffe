@@ -71,8 +71,11 @@ Schema migrations are incremental and recorded in `schema_migrations`.
 ## Background job API
 
 - `run_job` on `POST /v1/tool-calls` durably accepts a private job instruction
-  and immediately returns a job ID. `manage_job` inspects, follows up,
-  reprioritizes, or cancels it.
+  and immediately returns a job ID. Optional `inputs` identify an authorized
+  current-session Markdown source or a bounded artifact from a succeeded job
+  in the same session. Accepted bytes and SHA-256 provenance are immutable
+  across retries. `manage_job` inspects, follows up, reprioritizes, or cancels
+  the job.
 - `GET /v1/sessions/{session_id}/jobs`, `GET /v1/jobs/{job_id}`, and
   `GET /v1/jobs/{job_id}/events` expose owner-authenticated metadata and
   privacy-minimized replayable events. They never return instructions or
@@ -180,6 +183,9 @@ boundary, all Linux capabilities dropped, `no-new-privileges`, PID/CPU/memory,
 file-size and descriptor limits, and only that attempt's private workspace bind
 mounted. Executor and agent transcripts stay in the outer attempt directory,
 outside that mount; only the inner artifact workspace is visible to commands.
+Explicit job inputs are copied into that workspace under `/workspace/inputs`
+with read-only file and directory modes; neither the configured source root nor
+the producing job workspace is mounted.
 Its internal-only Docker network reaches a separate least-privilege
 HTTP CONNECT proxy; that proxy is the sole bridge-network member and rejects
 loopback, link-local, private/LAN, metadata, non-global DNS answers, and ports

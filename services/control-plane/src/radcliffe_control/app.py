@@ -60,12 +60,13 @@ from radcliffe_domain.devices import (
     DeviceRegistry,
     credential_digest,
 )
-from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity
+from radcliffe_domain.envelope import MessageEnvelope, Provenance, Sensitivity, SourceKind
 from radcliffe_domain.jobs import (
     JobConflictError,
     JobError,
     JobEventKind,
     JobEventRecord,
+    JobInput,
     JobLeaseError,
     JobMutationResult,
     JobNotFoundError,
@@ -113,9 +114,11 @@ from radcliffe_control.job_executor import (
     JsonLineJobLauncher,
 )
 from radcliffe_control.job_results import (
+    PromotedArtifactFile,
     PromotedJobResult,
     PromotedSource,
     PromotedSourceFile,
+    read_promoted_artifacts,
     read_promoted_result,
     read_promoted_sources,
 )
@@ -130,11 +133,38 @@ from radcliffe_control.workers import (
 )
 
 logger = logging.getLogger(__name__)
+_SPOKEN_OUTPUT_CATEGORIES = frozenset(
+    {
+        "hash",
+        "identifier",
+        "url",
+        "path",
+        "timestamp",
+        "stack_trace",
+        "serialized_data",
+        "long_number",
+        "code",
+        "citation",
+        "repeated_punctuation",
+        "acronym_metadata",
+    }
+)
 
 
 def _to_camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.title() for part in rest)
+
+
+def _technical_detail_categories(envelope: MessageEnvelope) -> tuple[str, ...]:
+    if envelope.source is not SourceKind.MODEL:
+        return ()
+    return tuple(
+        sorted(
+            set(envelope.metadata.get("radcliffe.spoken_output.categories", "").split(","))
+            & _SPOKEN_OUTPUT_CATEGORIES
+        )
+    )
 
 
 class SessionRequest(BaseModel):
@@ -285,6 +315,7 @@ class SessionMessageResponse(BaseModel):
     text: str | None
     provenance_label: str | None
     delivery_label: str | None
+    technical_detail_categories: tuple[str, ...]
 
 
 class SessionMessageListResponse(BaseModel):
@@ -351,6 +382,27 @@ class SessionActionArguments(BaseModel):
         return self
 
 
+class RunJobInputArguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=_to_camel,
+        populate_by_name=True,
+    )
+
+    kind: Literal["source", "artifact"]
+    reference: str = Field(min_length=1, max_length=2_048)
+    job_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+    )
+
+    @model_validator(mode="after")
+    def valid_kind_shape(self) -> RunJobInputArguments:
+        if self.kind == "source" and self.job_id is not None:
+            raise ValueError("foreground source inputs do not accept a job ID")
+        return self
+
+
 class RunJobArguments(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -364,6 +416,7 @@ class RunJobArguments(BaseModel):
     )
     priority: int = Field(default=2, ge=0, le=4)
     budget_usd: float | None = Field(default=None, gt=0, le=100)
+    inputs: tuple[RunJobInputArguments, ...] = Field(default=(), max_length=8)
 
 
 class ManageJobArguments(BaseModel):
@@ -881,6 +934,120 @@ async def _resolve_job_source(
     return next(iter(unique.values()))
 
 
+async def _resolve_job_artifact(
+    active: Runtime,
+    *,
+    session_id: str,
+    reference: str,
+    job_id: str | None = None,
+) -> tuple[JobRecord, PromotedArtifactFile]:
+    jobs = await active.jobs.list_for_session(
+        principal_id=active.settings.owner_id,
+        session_id=session_id,
+        limit=100,
+    )
+    exact_id: list[tuple[JobRecord, PromotedArtifactFile]] = []
+    exact_name: list[tuple[JobRecord, PromotedArtifactFile]] = []
+    partial_name: list[tuple[JobRecord, PromotedArtifactFile]] = []
+    normalized = _job_source_reference(reference)
+    for job in jobs:
+        if job_id is not None and job.job_id != job_id:
+            continue
+        if job.status is not JobStatus.SUCCEEDED or job.attempt < 1:
+            continue
+        for promoted in read_promoted_artifacts(
+            active.settings.job_workspace_root,
+            job_id=job.job_id,
+            attempt=job.attempt,
+        ):
+            artifact = promoted.artifact
+            artifact_name = _job_source_reference(artifact.path)
+            candidate = (job, promoted)
+            if reference == artifact.artifact_id:
+                exact_id.append(candidate)
+            elif normalized and normalized == artifact_name:
+                exact_name.append(candidate)
+            elif normalized and (normalized in artifact_name or artifact_name in normalized):
+                partial_name.append(candidate)
+    matches = exact_id or exact_name or partial_name
+    unique = {
+        (job.job_id, item.artifact.artifact_id, item.artifact.path): (job, item)
+        for job, item in matches
+    }
+    if not unique:
+        raise JobNotFoundError("promoted job artifact not found")
+    if len(unique) > 1:
+        names = sorted(
+            {item.artifact.path for _job, item in unique.values()},
+            key=str.casefold,
+        )[:5]
+        raise JobConflictError("promoted job artifact reference is ambiguous: " + "; ".join(names))
+    return next(iter(unique.values()))
+
+
+def _staged_job_input_name(position: int, original_name: str) -> str:
+    basename = original_name.replace("\\", "/").rsplit("/", 1)[-1]
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", basename).strip(".-")
+    if not normalized:
+        normalized = "input"
+    prefix = f"input-{position + 1}-"
+    return prefix + normalized[: 128 - len(prefix)]
+
+
+async def _resolve_job_inputs(
+    active: Runtime,
+    request: ToolCallRequest,
+    specifications: tuple[RunJobInputArguments, ...],
+) -> tuple[JobInput, ...]:
+    if not specifications:
+        return ()
+    session = active.sessions.get(request.session_id)
+    if session is None:
+        raise ToolDeniedError("session source grant is unavailable")
+    inputs: list[JobInput] = []
+    for position, specification in enumerate(specifications):
+        if specification.kind == "source":
+            snapshot = await active.gateway.snapshot_source(
+                session_id=request.session_id,
+                generation=request.generation,
+                grant=session.grant,
+                reference=specification.reference,
+            )
+            inputs.append(
+                JobInput(
+                    kind="source",
+                    name=_staged_job_input_name(position, snapshot.name),
+                    source_session_id=request.session_id,
+                    source_reference=snapshot.reference,
+                    sha256=snapshot.sha256,
+                    byte_length=len(snapshot.canonical_bytes),
+                    canonical_bytes=snapshot.canonical_bytes,
+                )
+            )
+            continue
+        producer, promoted = await _resolve_job_artifact(
+            active,
+            session_id=request.session_id,
+            reference=specification.reference,
+            job_id=specification.job_id,
+        )
+        artifact = promoted.artifact
+        inputs.append(
+            JobInput(
+                kind="artifact",
+                name=_staged_job_input_name(position, artifact.path),
+                source_session_id=request.session_id,
+                source_reference=f"{producer.job_id}:{artifact.path}",
+                producer_job_id=producer.job_id,
+                artifact_id=artifact.artifact_id,
+                sha256=artifact.sha256,
+                byte_length=artifact.byte_length,
+                canonical_bytes=promoted.canonical_bytes,
+            )
+        )
+    return tuple(inputs)
+
+
 def _configuration_value_response(
     key: ConfigurationKey,
     effective: EffectiveConfiguration,
@@ -910,6 +1077,7 @@ async def _execute_run_job_tool(
     budget_microusd = (
         round(arguments.budget_usd * 1_000_000) if arguments.budget_usd is not None else None
     )
+    inputs = await _resolve_job_inputs(active, request, arguments.inputs)
     result = await active.jobs.accept(
         principal_id=active.settings.owner_id,
         session_id=request.session_id,
@@ -918,6 +1086,7 @@ async def _execute_run_job_tool(
         instruction=arguments.instruction,
         user_message=request.user_message or "",
         related_links=await _related_links_for_session(active, request.session_id),
+        inputs=inputs,
         notification_policy=JobNotificationPolicy(arguments.notification_policy),
         priority=arguments.priority,
         budget_microusd=budget_microusd,
@@ -2329,6 +2498,7 @@ def create_app(
                         envelope.provenance.display_name or envelope.provenance.locator or None
                     ),
                     delivery_label=render_projection(envelope).delivery_summary,
+                    technical_detail_categories=_technical_detail_categories(envelope),
                 )
                 for envelope in items
             ),
