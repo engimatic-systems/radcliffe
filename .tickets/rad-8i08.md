@@ -1,6 +1,6 @@
 ---
 id: rad-8i08
-status: in_progress
+status: closed
 deps: [rad-wnwh, rad-58mt]
 links: []
 created: 2026-07-13T01:37:25Z
@@ -31,3 +31,7 @@ LAN development topology is now deployed locally: pinned LiveKit is reachable at
 **2026-07-20T04:15:22Z**
 
 Correction as of 2026-07-19: ws://192.168.18.71:7880 describes the earlier LAN-only deployment and is not the current phone-facing signaling URL. Current room credentials advertise wss://ravd-64-mbp.tail2aca23.ts.net:8089; Tailscale Serve exposes that endpoint tailnet-only and proxies it to local LiveKit at http://127.0.0.1:7880. Port 7880 is not directly exposed through Tailscale Serve.
+
+**2026-07-27T14:50:45Z**
+
+Milestone 1 topology accepted on 2026-07-27 for the deployed single-owner tailnet scope. The target Pixel has now completed repeated real voice sessions through trusted Tailscale HTTPS/WSS signaling on Serve port 8089; LiveKit advertises the tailnet node for direct RTC; supervised workers repeatedly connect outbound; scoped short-lived token issuance, diagnostics, reproducible configuration, and secret isolation are implemented and tested. Current Serve state was re-inspected before closure and the node is online. The original public-domain forced-TURN criterion is explicitly deferred rather than claimed: M1 adopted the tailnet-only checkpoint, while TURN-only/mobile-network reliability remains tracked by post-M1 rad-g9yr. This matches the M1 spec boundary that hostile-network/device-matrix hardening follows the foundation demo. Operator agreed this ticket can close.

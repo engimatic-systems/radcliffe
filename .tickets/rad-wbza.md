@@ -1,6 +1,6 @@
 ---
 id: rad-wbza
-status: in_progress
+status: closed
 deps: []
 links: [rad-0mws]
 created: 2026-07-27T05:02:45Z
@@ -32,3 +32,7 @@ Implemented on 2026-07-26 in the stacked interruption-context branch. context_re
 **2026-07-27T13:57:00Z**
 
 2026-07-27 phone retest exposed a follow-on duplication bug: the durable replay correctly held four USER envelopes exactly once, but the sidecar replaced the final packet with the cumulative unanswered userMessage, yielding A, B, C, then A+B+C+D to Sonnet. Fixed by keeping persisted packets unchanged in model-visible/context-meter messages while using the cumulative userMessage only for deterministic job, delivery, exact-output, and tool routing. Added regression coverage asserting four buffered fragments appear once each in chronological order and the Gettysburg-plus-Verbatim job batch still forces one native run_job. Validation: all 112 sidecar tests and TypeScript checks pass; focused media batching/interruption tests pass. Keep open for physical-phone acceptance of the corrected request shape.
+
+**2026-07-27T14:50:45Z**
+
+Physical Pixel acceptance passed on 2026-07-27 in session ses_ef2e10ab50a9d4193cb9e74c35d6fa90 against deployed Sonnet 5 build 59bf020. Replay contains three pre-recap USER envelopes exactly once and in chronological order, each followed by an interrupted response disposition with no duplicated user content. Sonnet reported that it heard the Gettysburg excerpt across three messages without repeats, then correctly recalled the opening test preamble before 'Four score.' Worker logs show each utterance was independently endpointed/transcribed and each later speech event interrupted response work without erasing accepted speech. Operator confirmed the test succeeded. Acceptance complete.
