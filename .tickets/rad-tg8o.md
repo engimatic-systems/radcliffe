@@ -2,7 +2,7 @@
 id: rad-tg8o
 status: closed
 deps: []
-links: [rad-erac, rad-7t9h]
+links: [rad-erac, rad-7t9h, rad-orob]
 created: 2026-07-17T23:54:20Z
 type: epic
 priority: 1

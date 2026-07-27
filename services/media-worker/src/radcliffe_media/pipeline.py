@@ -204,10 +204,14 @@ class _PendingPlayback:
     segment_id: str
     boundary_index: int
     duration_ms: int
+    canonical_text: str
+    source: SourceKind
+    source_envelope: MessageEnvelope | None = None
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
     started: bool = False
     latest_position_ms: int = 0
     terminal_status: PlaybackStatus | None = None
+    heard_character_count: int = 0
 
 
 class Orchestrator(Protocol):
@@ -947,8 +951,6 @@ class VoicePipeline:
                             operation,
                             turn,
                         )
-                    if self.events is not None:
-                        await self.events.message(source)
                     await self._speak_plan(source, operation, turn)
                     source_rendered = True
                 else:
@@ -1101,6 +1103,7 @@ class VoicePipeline:
                 source=SourceKind.TEXT_SOURCE,
                 delivery=segment.delivery if segment.delivery_overridden else None,
                 wait_for_playback=True,
+                source_envelope=envelope,
             )
             turn.next_source_boundary = segment.boundary_index + 1
 
@@ -1151,6 +1154,7 @@ class VoicePipeline:
         source: SourceKind,
         delivery: SpeechDelivery | None = None,
         wait_for_playback: bool = False,
+        source_envelope: MessageEnvelope | None = None,
     ) -> None:
         self._assert_owner(turn, operation)
         delivery = delivery or SpeechDelivery.parse(
@@ -1173,17 +1177,19 @@ class VoicePipeline:
         playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)
         self._assert_owner(turn, operation)
-        pending: _PendingPlayback | None = None
+        pending = _PendingPlayback(
+            operation,
+            playback_id,
+            segment_id,
+            boundary_index,
+            duration,
+            canonical_text,
+            source,
+            source_envelope,
+        )
         if self.client_playback_acknowledgements:
             if self.events is None:
                 raise RuntimeError("client playback authority requires an event sink")
-            pending = _PendingPlayback(
-                operation,
-                playback_id,
-                segment_id,
-                boundary_index,
-                duration,
-            )
             async with self._playback_lock:
                 self._pending_playback[playback_id] = pending
             await self.events.playback_segment(
@@ -1257,7 +1263,7 @@ class VoicePipeline:
         if published_duration != duration:
             raise RuntimeError("published audio duration changed after playback announcement")
         if self.client_playback_acknowledgements:
-            if wait_for_playback and pending is not None:
+            if wait_for_playback:
                 try:
                     await asyncio.wait_for(
                         pending.terminal.wait(),
@@ -1282,6 +1288,10 @@ class VoicePipeline:
                     playback_id=playback_id,
                 )
             )
+            pending.started = True
+            pending.latest_position_ms = duration
+            pending.terminal_status = PlaybackStatus.COMPLETED
+            await self._persist_heard_source(pending, PlaybackStatus.COMPLETED)
 
     async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> bool:
         async with self._playback_lock:
@@ -1384,9 +1394,77 @@ class VoicePipeline:
                 phase="acknowledgement",
                 operation=acknowledgement.operation,
             )
+            if (
+                persisted
+                and pending.source is SourceKind.TEXT_SOURCE
+                and pending.terminal_status is not None
+            ):
+                await self._persist_heard_source(pending, pending.terminal_status)
             if pending.terminal_status is not None:
                 pending.terminal.set()
             return persisted
+
+    async def _persist_heard_source(
+        self,
+        pending: _PendingPlayback,
+        status: PlaybackStatus,
+    ) -> MessageEnvelope | None:
+        source = pending.source_envelope
+        if source is None or pending.source is not SourceKind.TEXT_SOURCE:
+            return None
+        acknowledged_text = (
+            pending.canonical_text
+            if status is PlaybackStatus.COMPLETED
+            else self._acknowledged_text_prefix(
+                pending.canonical_text,
+                pending.latest_position_ms,
+                pending.duration_ms,
+            )
+        )
+        text = acknowledged_text[pending.heard_character_count :]
+        if not text:
+            return None
+        metadata = {
+            TURN_EVENT_METADATA: "source_playback",
+            "radcliffe.source.message_id": source.message_id,
+            "radcliffe.source.content_sha256": source.content_sha256.hex(),
+            "radcliffe.playback.id": pending.playback_id,
+            "radcliffe.playback.segment_id": pending.segment_id,
+            "radcliffe.playback.boundary_index": str(pending.boundary_index),
+            "radcliffe.playback.position_ms": str(pending.latest_position_ms),
+            "radcliffe.playback.duration_ms": str(pending.duration_ms),
+            "radcliffe.playback.status": status.value,
+            "radcliffe.playback.complete": str(status is PlaybackStatus.COMPLETED).lower(),
+        }
+        async with self._append_lock:
+            envelope = MessageEnvelope.text(
+                session_id=self.engine.session_id,
+                sequence=await self.store.next_sequence(self.engine.session_id),
+                source=SourceKind.TEXT_SOURCE,
+                text=text,
+                metadata=metadata,
+                provenance=source.provenance,
+                sensitivity=source.sensitivity,
+                message_id=f"heard:{pending.playback_id}:{len(acknowledged_text)}",
+            )
+            await self.store.append(envelope)
+        pending.heard_character_count = len(acknowledged_text)
+        if self.events is not None:
+            await self.events.message(envelope)
+        return envelope
+
+    @staticmethod
+    def _acknowledged_text_prefix(text: str, position_ms: int, duration_ms: int) -> str:
+        if not text or position_ms <= 0 or duration_ms <= 0:
+            return ""
+        if position_ms >= duration_ms:
+            return text
+        character_limit = min(len(text), int(len(text) * position_ms / duration_ms))
+        if character_limit <= 0:
+            return ""
+        candidate = text[:character_limit]
+        whitespace_boundaries = [match.end() for match in re.finditer(r"\s+", candidate)]
+        return text[: whitespace_boundaries[-1]] if whitespace_boundaries else ""
 
     async def _begin_submission(self) -> int:
         async with self._coordinator:
@@ -1415,10 +1493,12 @@ class VoicePipeline:
     async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
         task: asyncio.Task[None] | None = None
         should_flush = always_flush
+        operation: Operation | None = None
         async with self._coordinator:
             turn = self._active_turn
             if turn is not None:
                 should_flush = True
+                operation = turn.operation
                 turn.requested_disposition = disposition
                 if not turn.cancelled.is_set():
                     turn.cancelled.set()
@@ -1426,10 +1506,40 @@ class VoicePipeline:
                     task.cancel()
         if should_flush:
             await self.publisher.flush()
+        if operation is not None:
+            await self._commit_source_high_water(operation)
         current = asyncio.current_task()
         if task is not None and task is not current:
             await asyncio.gather(task, return_exceptions=True)
             await self.publisher.flush()
+
+    async def _commit_source_high_water(self, operation: Operation) -> None:
+        if not self.client_playback_acknowledgements:
+            return
+        async with self._playback_lock:
+            pending = tuple(
+                item
+                for item in self._pending_playback.values()
+                if item.operation == operation
+                and item.source is SourceKind.TEXT_SOURCE
+                and item.terminal_status is None
+            )
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(item.terminal.wait() for item in pending)),
+                    timeout=min(self.playback_ack_timeout_seconds, 0.5),
+                )
+            except TimeoutError:
+                pass
+        async with self._playback_lock:
+            for item in pending:
+                if item.latest_position_ms <= 0:
+                    continue
+                await self._persist_heard_source(
+                    item,
+                    item.terminal_status or PlaybackStatus.POSITION,
+                )
 
     async def _finish_completed(self, turn: _ActiveTurn) -> None:
         if turn.operation is not None:
@@ -1937,13 +2047,7 @@ class VoicePipeline:
             if existing.content_sha256 != transferred.content_sha256:
                 raise ValueError("canonical source conflicts with persisted envelope")
             return existing
-
-        async with self._append_lock:
-            proto = transferred.to_proto()
-            proto.sequence = await self.store.next_sequence(self.engine.session_id)
-            imported = MessageEnvelope.from_proto(proto)
-            await self.store.append(imported)
-        return imported
+        return transferred
 
     @staticmethod
     def _tool_details(result: object) -> dict[object, object] | None:

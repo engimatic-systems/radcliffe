@@ -2,7 +2,7 @@
 id: rad-u96k
 status: closed
 deps: []
-links: [rad-25m0, rad-e9wi, rad-rnt5]
+links: [rad-25m0, rad-e9wi, rad-rnt5, rad-orob]
 created: 2026-07-22T14:23:06Z
 type: feature
 priority: 0

@@ -2,7 +2,7 @@
 id: rad-ihso
 status: closed
 deps: [rad-wnwh, rad-0ekb]
-links: []
+links: [rad-1w52]
 created: 2026-07-13T01:37:25Z
 type: task
 priority: 1

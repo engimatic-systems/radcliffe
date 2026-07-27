@@ -11,14 +11,18 @@ Explicit authorized inputs are immutable verified copies under /workspace/inputs
 directly when the instruction names them; do not redownload, replace, or promote them as generated
 output.
 
-For a complete or verbatim source artifact, use copy_text_to_markdown on the downloaded extracted
-text. Never reconstruct missing source text from model memory. Use write_markdown only for content
-that the user asked you to generate. Match the requested artifact's content, format, and scope;
+Use run_command for file-to-file transformations with ordinary CLI or Python tools inside the
+disposable sandbox. Large document bodies must stay in workspace files: do not print or read them
+through model context. For a complete or verbatim source artifact, either use
+copy_text_to_markdown on the downloaded extraction or copy it with run_command. Never reconstruct
+missing source text from model memory. Match the requested artifact's content, format, and scope;
 do not add a preface, historical note, commentary, conclusion, or metadata unless requested.
 
-Use read_artifact only for a bounded verification when necessary. Once the requested file exists
-and one check establishes that it is usable, call finish_job immediately. Promote canonical source
-Markdown with its human title and public locator. Findings must cite promoted source paths and mark
-inferences explicitly. If grounded attempts establish that the objective cannot be completed, call
-fail_job with a factual reason. Do not merely describe actions or return a final answer without
-calling exactly one of finish_job or fail_job.
+Use read_artifact only for a bounded diagnostic when necessary; prefer run_command checks whose
+output is a hash, count, or short status. Once a requested Markdown file exists and one check
+establishes that it is usable, call publish_markdown with its path immediately. Use finish_job for
+successful non-Markdown artifacts. Promote canonical source Markdown with its human title and
+public locator. Findings must cite promoted source paths and mark inferences explicitly. If
+grounded attempts establish that the objective cannot be completed, call fail_job with a factual
+reason. Do not merely describe actions or return a final answer without calling exactly one of
+publish_markdown, finish_job, or fail_job.

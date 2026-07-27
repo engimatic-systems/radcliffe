@@ -830,8 +830,10 @@ def _job_tool_response(
             promoted_payload["sources"] = [
                 {
                     "entityId": source.entity_id,
+                    "artifactId": source.artifact_id,
                     "name": source.name,
                     "locator": source.locator,
+                    "path": source.path,
                     "contentSha256": source.sha256,
                 }
                 for source in sources
@@ -902,9 +904,11 @@ async def _resolve_job_source(
         session_id=session_id,
         limit=100,
     )
-    exact_id: list[PromotedSourceFile] = []
+    exact_reference: list[PromotedSourceFile] = []
+    exact_path: list[PromotedSourceFile] = []
     exact_name: list[PromotedSourceFile] = []
-    partial_name: list[PromotedSourceFile] = []
+    partial_reference: list[PromotedSourceFile] = []
+    scoped_sources: list[PromotedSourceFile] = []
     normalized = _job_source_reference(reference)
     for job in jobs:
         if job_id is not None and job.job_id != job_id:
@@ -916,15 +920,25 @@ async def _resolve_job_source(
             job_id=job.job_id,
             attempt=job.attempt,
         ):
+            scoped_sources.append(promoted)
             source = promoted.source
             source_name = _job_source_reference(source.name)
-            if reference == source.entity_id:
-                exact_id.append(promoted)
+            source_path = _job_source_reference(source.path)
+            source_filename = _job_source_reference(source.path.rsplit("/", 1)[-1])
+            if reference in {source.entity_id, source.artifact_id}:
+                exact_reference.append(promoted)
+            elif normalized and normalized in {source_path, source_filename}:
+                exact_path.append(promoted)
             elif normalized and normalized == source_name:
                 exact_name.append(promoted)
-            elif normalized and (normalized in source_name or source_name in normalized):
-                partial_name.append(promoted)
-    matches = exact_id or exact_name or partial_name
+            elif normalized and any(
+                normalized in candidate or candidate in normalized
+                for candidate in {source_name, source_path, source_filename}
+            ):
+                partial_reference.append(promoted)
+    matches = exact_reference or exact_path or exact_name or partial_reference
+    if not matches and job_id is not None:
+        matches = scoped_sources
     unique = {item.source.entity_id: item for item in matches}
     if not unique:
         raise JobNotFoundError("promoted job source not found")

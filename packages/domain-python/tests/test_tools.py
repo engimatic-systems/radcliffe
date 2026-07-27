@@ -74,7 +74,6 @@ async def test_read_source_is_exact_auditable_and_idempotent(tmp_path) -> None:
     assert replay.canonical_bytes == result.canonical_bytes
     assert [item.source for item in await store.replay("s1")] == [
         SourceKind.CALL,
-        SourceKind.TEXT_SOURCE,
         SourceKind.CALL,
     ]
 

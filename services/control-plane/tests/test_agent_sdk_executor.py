@@ -12,6 +12,7 @@ from radcliffe_control.agent_sdk_executor import (
     AgentSdkTools,
     EventSink,
     SdkClient,
+    parser,
     run_agent_sdk,
 )
 from radcliffe_control.job_results import read_promoted_result
@@ -42,6 +43,7 @@ class FakeSandbox:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self.previewed: list[tuple[str, str]] = []
+        self.commands: list[tuple[str, int]] = []
 
     def preview_page(self, url: str, query: str) -> tuple[int, str, bool]:
         self.previewed.append((url, query))
@@ -64,6 +66,15 @@ class FakeSandbox:
             False,
         )
 
+    def execute(
+        self,
+        command: str,
+        *,
+        timeout_seconds: int = 180,
+    ) -> tuple[int, str, bool]:
+        self.commands.append((command, timeout_seconds))
+        return 0, "verification passed\n", False
+
 
 class CapturingEvents:
     def __init__(self) -> None:
@@ -78,6 +89,27 @@ class CapturingEvents:
         artifact_ids: tuple[str, ...] = (),
     ) -> None:
         self.items.append((kind, detail_code, tuple(entity_ids), tuple(artifact_ids)))
+
+
+def test_sdk_cli_defaults_to_pinned_haiku_and_a_quarter_dollar_per_job() -> None:
+    options = parser().parse_args(
+        [
+            "--docker",
+            "/usr/bin/docker",
+            "--docker-host",
+            "unix:///tmp/docker.sock",
+            "--image",
+            "radcliffe-job-sandbox:test",
+            "--workspace-root",
+            "/tmp/jobs",
+            "--provider",
+            "anthropic",
+        ]
+    )
+
+    assert options.model == "claude-haiku-4-5-20251001"
+    assert options.max_model_cost_usd == 0.25
+    assert options.max_turns is None
 
 
 @pytest.mark.asyncio
@@ -105,10 +137,10 @@ async def test_sdk_tools_download_copy_and_promote_a_canonical_source(tmp_path: 
                 "destinationPath": "gettysburg-commentary.md",
             }
         )
-        finished = await tools.finish_job(
+        finished = await tools.publish_markdown(
             {
+                "path": "gettysburg-commentary.md",
                 "summary": "Downloaded the first available commentary.",
-                "artifactPaths": ["gettysburg-commentary.md"],
                 "sources": [
                     {
                         "name": "Example Commentary",
@@ -142,29 +174,49 @@ async def test_sdk_tools_download_copy_and_promote_a_canonical_source(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_sdk_artifact_tools_reject_escape_and_overwrite(tmp_path: Path) -> None:
+async def test_sdk_command_and_publish_tools_preserve_the_workspace_boundary(
+    tmp_path: Path,
+) -> None:
     attempt = tmp_path / "attempt-1"
     files = attempt / "files"
     files.mkdir(parents=True)
     transcript = PrivateTranscript(attempt)
+    sandbox = FakeSandbox(files)
     tools = AgentSdkTools(
         start=start_frame(),
-        sandbox=cast(DockerSandbox, FakeSandbox(files)),
+        sandbox=cast(DockerSandbox, sandbox),
         attempt_workspace=attempt,
         transcript=transcript,
         event_sink=cast(EventSink, CapturingEvents()),
     )
     try:
-        escaped = await tools.write_markdown({"path": "../outside.md", "content": "no"})
-        first = await tools.write_markdown({"path": "report.md", "content": "first"})
-        overwritten = await tools.write_markdown({"path": "report.md", "content": "second"})
+        command = await tools.run_command(
+            {
+                "command": "python -m trafilatura --input pages/commentary.html > report.md",
+                "purpose": "analyzing",
+                "timeoutSeconds": 45,
+            }
+        )
+        escaped = await tools.publish_markdown({"path": "../outside.md", "summary": "No."})
+        missing = await tools.publish_markdown({"path": "missing.md", "summary": "No."})
+        files.joinpath("report.md").write_text("Generated report.\n")
+        published = await tools.publish_markdown(
+            {"path": "report.md", "summary": "Generated the requested report."}
+        )
     finally:
         transcript.close()
 
+    assert "isError" not in command
+    assert sandbox.commands == [
+        (
+            "python -m trafilatura --input pages/commentary.html > report.md",
+            45,
+        )
+    ]
     assert escaped["isError"] is True
-    assert "isError" not in first
-    assert overwritten["isError"] is True
-    assert files.joinpath("report.md").read_text() == "first"
+    assert missing["isError"] is True
+    assert "isError" not in published
+    assert files.joinpath("report.md").read_text() == "Generated report.\n"
     assert not tmp_path.joinpath("outside.md").exists()
 
 
@@ -221,7 +273,7 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
             model="claude-sonnet-test",
             effort="low",
             max_turns=6,
-            max_budget_usd=0.10,
+            max_budget_usd=0.25,
             client_factory=factory,
             event_sink=cast(EventSink, events),
         )
@@ -230,7 +282,7 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
 
     assert not succeeded
     options = captured[0].options
-    assert options.max_budget_usd == 0.10
+    assert options.max_budget_usd == 0.25
     assert options.max_turns == 6
     assert options.model == "claude-sonnet-test"
     assert options.effort == "low"
@@ -244,7 +296,10 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
     assert options.tools is not None
     assert "WebSearch" in options.tools
     assert "WebFetch" in options.tools
+    assert f"{MCP_TOOL_PREFIX}run_command" in options.tools
+    assert f"{MCP_TOOL_PREFIX}publish_markdown" in options.tools
     assert f"{MCP_TOOL_PREFIX}finish_job" in options.tools
+    assert f"{MCP_TOOL_PREFIX}write_markdown" not in options.tools
     assert "Bash" not in options.tools
     assert "Read" not in options.tools
     assert "Write" not in options.tools
@@ -252,6 +307,11 @@ async def test_sdk_runner_exposes_only_bounded_tools_and_caps_local_budget(tmp_p
     assert "Verbatim current user message" in captured[0].prompts[0][0]
     assert "Get the commentary and save the exact result for me." in captured[0].prompts[0][0]
     assert "Commentary: https://example.test/commentary" in captured[0].prompts[0][0]
+    assert len(captured[0].prompts) == 3
+    assert all(
+        "The job is not complete because no terminal tool succeeded." in prompt
+        for prompt, _session in captured[0].prompts[1:]
+    )
     assert events.items[-1][:2] == ("failed", "model_no_action")
 
 

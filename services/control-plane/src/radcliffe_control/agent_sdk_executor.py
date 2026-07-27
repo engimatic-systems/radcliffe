@@ -36,12 +36,16 @@ from radcliffe_control.job_results import (
     write_promoted_result,
 )
 from radcliffe_control.sandbox_agent import (
+    HAIKU_MODEL_ID,
     DockerSandbox,
     FailJobArguments,
     FinishJobArguments,
+    FinishJobFinding,
+    FinishJobSource,
     FollowUpFrame,
     PreviewPageArguments,
     PrivateTranscript,
+    RunShellArguments,
     StartFrame,
     emit_event,
     promoted_findings,
@@ -50,12 +54,19 @@ from radcliffe_control.sandbox_agent import (
     workspace_relative_artifact,
 )
 
-SONNET_MODEL_ID = "claude-sonnet-4-6"
 MAX_MARKDOWN_CHARS = 1_048_576
 MAX_READ_CHARS = 8_192
 MAX_PROMPT_BYTES = 64 * 1024
 MCP_SERVER_NAME = "radcliffe_jobs"
 MCP_TOOL_PREFIX = f"mcp__{MCP_SERVER_NAME}__"
+MAX_CORRECTIVE_TURNS = 2
+CORRECTIVE_PROMPT = (
+    "The job is not complete because no terminal tool succeeded. Use run_command to create "
+    "or verify the requested workspace artifact without printing document bodies, then call "
+    "publish_markdown for a Markdown result, finish_job for another artifact type, or fail_job "
+    "if grounded attempts prove the objective cannot be completed. Do not return an ordinary "
+    "final response."
+)
 
 
 class EventSink(Protocol):
@@ -110,21 +121,6 @@ class CopyTextArguments(BaseModel):
         return normalized
 
 
-class WriteMarkdownArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str = Field(min_length=1, max_length=256)
-    content: str = Field(min_length=1, max_length=MAX_MARKDOWN_CHARS)
-
-    @field_validator("path")
-    @classmethod
-    def valid_path(cls, value: str) -> str:
-        normalized = workspace_relative_artifact(value)
-        if not normalized.casefold().endswith(".md"):
-            raise ValueError("path must name a Markdown file")
-        return normalized
-
-
 class ReadArtifactArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -136,6 +132,23 @@ class ReadArtifactArguments(BaseModel):
     @classmethod
     def valid_path(cls, value: str) -> str:
         return workspace_relative_artifact(value)
+
+
+class PublishMarkdownArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    path: str = Field(min_length=1, max_length=256)
+    summary: str = Field(min_length=1, max_length=4_000)
+    sources: tuple[FinishJobSource, ...] = Field(default=(), max_length=20)
+    findings: tuple[FinishJobFinding, ...] = Field(default=(), max_length=20)
+
+    @field_validator("path")
+    @classmethod
+    def valid_path(cls, value: str) -> str:
+        normalized = workspace_relative_artifact(value)
+        if not normalized.casefold().endswith(".md"):
+            raise ValueError("path must name a Markdown file")
+        return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,26 +304,47 @@ class AgentSdkTools:
             }
         )
 
-    async def write_markdown(self, arguments: Mapping[str, object]) -> dict[str, object]:
+    async def run_command(self, arguments: Mapping[str, object]) -> dict[str, object]:
         try:
-            parsed = WriteMarkdownArguments.model_validate(arguments)
-            payload = parsed.content.encode("utf-8")
-            _write_new_file(self.workspace, parsed.path, payload)
-        except (OSError, ValueError, ValidationError) as error:
+            parsed = RunShellArguments.model_validate(arguments)
+        except ValidationError:
             return _json_tool_result(
-                {"error": "write_failed", "detail": str(error)[:300]}, error=True
+                {
+                    "error": "invalid_arguments",
+                    "guidance": (
+                        "Supply a sandbox command, a valid purpose, and an optional timeout."
+                    ),
+                },
+                error=True,
             )
-        self.event_sink("progress", "analyzing")
+        self.event_sink("progress", parsed.purpose)
+        code, output, truncated = await asyncio.to_thread(
+            self.sandbox.execute,
+            parsed.command,
+            timeout_seconds=parsed.timeout_seconds,
+        )
         self.transcript.append(
-            "sdk_write_markdown",
-            {"path": parsed.path, "byteLength": len(payload)},
+            "sdk_run_command",
+            {
+                "purpose": parsed.purpose,
+                "exitCode": code,
+                "output": output,
+                "truncated": truncated,
+            },
         )
         return _json_tool_result(
             {
-                "path": parsed.path,
-                "byteLength": len(payload),
-                "sha256": hashlib.sha256(payload).hexdigest(),
-            }
+                "exitCode": code,
+                "output": output,
+                "truncated": truncated,
+                "guidance": (
+                    "Inspect named files with another bounded command or publish a finished "
+                    "Markdown path."
+                    if code == 0
+                    else "Correct the command using its bounded diagnostics."
+                ),
+            },
+            error=code != 0,
         )
 
     async def read_artifact(self, arguments: Mapping[str, object]) -> dict[str, object]:
@@ -405,6 +439,40 @@ class AgentSdkTools:
         )
         return _json_tool_result({"accepted": True, "artifactCount": len(artifacts)})
 
+    async def publish_markdown(self, arguments: Mapping[str, object]) -> dict[str, object]:
+        if self.terminal is not None:
+            return _json_tool_result({"error": "job_already_finished"}, error=True)
+        try:
+            parsed = PublishMarkdownArguments.model_validate(arguments)
+            candidate = _safe_existing_file(self.workspace, parsed.path)
+            payload = candidate.read_bytes()
+            if not payload or len(payload) > MAX_MARKDOWN_CHARS:
+                raise ValueError("published Markdown must be non-empty and bounded")
+            payload.decode("utf-8")
+        except (OSError, UnicodeDecodeError, ValueError, ValidationError) as error:
+            return _json_tool_result(
+                {"error": "publish_rejected", "detail": str(error)[:300]},
+                error=True,
+            )
+        result = await self.finish_job(
+            {
+                "summary": parsed.summary,
+                "artifactPaths": [parsed.path],
+                "sources": [source.model_dump(by_alias=True) for source in parsed.sources],
+                "findings": [finding.model_dump(by_alias=True) for finding in parsed.findings],
+            }
+        )
+        if result.get("isError") is not True:
+            self.transcript.append(
+                "sdk_publish_markdown",
+                {
+                    "path": parsed.path,
+                    "byteLength": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+        return result
+
     async def fail_job(self, arguments: Mapping[str, object]) -> dict[str, object]:
         if self.terminal is not None:
             return _json_tool_result({"error": "job_already_finished"}, error=True)
@@ -460,13 +528,14 @@ class AgentSdkTools:
             return await self.copy_text(arguments)
 
         @tool(
-            "write_markdown",
-            "Create one new UTF-8 Markdown artifact in the private job workspace. Do not use it "
-            "to reconstruct supposedly verbatim source text from memory.",
-            WriteMarkdownArguments.model_json_schema(by_alias=True),
+            "run_command",
+            "Run a shell command inside Radcliffe's disposable Docker workspace, never on the "
+            "host. Use ordinary CLI or Python tools to transform files into files. Keep document "
+            "bodies out of stdout; only bounded diagnostics are returned to model context.",
+            RunShellArguments.model_json_schema(by_alias=True),
         )
-        async def write_markdown(arguments: Mapping[str, object]) -> dict[str, object]:
-            return await self.write_markdown(arguments)
+        async def run_command(arguments: Mapping[str, object]) -> dict[str, object]:
+            return await self.run_command(arguments)
 
         @tool(
             "read_artifact",
@@ -476,6 +545,16 @@ class AgentSdkTools:
         )
         async def read_artifact(arguments: Mapping[str, object]) -> dict[str, object]:
             return await self.read_artifact(arguments)
+
+        @tool(
+            "publish_markdown",
+            "Atomically finish a successful Markdown job by naming an existing UTF-8 Markdown "
+            "path plus summary and optional source/finding metadata. Document content is read "
+            "from the workspace and never accepted in this tool call.",
+            PublishMarkdownArguments.model_json_schema(by_alias=True),
+        )
+        async def publish_markdown(arguments: Mapping[str, object]) -> dict[str, object]:
+            return await self.publish_markdown(arguments)
 
         @tool(
             "finish_job",
@@ -498,8 +577,9 @@ class AgentSdkTools:
         return [
             download_page,
             copy_text,
-            write_markdown,
+            run_command,
             read_artifact,
+            publish_markdown,
             finish_job,
             fail_job,
         ]
@@ -577,7 +657,7 @@ async def run_agent_sdk(
     system_prompt: str,
     model: str,
     effort: Literal["low", "medium", "high"],
-    max_turns: int,
+    max_turns: int | None,
     max_budget_usd: float,
     client_factory: SdkClientFactory = ClaudeSDKClient,
     event_sink: EventSink = emit_event,
@@ -653,6 +733,7 @@ async def run_agent_sdk(
     last_result: ResultMessage | None = None
     observed_tool_ids: set[str] = set()
     initialized = False
+    corrective_turns = 0
     try:
         async with client_factory(options) as client:
             await client.query(_prompt(start), session_id=start.job_id)
@@ -689,14 +770,29 @@ async def run_agent_sdk(
                 pending: list[FollowUpFrame] = []
                 while not follow_ups.empty():
                     pending.append(follow_ups.get())
-                if not pending:
-                    break
-                for item in pending:
-                    transcript.append("follow_up", {"id": item.id, "instruction": item.instruction})
-                await client.query(
-                    "\n\n".join("User follow-up:\n" + item.instruction for item in pending),
-                    session_id=start.job_id,
-                )
+                if pending:
+                    for item in pending:
+                        transcript.append(
+                            "follow_up",
+                            {"id": item.id, "instruction": item.instruction},
+                        )
+                    await client.query(
+                        "\n\n".join("User follow-up:\n" + item.instruction for item in pending),
+                        session_id=start.job_id,
+                    )
+                    continue
+                if (
+                    _result_failure(last_result) == "model_no_action"
+                    and corrective_turns < MAX_CORRECTIVE_TURNS
+                ):
+                    corrective_turns += 1
+                    transcript.append(
+                        "sdk_corrective_turn",
+                        {"reason": "terminal_tool_required"},
+                    )
+                    await client.query(CORRECTIVE_PROMPT, session_id=start.job_id)
+                    continue
+                break
     except ClaudeSDKError as error:
         transcript.append("sdk_error", {"type": type(error).__name__})
         event_sink("failed", "model_request_failed")
@@ -740,10 +836,10 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--image", required=True)
     value.add_argument("--workspace-root", type=Path, required=True)
     value.add_argument("--provider", choices=("anthropic",), required=True)
-    value.add_argument("--model", default=SONNET_MODEL_ID)
+    value.add_argument("--model", default=HAIKU_MODEL_ID)
     value.add_argument("--effort", choices=("low", "medium", "high"), default="low")
-    value.add_argument("--max-turns", type=int, default=8)
-    value.add_argument("--max-model-cost-usd", type=float, default=0.10)
+    value.add_argument("--max-turns", type=int)
+    value.add_argument("--max-model-cost-usd", type=float, default=0.25)
     value.add_argument("--system-prompt-file", type=Path, default=_default_prompt_path())
     return value
 
@@ -753,7 +849,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     sandbox: DockerSandbox | None = None
     transcript: PrivateTranscript | None = None
     try:
-        if not 1 <= options.max_turns <= 64:
+        if options.max_turns is not None and not 1 <= options.max_turns <= 64:
             raise ValueError("Agent SDK max turns must be between one and 64")
         if not 0 < options.max_model_cost_usd <= 2:
             raise ValueError("Agent SDK model budget must be between zero and two dollars")

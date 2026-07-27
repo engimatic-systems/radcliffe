@@ -2,7 +2,7 @@
 id: rad-l386
 status: closed
 deps: []
-links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i]
+links: [rad-nhai, rad-ncdz, rad-uk3f, rad-8ai7, rad-8akg, rad-gi5i, rad-1w52]
 created: 2026-07-21T14:12:34Z
 type: bug
 priority: 0
@@ -52,3 +52,15 @@ Operational follow-up 2026-07-21: restarted the installed sidecar/control/worker
 **2026-07-21T15:54:25Z**
 
 2026-07-21 final Pixel acceptance ses_0871ab859cecd63c47447826759d2c0e: job_ec6362e939637b66034f6b30b80efca1 downloaded Hacker News, extracted 30 headline-only rows, automatically promoted the 1,626-byte UTF-8 hacker_news_headlines.md source, and completed at revision 7. The next voice turn resolved it through a session/job-scoped capability, persisted canonical source bytes with matching SHA-256 and provenance, and read the full result aloud. There were no denied or repeated tool calls, and the operator explicitly confirmed this was the desired result.
+
+**2026-07-25T16:31:26Z**
+
+2026-07-25 physical regression ses_802b2b0bd8b7d1b0ce276b3d3e990dd8: Haiku selected read_job_source at least six times for succeeded job job_ae71375432f558547c819b90d4e97148, but every call returned not_found and the model fell back to conversational output. The promoted source exists at hn_headlines.md. Root cause: the prompt/tool contract advertises Markdown artifact filenames while _resolve_job_source matched only source names/entity IDs; manage_job also omitted the source path/artifact mapping from modelContent. Reopened pending a real foreground Haiku read_job_source acceptance.
+
+**2026-07-25T16:35:37Z**
+
+2026-07-25 live foreground acceptance on revision 1fcb732 passed with pinned claude-haiku-4-5-20251001 against the exact failed phone job. Given only the chronological succeeded-job outcome and natural request 'Please read the completed Hacker News headlines aloud,' Haiku's first and only tool was read_job_source with reference 'Hacker News headlines' plus the hidden exact job ID. The gateway returned a canonical source envelope with SHA-256 b24c944c55e6885269bb3f71e30f4d46750ace4d9cb3314e9e4dbf2beb49c3ff; model output was not accepted as evidence. Provider cost was about USD 0.005564. Ticket remains in progress for the operator's phone/TTS confirmation.
+
+**2026-07-25T17:13:43Z**
+
+2026-07-25 operator confirmed the deployed Pixel/TTS acceptance passed. Closing the regression after deterministic tests, pinned-Haiku foreground tool verification, canonical envelope delivery, and physical phone confirmation.

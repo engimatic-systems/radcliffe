@@ -1559,12 +1559,17 @@ async def test_source_bytes_bypass_model_and_reach_tts_exactly(tmp_path) -> None
     assert b"".join(publisher.audio) == canonical
     worker_history = await worker_store.replay("s1")
     assert SourceKind.TEXT_SOURCE in [item.source for item in worker_history]
-    source = next(item for item in worker_history if item.source is SourceKind.TEXT_SOURCE)
-    assert source.content.canonical_bytes() == canonical
-    assert source.sequence == 2
+    heard = [item for item in worker_history if item.source is SourceKind.TEXT_SOURCE]
+    assert b"".join(item.content.canonical_bytes() for item in heard) == canonical
+    assert all(item.metadata["radcliffe.event"] == "source_playback" for item in heard)
+    assert all(item.metadata["radcliffe.playback.complete"] == "true" for item in heard)
+    assert not any(
+        item.source is SourceKind.TEXT_SOURCE for item in await gateway_store.replay("s1")
+    )
     assert SourceKind.MODEL not in [item.source for item in worker_history]
     assert [item.source for item in events.messages] == [
         SourceKind.USER,
+        SourceKind.TEXT_SOURCE,
         SourceKind.TEXT_SOURCE,
     ]
 
@@ -1702,9 +1707,18 @@ async def test_client_audio_sink_is_authoritative_for_source_boundary(tmp_path) 
                     replace(acknowledgement, position_ms=duration_ms + 1)
                 )
         assert await pipeline.playback_acknowledgement(acknowledgement)
+        if status is PlaybackStatus.POSITION:
+            assert not any(
+                item.source is SourceKind.TEXT_SOURCE for item in await worker_store.replay("s1")
+            )
     await asyncio.wait_for(turn, timeout=1)
 
     assert await worker_store.playback_boundary("s1", segment_id) == 1
+    heard = [
+        item for item in await worker_store.replay("s1") if item.source is SourceKind.TEXT_SOURCE
+    ]
+    assert [item.content.inline_text for item in heard] == ["One exact sentence."]
+    assert heard[0].metadata["radcliffe.source.message_id"] == segment_id.rpartition(":")[0]
     with sqlite3.connect(worker_store.path) as database:
         rows = list(
             database.execute(
@@ -1716,6 +1730,150 @@ async def test_client_audio_sink_is_authoritative_for_source_boundary(tmp_path) 
         ("position", playback_id),
         ("completed", playback_id),
     ]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_source_prefix_precedes_the_interrupting_user_turn(
+    tmp_path,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    canonical = "Alpha bravo charlie delta."
+    (root / "demo.md").write_text(canonical)
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
+    grant = CapabilityGrant(
+        grant_id="grant-1",
+        session_id="s1",
+        generation=1,
+        readable_roots=(root,),
+        allowed_tools=frozenset({"read_source"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
+    class SourceThenSilentOrchestrator:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.requests: list[dict[str, object]] = []
+
+        async def turn(self, request, cancelled=None) -> AsyncIterator[SidecarEvent]:
+            del cancelled
+            self.calls += 1
+            self.requests.append(request)
+            if self.calls == 1:
+                result = await ToolGateway(gateway_store).read_source(
+                    call_id="call-partial",
+                    idempotency_key="idem-partial",
+                    session_id="s1",
+                    generation=1,
+                    grant=grant,
+                    raw_arguments={"path": "demo.md"},
+                )
+                yield SidecarEvent(
+                    "tool_end",
+                    {
+                        "isError": False,
+                        "result": {
+                            "details": {
+                                "sourceMessageId": result.source_envelope.message_id,
+                                "contentSha256": result.source_envelope.content_sha256.hex(),
+                                "locator": result.source_envelope.provenance.locator,
+                                "sourceEnvelopeProtoBase64": base64.b64encode(
+                                    result.source_envelope.to_proto().SerializeToString(
+                                        deterministic=True
+                                    )
+                                ).decode("ascii"),
+                            }
+                        },
+                    },
+                )
+            yield SidecarEvent("complete", {})
+
+    orchestrator = SourceThenSilentOrchestrator()
+    events = FakeEvents()
+    pipeline = VoicePipeline(
+        "s1",
+        worker_store,
+        orchestrator,
+        FakeSynthesizer(),
+        FakePublisher(),
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    first_turn = asyncio.create_task(pipeline.handle_transcript("Read demo.md"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    (
+        operation,
+        playback_id,
+        segment_id,
+        boundary_index,
+        duration_ms,
+        *_,
+    ) = events.playback_segments[0]
+    for acknowledgement in (
+        PlaybackAcknowledgement(
+            acknowledgement_id="partial-started",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.STARTED,
+            position_ms=0,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        ),
+        PlaybackAcknowledgement(
+            acknowledgement_id="partial-position",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.POSITION,
+            position_ms=duration_ms // 2,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        ),
+    ):
+        assert await pipeline.playback_acknowledgement(acknowledgement)
+
+    second_turn = asyncio.create_task(pipeline.handle_transcript("What did I hear?"))
+    await asyncio.sleep(0)
+    assert await pipeline.playback_acknowledgement(
+        PlaybackAcknowledgement(
+            acknowledgement_id="partial-flushed",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.FLUSHED,
+            position_ms=duration_ms // 2,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        )
+    )
+    await asyncio.wait_for(first_turn, timeout=1)
+    await asyncio.wait_for(second_turn, timeout=1)
+
+    history = await worker_store.replay("s1")
+    heard = [item for item in history if item.source is SourceKind.TEXT_SOURCE]
+    interrupting_user = next(
+        item
+        for item in history
+        if item.source is SourceKind.USER and item.content.inline_text == "What did I hear?"
+    )
+    assert [item.content.inline_text for item in heard] == ["Alpha bravo "]
+    assert heard[0].sequence < interrupting_user.sequence
+    assert heard[0].metadata["radcliffe.playback.complete"] == "false"
+    second_packets = orchestrator.requests[1]["packets"]
+    assert isinstance(second_packets, list)
+    included_source = [
+        packet
+        for packet in second_packets
+        if isinstance(packet, dict) and packet.get("source") == "text_source"
+    ]
+    assert [packet["content"] for packet in included_source] == ["Alpha bravo "]
+    assert canonical not in [packet["content"] for packet in included_source]
 
 
 @pytest.mark.asyncio
@@ -1824,8 +1982,9 @@ async def test_paused_source_resumes_from_persisted_sentence_boundary_without_ne
     source = next(
         item for item in await worker_store.replay("s1") if item.source is SourceKind.TEXT_SOURCE
     )
-    assert await worker_store.playback_boundary("s1", f"{source.message_id}:0") == 1
-    assert await worker_store.playback_boundary("s1", f"{source.message_id}:1") == 1
+    source_message_id = source.metadata["radcliffe.source.message_id"]
+    assert await worker_store.playback_boundary("s1", f"{source_message_id}:0") == 1
+    assert await worker_store.playback_boundary("s1", f"{source_message_id}:1") == 1
     assert publisher.flush_count == 1
 
     await pipeline.resume()
@@ -1833,10 +1992,10 @@ async def test_paused_source_resumes_from_persisted_sentence_boundary_without_ne
 
     assert orchestrator.calls == 1
     assert publisher.segment_ids == [
-        f"{source.message_id}:0",
-        f"{source.message_id}:1",
-        f"{source.message_id}:1",
-        f"{source.message_id}:2",
+        f"{source_message_id}:0",
+        f"{source_message_id}:1",
+        f"{source_message_id}:1",
+        f"{source_message_id}:2",
     ]
     assert tts.inputs == [
         "First sentence. ",
@@ -1845,7 +2004,7 @@ async def test_paused_source_resumes_from_persisted_sentence_boundary_without_ne
         "Third sentence.",
     ]
     assert tts.rates == [1.5, 1.5, 1.5, 1.5]
-    assert await worker_store.playback_boundary("s1", f"{source.message_id}:2") == 3
+    assert await worker_store.playback_boundary("s1", f"{source_message_id}:2") == 3
     dispositions = [
         item.metadata.get(TURN_DISPOSITION_METADATA)
         for item in await worker_store.replay("s1")
