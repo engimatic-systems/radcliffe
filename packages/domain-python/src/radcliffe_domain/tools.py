@@ -83,6 +83,14 @@ class ListSourcesResult:
     replayed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SourceSnapshot:
+    name: str
+    reference: str
+    sha256: str
+    canonical_bytes: bytes
+
+
 class ToolGateway:
     def __init__(self, store: EventStore) -> None:
         self.store = store
@@ -349,6 +357,32 @@ class ToolGateway:
                 )
                 raise
 
+    async def snapshot_source(
+        self,
+        *,
+        session_id: str,
+        generation: int,
+        grant: CapabilityGrant,
+        reference: str,
+    ) -> SourceSnapshot:
+        """Capture an explicitly authorized source for an isolated background job."""
+        async with self._serial:
+            self._authorize(session_id, generation, grant, "read_source")
+            path = self._resolve_non_symlink(reference, grant.readable_roots)
+            canonical = await asyncio.to_thread(path.read_bytes)
+            if not canonical or len(canonical) > MAX_SOURCE_BYTES:
+                raise ToolDeniedError("source must contain at most 1 MiB")
+            try:
+                canonical.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ToolDeniedError("source is not UTF-8 text") from exc
+            return SourceSnapshot(
+                name=path.name,
+                reference=reference,
+                sha256=hashlib.sha256(canonical).hexdigest(),
+                canonical_bytes=canonical,
+            )
+
     def _authorize(
         self,
         session_id: str,
@@ -453,6 +487,47 @@ class ToolGateway:
                     continue
                 if candidate.is_file():
                     return candidate
+        if not markdown_candidate:
+            raise ToolDeniedError("only Markdown sources are permitted")
+        raise ToolDeniedError("source is outside the readable roots")
+
+    @staticmethod
+    def _resolve_non_symlink(requested: str, roots: tuple[Path, ...]) -> Path:
+        requested_paths = ToolGateway._requested_paths(requested)
+        markdown_candidate = False
+        for requested_path in requested_paths:
+            relative = PurePath(requested_path)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ToolDeniedError("path traversal is not permitted")
+            if relative.suffix.lower() != ".md":
+                continue
+            markdown_candidate = True
+            for configured_root in roots:
+                try:
+                    root = configured_root.resolve(strict=True)
+                except OSError:
+                    continue
+                candidate = root
+                try:
+                    for part in relative.parts:
+                        entries = tuple(candidate.iterdir())
+                        exact = tuple(entry for entry in entries if entry.name == part)
+                        matches = exact or tuple(
+                            entry for entry in entries if entry.name.casefold() == part.casefold()
+                        )
+                        if len(matches) != 1:
+                            raise FileNotFoundError(part)
+                        selected = matches[0]
+                        if selected.is_symlink():
+                            raise ToolDeniedError("symbolic-link sources are not permitted")
+                        candidate = selected
+                    resolved = candidate.resolve(strict=True)
+                except OSError:
+                    continue
+                if not resolved.is_relative_to(root):
+                    raise ToolDeniedError("source is outside the readable roots")
+                if resolved.is_file():
+                    return resolved
         if not markdown_candidate:
             raise ToolDeniedError("only Markdown sources are permitted")
         raise ToolDeniedError("source is outside the readable roots")

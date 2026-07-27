@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import stat
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -10,7 +12,7 @@ from radcliffe_control.job_executor import (
     JsonLineJobLauncher,
 )
 from radcliffe_domain.catalog import SessionCatalog
-from radcliffe_domain.jobs import JobEventKind, JobStatus, JobStore
+from radcliffe_domain.jobs import JobEventKind, JobInput, JobStatus, JobStore
 from radcliffe_domain.store import EventStore
 
 
@@ -147,6 +149,73 @@ async def test_supervisor_reports_progress_and_success_without_blocking_acceptan
     ]
     assert "private executor instruction" not in repr(events)
     assert events[-1].entity_ids == ("paper:one",)
+
+
+@pytest.mark.asyncio
+async def test_dependent_executor_consumes_staged_html_without_redownload_or_prior_mount(
+    tmp_path,
+) -> None:
+    store, session = await store_and_session(tmp_path)
+    canonical = b"<html><title>Already downloaded</title></html>\n"
+    accepted = await store.accept(
+        principal_id="owner",
+        session_id=session.session_id,
+        generation=1,
+        idempotency_key="input-job",
+        instruction="extract the title from the staged HTML",
+        inputs=(
+            JobInput(
+                kind="artifact",
+                name="input-1-page.html",
+                source_session_id=session.session_id,
+                source_reference="job-prior:page.html",
+                producer_job_id="job-prior",
+                artifact_id="artifact:file:page",
+                sha256=hashlib.sha256(canonical).hexdigest(),
+                byte_length=len(canonical),
+                canonical_bytes=canonical,
+            ),
+        ),
+    )
+    claim = await store.claim_next(lease_owner="staging-worker")
+    assert claim is not None
+    workspace_root = tmp_path / "workspaces"
+    launcher = JsonLineJobLauncher(
+        command=(
+            sys.executable,
+            "-c",
+            (
+                "import json,pathlib,re,sys;"
+                "json.loads(sys.stdin.readline());"
+                "html=pathlib.Path('files/inputs/input-1-page.html').read_text();"
+                "title=re.search(r'<title>(.*?)</title>',html).group(1);"
+                "pathlib.Path('files/extracted-title.txt').write_text(title+'\\n');"
+                "print(json.dumps({'type':'event','kind':'succeeded',"
+                "'detailCode':'completed'}),flush=True)"
+            ),
+        ),
+        workspace_root=workspace_root,
+        max_output_bytes=4096,
+        base_environment={},
+    )
+
+    process = await launcher(claim)
+    staged = (
+        workspace_root
+        / accepted.record.job_id
+        / "attempt-1"
+        / "files"
+        / "inputs"
+        / "input-1-page.html"
+    )
+    assert staged.read_bytes() == canonical
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o444
+    assert stat.S_IMODE(staged.parent.stat().st_mode) == 0o555
+    assert not (workspace_root / "job-prior").exists()
+    await process.send({"type": "start"})
+    assert json.loads(await process.readline())["kind"] == "succeeded"
+    assert await process.wait() == 0
+    assert staged.parents[1].joinpath("extracted-title.txt").read_text() == "Already downloaded\n"
 
 
 @pytest.mark.asyncio
