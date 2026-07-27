@@ -91,6 +91,10 @@ add `spokenText` plus content-free `spokenCategories` when machine-oriented
 detail needs a listening-friendly alternative. The media worker persists
 `text` for the timeline and sends `spokenText` to TTS. Exact-output turns omit
 the alternative, and canonical source envelopes bypass model deltas entirely.
+The media worker maps each display/spoken pair to its playback segments.
+Interrupted or failed turns persist only raw display pairs whose final spoken
+segment reached the device-authoritative completed boundary; queued, flushed,
+or failed alternatives do not leak unplayed visual detail into the timeline.
 
 `GET /healthz` exposes the provider, pinned model, local/cloud boundary,
 accounting basis, content-free `active_turns` and cumulative `cancelled_turns`

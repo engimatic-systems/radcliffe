@@ -1,6 +1,6 @@
 ---
 id: rad-2e0w
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-07-21T04:04:49Z
@@ -21,3 +21,9 @@ Carry display/spoken segment pairs through playback boundaries and persist only 
 ## Acceptance Criteria
 
 Interrupted and failed turns persist the raw display counterpart of completed spoken segments; no unplayed display detail is persisted; playback retry and barge-in tests cover substitutions longer and shorter than their display text; telemetry remains content-free.
+
+## Notes
+
+**2026-07-23T03:19:14Z**
+
+Implemented playback-aware display/spoken segment pairing. Each spoken chunk records the raw display text completed by its final playback segment; interrupted and failed turns rebuild only the contiguous display prefix whose playback acknowledgements crossed their durable boundary. Completed client-authoritative turns defer model persistence until all playback completes, and queued/flushed detail is never added later. Regressions cover longer and shorter alternatives, blocking barge-in, failed playback followed by retry, zero-ack queued audio, and Android-authoritative first-completed/second-flushed boundaries; telemetry assertions remain content-free. Full make check passes: 376 Python passed/1 skipped, 107 sidecar tests, TypeScript, Android unit/lint, Ruff, formatting, and mypy.

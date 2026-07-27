@@ -168,8 +168,10 @@ class _ActiveTurn:
     operation: Operation | None = None
     model_text: str = ""
     rendered_model_text: str = ""
+    rendered_display_text: str = ""
     model_persisted: bool = False
     next_model_boundary: int = 0
+    model_playback_segments: list[_ModelPlaybackSegment] = field(default_factory=list)
     started_at: float = field(default_factory=monotonic)
     first_model_delta_at: float | None = None
     first_audio_at: float | None = None
@@ -185,6 +187,14 @@ class _PausedSource:
     envelope: MessageEnvelope
     turn_id: str
     operation: Operation
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelPlaybackSegment:
+    segment_id: str
+    boundary_index: int
+    spoken_text: str
+    completed_display_text: str
 
 
 @dataclass(slots=True)
@@ -549,8 +559,8 @@ class VoicePipeline:
                     operation,
                     turn,
                     "clarification ready",
+                    completed_display_text=_CLARIFICATION_TEXT,
                 )
-                await self._persist_model(turn, notify=True)
                 await self._finish_completed(turn)
             except asyncio.CancelledError:
                 await self._finish_cancelled(turn)
@@ -806,7 +816,6 @@ class VoicePipeline:
                 for item, packet in zip(history, packets, strict=True)
             ],
         }
-        buffer = ""
         source_rendered = False
         async for event in self.orchestrator.turn(request, turn.cancelled):
             if turn.cancelled.is_set():
@@ -861,8 +870,12 @@ class VoicePipeline:
                         sorted(existing | set(categories))
                     )
                 if not source_rendered:
-                    buffer += spoken_delta
-                    buffer = await self._speak_complete_sentences(buffer, operation, turn)
+                    await self._speak_model_segment(
+                        display_delta,
+                        spoken_delta,
+                        operation,
+                        turn,
+                    )
             elif event.type == "tool_end" and bool(event.payload.get("isError")):
                 raw_tool_name = event.payload.get("toolName")
                 tool_name = (
@@ -938,8 +951,6 @@ class VoicePipeline:
                         await self.events.message(source)
                     await self._speak_plan(source, operation, turn)
                     source_rendered = True
-                    buffer = ""
-                    turn.model_text = turn.rendered_model_text
                 else:
                     result = event.payload.get("result")
                     if event.payload.get("toolName") == "run_job":
@@ -963,19 +974,30 @@ class VoicePipeline:
                 raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
 
         self._assert_owner(turn, operation)
-        if buffer and not source_rendered:
-            await self._speak_model_chunk(buffer, operation, turn, "model response ready")
-        if turn.model_text:
-            await self._persist_model(turn, notify=True)
         await self._finish_completed(turn)
 
-    async def _speak_complete_sentences(
-        self, buffer: str, operation: Operation, turn: _ActiveTurn
-    ) -> str:
-        while chunk := self._next_model_chunk(buffer):
-            await self._speak_model_chunk(chunk, operation, turn, "model chunk ready")
-            buffer = buffer[len(chunk) :]
-        return buffer
+    async def _speak_model_segment(
+        self,
+        display_text: str,
+        spoken_text: str,
+        operation: Operation,
+        turn: _ActiveTurn,
+    ) -> None:
+        chunks: list[tuple[str, str]] = []
+        remainder = spoken_text
+        while chunk := self._next_model_chunk(remainder):
+            chunks.append((chunk, "model chunk ready"))
+            remainder = remainder[len(chunk) :]
+        if remainder:
+            chunks.append((remainder, "model response ready"))
+        for index, (chunk, reason) in enumerate(chunks):
+            await self._speak_model_chunk(
+                chunk,
+                operation,
+                turn,
+                reason,
+                completed_display_text=display_text if index == len(chunks) - 1 else "",
+            )
 
     def _next_model_chunk(self, buffer: str) -> str | None:
         if not buffer:
@@ -1006,19 +1028,33 @@ class VoicePipeline:
         operation: Operation,
         turn: _ActiveTurn,
         reason: str,
+        *,
+        completed_display_text: str | None = None,
     ) -> None:
         if self.engine.state is ConversationState.THINKING:
             await self._transition(ConversationState.SPEAKING, reason, operation, turn)
         boundary = turn.next_model_boundary
+        segment_id = f"{operation.operation_id}:model:{boundary}"
+        display_text = canonical_text if completed_display_text is None else completed_display_text
+        turn.model_playback_segments.append(
+            _ModelPlaybackSegment(
+                segment_id,
+                boundary,
+                canonical_text,
+                display_text,
+            )
+        )
         await self._speak(
             canonical_text,
-            f"{operation.operation_id}:model:{boundary}",
+            segment_id,
             boundary,
             operation,
             turn,
             source=SourceKind.MODEL,
         )
         turn.rendered_model_text += canonical_text
+        if not self.client_playback_acknowledgements:
+            turn.rendered_display_text += display_text
         turn.next_model_boundary += 1
 
     async def _transition(
@@ -1400,6 +1436,9 @@ class VoicePipeline:
             await self._await_operation_playback(turn.operation)
         async with self._coordinator:
             self._assert_owner(turn, turn.operation)
+            await self._refresh_durable_model_prefix(turn)
+            if turn.model_text and not turn.model_persisted:
+                await self._persist_model(turn, notify=True)
             previous = self.engine.state
             self.engine.transition(ConversationState.LISTENING)
             await self._append_disposition(turn, "completed")
@@ -1437,6 +1476,23 @@ class VoicePipeline:
         if any(status is not PlaybackStatus.COMPLETED for status in terminal_statuses):
             raise asyncio.CancelledError
 
+    async def _refresh_durable_model_prefix(self, turn: _ActiveTurn) -> str:
+        display_parts: list[str] = []
+        spoken_parts: list[str] = []
+        for segment in turn.model_playback_segments:
+            boundary = await self.store.playback_boundary(
+                self.engine.session_id,
+                segment.segment_id,
+            )
+            if boundary <= segment.boundary_index:
+                break
+            spoken_parts.append(segment.spoken_text)
+            if segment.completed_display_text:
+                display_parts.append(segment.completed_display_text)
+        turn.rendered_model_text = "".join(spoken_parts)
+        turn.rendered_display_text = "".join(display_parts)
+        return turn.rendered_display_text
+
     async def _finish_cancelled(self, turn: _ActiveTurn) -> None:
         async with self._coordinator:
             if self._active_turn is not turn:
@@ -1454,12 +1510,13 @@ class VoicePipeline:
                 self._active_turn = None
                 return
             self._paused_source = None
-            if turn.rendered_model_text and not turn.model_persisted:
+            durable_display = await self._refresh_durable_model_prefix(turn)
+            if durable_display and not turn.model_persisted:
                 await self._persist_model(
                     turn,
                     partial=True,
                     notify=True,
-                    text=turn.rendered_model_text,
+                    text=durable_display,
                 )
             await self._append_disposition(turn, turn.requested_disposition)
             previous = self.engine.state
@@ -1488,12 +1545,13 @@ class VoicePipeline:
                     "failed to flush audio after a voice turn error type={}",
                     type(error).__name__,
                 )
-            if turn.rendered_model_text and not turn.model_persisted:
+            durable_display = await self._refresh_durable_model_prefix(turn)
+            if durable_display and not turn.model_persisted:
                 await self._persist_model(
                     turn,
                     partial=True,
                     notify=True,
-                    text=turn.rendered_model_text,
+                    text=durable_display,
                 )
             await self._append_disposition(turn, "failed")
             self._paused_source = None
@@ -1726,6 +1784,7 @@ class VoicePipeline:
         metadata = {
             TURN_ID_METADATA: turn.turn_id,
             "radcliffe.rendered_chars": str(len(turn.rendered_model_text)),
+            "radcliffe.rendered_display_chars": str(len(turn.rendered_display_text)),
             **turn.model_metadata,
         }
         if turn.operation is not None:
