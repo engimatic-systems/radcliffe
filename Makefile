@@ -2,7 +2,8 @@
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	check-background-jobs-local check-job-egress-local build-job-sandbox-local \
-	services-install-local services-status-local services-restart-local \
+	services-install-local services-start-local services-status-local \
+	services-restart-local services-stop-local \
 	services-install-user-test \
 	backup-local check-recovery-local recovery-prune-plan-local \
 	export-diagnostics-local audit-logs-local maintain-logs-local check-operations-tabletop \
@@ -86,8 +87,17 @@ services-install-user-test:
 services-status-local:
 	uv run python scripts/radcliffe_services.py status --include-compat-worker
 
+services-start-local:
+	uv run python scripts/radcliffe_services.py start --include-compat-worker
+	@$(MAKE) --no-print-directory services-status-local
+
 services-restart-local:
 	uv run python scripts/radcliffe_services.py restart --include-compat-worker
+	@$(MAKE) --no-print-directory services-status-local
+
+services-stop-local:
+	uv run python scripts/radcliffe_services.py stop --include-compat-worker
+	@$(MAKE) --no-print-directory services-status-local
 
 backup-local:
 	scripts/run-local-recovery.sh backup --retain 7

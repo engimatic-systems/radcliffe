@@ -36,16 +36,24 @@ worker, invoke `scripts/radcliffe_services.py` without
 Common commands:
 
 ```sh
+make services-start-local
 make services-status-local
 make services-restart-local
-uv run python scripts/radcliffe_services.py stop --include-compat-worker
-uv run python scripts/radcliffe_services.py start --include-compat-worker
+make services-stop-local
 uv run python scripts/radcliffe_services.py uninstall --include-compat-worker
 ```
 
 Install, start, stop, restart, and uninstall are idempotent. Restart stops in
 reverse dependency order and starts the sidecar before the control plane and
-compatibility worker.
+compatibility worker. The lifecycle Make targets print status and the one
+launchd-managed PID for each running service. A repeated start cannot create a
+second managed instance because launchd admits only one loaded job per service
+label; restart also waits for each old PID to exit before returning.
+
+Starting, restarting, or stopping the backend does not change the bootstrap
+token, the phone's enrolled device credential, or the existing Tailscale Serve
+configuration. Once the backend is started again, the Android app should use
+the same configured HTTPS origin.
 
 ## Liveness and readiness
 

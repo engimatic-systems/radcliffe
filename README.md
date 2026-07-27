@@ -277,12 +277,22 @@ plist; each supervised runner loads the protected `var/.env` at process start.
 
 ```sh
 make services-install-local
+make services-start-local
 make services-status-local
+make services-restart-local
+make services-stop-local
 make check-operations-local
 make check-recovery-local
 make export-diagnostics-local
 make audit-logs-local
 ```
+
+The start, restart, and stop targets use the installed macOS LaunchAgents rather
+than spawning ad hoc processes. Each service has one launchd label, repeated
+starts are idempotent, and restart waits for the prior process to exit before
+starting its replacement. Each lifecycle target prints the resulting service
+state and PID. These commands do not change the bootstrap token, device
+enrollment, or Tailscale Serve configuration.
 
 `/healthz` is shallow process liveness. `/readyz` additionally checks the
 database schema/integrity, warmed Pi sidecar, LiveKit signaling, source root,

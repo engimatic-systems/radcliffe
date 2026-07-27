@@ -156,6 +156,26 @@ def test_install_status_restart_and_uninstall_are_idempotent(tmp_path) -> None:
     assert str(root / "var/.env") not in json.dumps(machine_status)
 
 
+def test_repeated_start_does_not_spawn_another_managed_instance(tmp_path) -> None:
+    root = workspace(tmp_path)
+    launchctl = FakeLaunchctl()
+    manager = ServiceManager(
+        root=root,
+        launch_agents=tmp_path / "LaunchAgents",
+        uid=501,
+        command_runner=launchctl,
+    )
+    services = selected_services(include_compat_worker=True)
+
+    manager.install(services)
+    manager.start(services)
+    manager.start(services)
+
+    assert sum(command[1] == "bootstrap" for command in launchctl.commands) == len(services)
+    assert not [command for command in launchctl.commands if command[1] == "kickstart"]
+    assert launchctl.loaded == {service.label for service in services}
+
+
 def test_generated_plist_is_owner_only(tmp_path) -> None:
     root = workspace(tmp_path)
     launch_agents = tmp_path / "LaunchAgents"
