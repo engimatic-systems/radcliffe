@@ -1,6 +1,6 @@
 ---
 id: rad-g549
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-07-27T15:13:25Z
@@ -28,3 +28,7 @@ Root cause and local fix, 2026-07-27: SessionEngine.generation is an operation-s
 **2026-07-27T15:32:49Z**
 
 2026-07-27 Pixel retest: both manage_session(create) calls committed successfully. Resumed source ses_9e9b88dffe96419826e8e03a4e75a1fc created ses_24e3274115b089d5e6b16c642281f2c5 at operation generation 3, and fresh source ses_45378fc04dabe3753f8fab35a3c340ea created ses_7712e8f468e13881fd30475d05d215c1 at generation 2; the fresh destination had no prior memory. The apparent repeat failure in the resumed session was old failure context, not another rejected tool call. A separate handoff race was exposed: the first commit landed 1.1s before the next 10s worker reconciliation boundary, which SIGTERM'd the source while the successful sidecar result was still in flight, before the session_transition/handed_off envelopes could reach Android. Added a configurable 5s transition-delivery grace to the supervisor plus deterministic regression. Full make check passes: 464 Python passed/1 skipped, 112 sidecar tests, Android unit/lint.
+
+**2026-07-27T15:46:35Z**
+
+2026-07-27 final Pixel acceptance at deployed revision c76766d: two consecutive Sonnet 5 voice creates succeeded. ses_34c309e7a73d20a3c829b0e3b722e827 persisted one session_transition and handed_off disposition to ses_f5226c87235fc08e94b622c9ce35a803; that managed destination then persisted the same clean handoff to ses_2991b3679dd517dd9a9f07348e21129d. The phone joined both destinations, both source workers stopped, neither fresh session inherited prior messages, and the operator reported the experience worked. This verifies both the operation/catalog generation separation and the reconciliation delivery grace.

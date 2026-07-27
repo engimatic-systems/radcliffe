@@ -1,6 +1,6 @@
 ---
 id: rad-2tft
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-07-13T01:36:39Z
@@ -26,3 +26,7 @@ The epic is complete when all child tickets are closed and the documented Milest
 **2026-07-27T15:14:30Z**
 
 2026-07-27 consolidated Pixel run ses_9e9b88dffe96419826e8e03a4e75a1fc passed exact-once buffered speech, concise/successful background job execution, one-sentence ordinary response, barge-in replacement, canonical source hash 1882c547e099cae37966f860e73d9a11e59ba3951ce611280ccfdb90aebbf302, and persisted pause/resume. Voice-created conversation failed with three manage_session HTTP 409 responses because operation generation 11 was incorrectly compared with durable catalog generation 1. Track and retest only that fix in rad-g549 before closing this epic.
+
+**2026-07-27T15:46:35Z**
+
+2026-07-27 Milestone 1 accepted and closed. Consolidated Sonnet 5 Pixel evidence covers exact-once buffered speech, concise background jobs, sub-five-second ordinary response latency, sub-500ms interruption, canonical read_source SHA-256 1882c547e099cae37966f860e73d9a11e59ba3951ce611280ccfdb90aebbf302, persisted pause/resume, and final consecutive fresh-session handoffs at revision c76766d. Sessions ses_34c309e7a73d20a3c829b0e3b722e827 -> ses_f5226c87235fc08e94b622c9ce35a803 -> ses_2991b3679dd517dd9a9f07348e21129d each recorded applied/handed_off lifecycle events with stopped source workers and no inherited conversation memory. docs/milestone-1-acceptance.md is the evidence ledger. Operator approved closure.
