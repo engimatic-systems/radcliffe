@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import sqlite3
 
 from fastapi.testclient import TestClient
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -93,13 +94,14 @@ def tool(
     session_id: str,
     call_id: str,
     arguments: dict[str, object],
+    generation: int = 1,
 ):
     return client.post(
         "/v1/tool-calls",
         headers=INTERNAL_AUTHORIZATION,
         json={
             "sessionId": session_id,
-            "generation": 1,
+            "generation": generation,
             "operationId": f"session-operation-{call_id}",
             "cancellationId": f"session-cancellation-{call_id}",
             "traceId": "trc_" + "e" * 32,
@@ -199,6 +201,43 @@ def test_create_is_server_owned_content_free_and_durably_idempotent(tmp_path) ->
             ]
             == []
         )
+
+
+def test_create_after_operation_generation_advances_uses_catalog_generation(tmp_path) -> None:
+    config = settings(tmp_path)
+    with TestClient(create_app(config)) as client:
+        enroll(client)
+        create_session(client, "source")
+
+        created = tool(
+            client,
+            session_id="source",
+            call_id="create-after-interruptions",
+            arguments={"operation": "create"},
+            generation=11,
+        )
+        replay = tool(
+            client,
+            session_id="source",
+            call_id="create-after-interruptions",
+            arguments={"operation": "create"},
+            generation=12,
+        )
+
+        assert created.status_code == 200
+        assert replay.status_code == 200
+        assert (
+            replay.json()["details"]["destinationSessionId"]
+            == (created.json()["details"]["destinationSessionId"])
+        )
+        assert replay.json()["details"]["replayed"] == "true"
+
+    with sqlite3.connect(config.database_path) as database:
+        source_generation = database.execute(
+            "SELECT source_generation FROM session_transitions "
+            "WHERE request_id = 'session:create-after-interruptions'"
+        ).fetchone()
+    assert source_generation == (1,)
 
 
 def test_completed_create_replays_after_control_plane_restart(tmp_path) -> None:
