@@ -712,6 +712,189 @@ def test_unsourced_markdown_job_artifact_is_status_visible_and_readable(tmp_path
         assert informal.json()["details"]["contentSha256"] == digest
 
 
+def test_run_job_snapshots_authorized_source_and_prior_html_artifact_inputs(tmp_path) -> None:
+    workspace_root = tmp_path / "jobs"
+    config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})
+    foreground = b"# Local brief\n\nUse the already downloaded page.\n"
+    config.source_root.joinpath("brief.md").write_bytes(foreground)
+    html = b"<html><head><title>Staged result</title></head><body>Ten rows.</body></html>\n"
+    digest = hashlib.sha256(html).hexdigest()
+    alternate_one = b"<html><title>Alternate one</title></html>\n"
+    alternate_two = b"<html><title>Alternate two</title></html>\n"
+    with TestClient(create_app(config)) as client:
+        enroll_and_create_session(client)
+        producer = tool(
+            client,
+            tool_name="run_job",
+            call_id="produce-html",
+            arguments={"instruction": "Download one page."},
+        )
+        assert producer.status_code == 200
+        producer_id = producer.json()["details"]["jobId"]
+        claimed = client.post(
+            "/v1/internal/jobs/claim",
+            headers=INTERNAL_AUTHORIZATION,
+            json={"lease_owner": "producer-worker", "lease_seconds": 60},
+        )
+        assert claimed.status_code == 200
+        producer_workspace = workspace_root / producer_id / "attempt-1"
+        producer_files = producer_workspace / "files"
+        producer_files.mkdir(parents=True)
+        producer_files.joinpath("downloaded-page.html").write_bytes(html)
+        producer_files.joinpath("report-one.html").write_bytes(alternate_one)
+        producer_files.joinpath("report_one.html").write_bytes(alternate_two)
+        artifact = PromotedArtifact(
+            artifactId=f"artifact:file:{digest[:16]}",
+            path="downloaded-page.html",
+            sha256=digest,
+            byteLength=len(html),
+        )
+        ambiguous_artifacts = (
+            PromotedArtifact(
+                artifactId="artifact:file:alternate-one",
+                path="report-one.html",
+                sha256=hashlib.sha256(alternate_one).hexdigest(),
+                byteLength=len(alternate_one),
+            ),
+            PromotedArtifact(
+                artifactId="artifact:file:alternate-two",
+                path="report_one.html",
+                sha256=hashlib.sha256(alternate_two).hexdigest(),
+                byteLength=len(alternate_two),
+            ),
+        )
+        write_promoted_result(
+            producer_workspace,
+            PromotedJobResult(
+                schemaVersion=1,
+                jobId=producer_id,
+                summary="Downloaded the requested page.",
+                artifacts=(artifact, *ambiguous_artifacts),
+            ),
+        )
+        succeeded = client.post(
+            f"/v1/internal/jobs/{producer_id}/events",
+            headers=INTERNAL_AUTHORIZATION,
+            json={
+                "lease_owner": "producer-worker",
+                "kind": "succeeded",
+                "detail_code": "completed",
+                "artifact_ids": [
+                    artifact.artifact_id,
+                    *(item.artifact_id for item in ambiguous_artifacts),
+                ],
+            },
+        )
+        assert succeeded.status_code == 200
+
+        dependent = tool(
+            client,
+            tool_name="run_job",
+            call_id="consume-inputs",
+            arguments={
+                "instruction": "Extract the title from the prior HTML without downloading it.",
+                "inputs": [
+                    {"kind": "source", "reference": "brief.md"},
+                    {
+                        "kind": "artifact",
+                        "reference": "downloaded-page.html",
+                        "jobId": producer_id,
+                    },
+                ],
+            },
+        )
+        assert dependent.status_code == 200
+        dependent_id = dependent.json()["details"]["jobId"]
+
+        with sqlite3.connect(config.database_path) as database:
+            rows = database.execute(
+                """SELECT position, kind, name, source_session_id, source_reference,
+                producer_job_id, artifact_id, sha256, byte_length, canonical_bytes
+                FROM background_job_inputs WHERE job_id = ? ORDER BY position""",
+                (dependent_id,),
+            ).fetchall()
+        assert [(row[1], row[2]) for row in rows] == [
+            ("source", "input-1-brief.md"),
+            ("artifact", "input-2-downloaded-page.html"),
+        ]
+        assert rows[0][3] == rows[1][3] == "session-1"
+        assert rows[0][9] == foreground
+        assert rows[1][5] == producer_id
+        assert rows[1][6] == artifact.artifact_id
+        assert rows[1][7] == digest
+        assert rows[1][8] == len(html)
+        assert rows[1][9] == html
+
+        config.source_root.joinpath("brief.md").write_text("mutated after acceptance")
+        producer_files.joinpath("downloaded-page.html").write_text("mutated after acceptance")
+        with sqlite3.connect(config.database_path) as database:
+            retained = database.execute(
+                """SELECT canonical_bytes FROM background_job_inputs
+                WHERE job_id = ? ORDER BY position""",
+                (dependent_id,),
+            ).fetchall()
+        assert retained == [(foreground,), (html,)]
+
+        traversal = tool(
+            client,
+            tool_name="run_job",
+            call_id="reject-traversal-input",
+            arguments={
+                "instruction": "Try an unauthorized path.",
+                "inputs": [{"kind": "source", "reference": "../brief.md"}],
+            },
+        )
+        assert traversal.status_code == 403
+
+        outside = tmp_path / "outside.md"
+        outside.write_text("not authorized through a link")
+        config.source_root.joinpath("linked.md").symlink_to(outside)
+        symlink = tool(
+            client,
+            tool_name="run_job",
+            call_id="reject-symlink-input",
+            arguments={
+                "instruction": "Try a symbolic-link source.",
+                "inputs": [{"kind": "source", "reference": "linked.md"}],
+            },
+        )
+        assert symlink.status_code == 403
+
+        ambiguous = tool(
+            client,
+            tool_name="run_job",
+            call_id="reject-ambiguous-input",
+            arguments={
+                "instruction": "Try an ambiguous prior artifact.",
+                "inputs": [
+                    {
+                        "kind": "artifact",
+                        "reference": "report one html",
+                        "jobId": producer_id,
+                    }
+                ],
+            },
+        )
+        assert ambiguous.status_code == 409
+
+        stale_artifact = tool(
+            client,
+            tool_name="run_job",
+            call_id="reject-mutable-artifact",
+            arguments={
+                "instruction": "Try a mutable prior artifact.",
+                "inputs": [
+                    {
+                        "kind": "artifact",
+                        "reference": artifact.artifact_id,
+                        "jobId": producer_id,
+                    }
+                ],
+            },
+        )
+        assert stale_artifact.status_code == 404
+
+
 def test_named_job_source_resolves_to_exact_hash_verified_rendering(tmp_path) -> None:
     workspace_root = tmp_path / "jobs"
     config = settings(tmp_path).model_copy(update={"job_workspace_root": workspace_root})

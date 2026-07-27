@@ -128,6 +128,16 @@ from the phone, and LiveKit must advertise an allowed tailnet ICE/TCP or ICE/UDP
 port rather than a LAN address. Require a newly created conversation to join
 and exchange audio before declaring the complete phone path ready.
 
+Operator-review APKs use the non-debuggable `review` build type. It excludes
+Compose debug tooling, rejects cleartext control-plane URLs, and removes LiveKit's
+unused camera, media-projection, and screen-capture declarations while retaining
+its microphone, data-channel, and remote-audio paths. Review signing credentials
+are supplied only through `RADCLIFFE_ANDROID_REVIEW_KEYSTORE`,
+`RADCLIFFE_ANDROID_REVIEW_STORE_PASSWORD`, `RADCLIFFE_ANDROID_REVIEW_KEY_ALIAS`,
+and `RADCLIFFE_ANDROID_REVIEW_KEY_PASSWORD`; neither the keystore nor its
+credentials belongs in the repository. Inspect the merged APK manifest and
+signature before copying it to the operator share.
+
 For a content-free correlated trace/metrics bundle, run
 `make export-diagnostics-local`. Its bounded schema and redaction rules are in
 [`telemetry-operations.md`](telemetry-operations.md).

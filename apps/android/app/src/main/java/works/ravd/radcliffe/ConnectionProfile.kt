@@ -52,10 +52,15 @@ data class ConnectionProfile(
         participantIdentity = participantIdentity.trim(),
     )
 
-    fun validationError(): String? {
+    fun validationError(
+        allowCleartextControl: Boolean = BuildConfig.ALLOW_CLEARTEXT_CONTROL,
+    ): String? {
         val value = normalized()
         if (!value.controlUrl.startsWith("http://") && !value.controlUrl.startsWith("https://")) {
             return "Control URL must start with http:// or https://"
+        }
+        if (!allowCleartextControl && value.controlUrl.startsWith("http://")) {
+            return "Review builds require an https:// control URL"
         }
         if (!value.isEnrolled && value.bootstrapToken.isBlank()) return "Bootstrap token is required"
         if (value.sessionId.isNotBlank() && !SESSION_ID.matches(value.sessionId)) {

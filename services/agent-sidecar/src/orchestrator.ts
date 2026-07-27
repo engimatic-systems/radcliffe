@@ -585,13 +585,36 @@ export function prepareRunJobArguments(value: unknown): RunJobArguments {
     !exactKeys(
       item,
       ["instruction"],
-      ["notificationPolicy", "priority", "budgetUsd"],
+      ["inputs", "notificationPolicy", "priority", "budgetUsd"],
     ) ||
     typeof item.instruction !== "string" ||
     item.instruction.length < 1 ||
     item.instruction.length > 12_000
   ) {
     throw new Error("run_job requires one bounded instruction and no unknown controls");
+  }
+  if (item.inputs !== undefined) {
+    if (!Array.isArray(item.inputs) || item.inputs.length > 8) {
+      throw new Error("run_job inputs must be a bounded array");
+    }
+    item.inputs = item.inputs.map((value) => {
+      const input = argumentRecord(value, "run_job input");
+      if (
+        !exactKeys(input, ["kind", "reference"], ["jobId"]) ||
+        (input.kind !== "source" && input.kind !== "artifact") ||
+        typeof input.reference !== "string" ||
+        input.reference.length < 1 ||
+        input.reference.length > 2048 ||
+        input.reference.startsWith("/") ||
+        input.reference.split(/[\\/]/).includes("..") ||
+        (input.kind === "source" && input.jobId !== undefined) ||
+        (input.jobId !== undefined &&
+          (typeof input.jobId !== "string" || !JOB_ID.test(input.jobId)))
+      ) {
+        throw new Error("run_job input must identify one authorized source or artifact");
+      }
+      return input;
+    });
   }
   if (!isMember(JOB_NOTIFICATION_POLICIES, item.notificationPolicy)) {
     delete item.notificationPolicy;
@@ -909,11 +932,27 @@ export const MANAGE_SESSION_PARAMETERS = Type.Unsafe<ManageSessionArguments>(
 );
 export const RUN_JOB_DESCRIPTION =
   "Accept a bounded background research, analysis, download, or coding job without blocking the " +
-  "foreground conversation. Returns a durable job ID immediately; completion arrives separately.";
+  "foreground conversation. Explicit same-session source or prior-job artifact inputs are staged " +
+  "as immutable files. Returns a durable job ID immediately; completion arrives separately.";
 export const RUN_JOB_PARAMETERS = Type.Unsafe<RunJobArguments>(
   Type.Object(
     {
       instruction: Type.String({ minLength: 1, maxLength: 12000 }),
+      inputs: Type.Optional(
+        Type.Array(
+          Type.Object(
+            {
+              kind: stringEnum(["source", "artifact"] as const),
+              reference: Type.String({ minLength: 1, maxLength: 2048 }),
+              jobId: Type.Optional(
+                Type.String({ minLength: 1, maxLength: 128, pattern: JOB_ID.source }),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+          { maxItems: 8 },
+        ),
+      ),
       notificationPolicy: Type.Optional(stringEnum(JOB_NOTIFICATION_POLICIES)),
       priority: Type.Optional(Type.Integer({ minimum: 0, maximum: 4 })),
       budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 100 })),
