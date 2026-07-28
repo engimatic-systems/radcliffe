@@ -2,7 +2,7 @@
 id: rad-f4j2
 status: open
 deps: [rad-2tft, rad-nmdx, rad-g9yr, rad-b8nm]
-links: []
+links: [rad-grf7]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1
