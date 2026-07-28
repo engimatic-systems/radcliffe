@@ -1,6 +1,6 @@
 ---
 id: rad-fnho
-status: open
+status: in_progress
 deps: []
 links: []
 created: 2026-07-28T21:37:26Z
@@ -21,3 +21,9 @@ Build a content-free diagnostic sequence with stable operation, attempt, and seg
 ## Acceptance Criteria
 
 A checked-in report diagrams every buffering location, names its owner, states whether it is bounded and observable, and includes reproducible measurements from the local acceptance client and Pixel. The report identifies the exact sender admission point and receiver credit signal that can enforce a finite unheard-audio bound; documents metadata/media ordering behavior and reconnect behavior; recommends a credit unit plus segment-size rule; and lists any LiveKit or Pipecat limitation the formal protocol must model. The spike does not claim a production fix.
+
+## Notes
+
+**2026-07-28T21:56:44Z**
+
+Started on the dedicated rad-0tmq epic branch. First deliverable is the content-free end-to-end buffer/authority map and reproducible measurement plan; this spike will not claim a production flow-control fix.

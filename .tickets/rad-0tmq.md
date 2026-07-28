@@ -1,6 +1,6 @@
 ---
 id: rad-0tmq
-status: open
+status: in_progress
 deps: []
 links: [rad-g9yr, rad-ig6k, rad-u6lm]
 created: 2026-07-28T21:37:14Z
@@ -21,3 +21,9 @@ The server owns canonical segment order, session generation, operation cancellat
 ## Acceptance Criteria
 
 All child tickets are complete. The implemented protocol places a documented finite upper bound on admitted but unheard audio; does not burst an accumulated response after delay or reconnect; never advances heard state from server clocks or enqueue completion; never allows stale, duplicate, reordered, or cross-generation events to mutate current playback; and converges after reconnect or fails closed with an explicit terminal state. A machine-checked model and human-readable inductive correctness argument cover every state/event pair. Automated chaos/conformance and physical Pixel tests cover ordinary model speech, deterministic source reading, pause, barge-in, route change, process restart, and network partition without duplicated or skipped acknowledged speech.
+
+## Notes
+
+**2026-07-28T21:56:44Z**
+
+Operator authorized tackling the bounded playback state-machine work as one epic on one branch and one PR. Execution begins with rad-fnho to measure and map the real buffering and acknowledgement seams; formal specification and production implementation remain dependency-gated on that evidence.
