@@ -35,6 +35,15 @@ public enum PlaybackStatus
    * <code>PLAYBACK_STATUS_FAILED = 5;</code>
    */
   PLAYBACK_STATUS_FAILED(5),
+  /**
+   * <pre>
+   * The receiver accepted the metadata and reserved capacity. The sender must
+   * not publish the corresponding realtime media before this acknowledgement.
+   * </pre>
+   *
+   * <code>PLAYBACK_STATUS_ACCEPTED = 6;</code>
+   */
+  PLAYBACK_STATUS_ACCEPTED(6),
   UNRECOGNIZED(-1),
   ;
 
@@ -62,6 +71,15 @@ public enum PlaybackStatus
    * <code>PLAYBACK_STATUS_FAILED = 5;</code>
    */
   public static final int PLAYBACK_STATUS_FAILED_VALUE = 5;
+  /**
+   * <pre>
+   * The receiver accepted the metadata and reserved capacity. The sender must
+   * not publish the corresponding realtime media before this acknowledgement.
+   * </pre>
+   *
+   * <code>PLAYBACK_STATUS_ACCEPTED = 6;</code>
+   */
+  public static final int PLAYBACK_STATUS_ACCEPTED_VALUE = 6;
 
 
   @java.lang.Override
@@ -91,6 +109,7 @@ public enum PlaybackStatus
       case 3: return PLAYBACK_STATUS_COMPLETED;
       case 4: return PLAYBACK_STATUS_FLUSHED;
       case 5: return PLAYBACK_STATUS_FAILED;
+      case 6: return PLAYBACK_STATUS_ACCEPTED;
       default: return null;
     }
   }

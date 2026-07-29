@@ -19,6 +19,7 @@ public  final class Reconnect extends
     sessionId_ = "";
     latestPlayback_ = emptyProtobufList();
     idempotencyKey_ = "";
+    receiverEpoch_ = "";
   }
   public static final int REQUEST_ID_FIELD_NUMBER = 1;
   private java.lang.String requestId_;
@@ -390,6 +391,150 @@ public  final class Reconnect extends
   private void clearMaxSegmentDurationMs() {
 
     maxSegmentDurationMs_ = 0L;
+  }
+
+  public static final int PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER = 9;
+  private int playbackProtocolRevision_;
+  /**
+   * <pre>
+   * Revision 1 requires metadata acceptance before realtime media publication.
+   * </pre>
+   *
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @return The playbackProtocolRevision.
+   */
+  @java.lang.Override
+  public int getPlaybackProtocolRevision() {
+    return playbackProtocolRevision_;
+  }
+  /**
+   * <pre>
+   * Revision 1 requires metadata acceptance before realtime media publication.
+   * </pre>
+   *
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @param value The playbackProtocolRevision to set.
+   */
+  private void setPlaybackProtocolRevision(int value) {
+
+    playbackProtocolRevision_ = value;
+  }
+  /**
+   * <pre>
+   * Revision 1 requires metadata acceptance before realtime media publication.
+   * </pre>
+   *
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   */
+  private void clearPlaybackProtocolRevision() {
+
+    playbackProtocolRevision_ = 0;
+  }
+
+  public static final int RECEIVER_EPOCH_FIELD_NUMBER = 10;
+  private java.lang.String receiverEpoch_;
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  @java.lang.Override
+  public java.lang.String getReceiverEpoch() {
+    return receiverEpoch_;
+  }
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getReceiverEpochBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(receiverEpoch_);
+  }
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The receiverEpoch to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setReceiverEpoch(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    receiverEpoch_ = value;
+  }
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   */
+  private void clearReceiverEpoch() {
+
+    receiverEpoch_ = getDefaultInstance().getReceiverEpoch();
+  }
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The bytes for receiverEpoch to set.
+   */
+  private void setReceiverEpochBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    receiverEpoch_ = value.toStringUtf8();
+
+  }
+
+  public static final int CREDIT_SEQUENCE_FIELD_NUMBER = 11;
+  private long creditSequence_;
+  /**
+   * <pre>
+   * Monotonic within receiver_epoch. A delayed lower grant is stale.
+   * </pre>
+   *
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  @java.lang.Override
+  public long getCreditSequence() {
+    return creditSequence_;
+  }
+  /**
+   * <pre>
+   * Monotonic within receiver_epoch. A delayed lower grant is stale.
+   * </pre>
+   *
+   * <code>uint64 credit_sequence = 11;</code>
+   * @param value The creditSequence to set.
+   */
+  private void setCreditSequence(long value) {
+
+    creditSequence_ = value;
+  }
+  /**
+   * <pre>
+   * Monotonic within receiver_epoch. A delayed lower grant is stale.
+   * </pre>
+   *
+   * <code>uint64 credit_sequence = 11;</code>
+   */
+  private void clearCreditSequence() {
+
+    creditSequence_ = 0L;
   }
 
   public static works.ravd.radcliffe.protocol.v2.Reconnect parseFrom(
@@ -877,6 +1022,155 @@ public  final class Reconnect extends
       return this;
     }
 
+    /**
+     * <pre>
+     * Revision 1 requires metadata acceptance before realtime media publication.
+     * </pre>
+     *
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @return The playbackProtocolRevision.
+     */
+    @java.lang.Override
+    public int getPlaybackProtocolRevision() {
+      return instance.getPlaybackProtocolRevision();
+    }
+    /**
+     * <pre>
+     * Revision 1 requires metadata acceptance before realtime media publication.
+     * </pre>
+     *
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @param value The playbackProtocolRevision to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPlaybackProtocolRevision(int value) {
+      copyOnWrite();
+      instance.setPlaybackProtocolRevision(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * Revision 1 requires metadata acceptance before realtime media publication.
+     * </pre>
+     *
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPlaybackProtocolRevision() {
+      copyOnWrite();
+      instance.clearPlaybackProtocolRevision();
+      return this;
+    }
+
+    /**
+     * <pre>
+     * A fresh random value for each Android receiver process.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return The receiverEpoch.
+     */
+    @java.lang.Override
+    public java.lang.String getReceiverEpoch() {
+      return instance.getReceiverEpoch();
+    }
+    /**
+     * <pre>
+     * A fresh random value for each Android receiver process.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return The bytes for receiverEpoch.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getReceiverEpochBytes() {
+      return instance.getReceiverEpochBytes();
+    }
+    /**
+     * <pre>
+     * A fresh random value for each Android receiver process.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpoch(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setReceiverEpoch(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * A fresh random value for each Android receiver process.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearReceiverEpoch() {
+      copyOnWrite();
+      instance.clearReceiverEpoch();
+      return this;
+    }
+    /**
+     * <pre>
+     * A fresh random value for each Android receiver process.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The bytes for receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpochBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setReceiverEpochBytes(value);
+      return this;
+    }
+
+    /**
+     * <pre>
+     * Monotonic within receiver_epoch. A delayed lower grant is stale.
+     * </pre>
+     *
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return The creditSequence.
+     */
+    @java.lang.Override
+    public long getCreditSequence() {
+      return instance.getCreditSequence();
+    }
+    /**
+     * <pre>
+     * Monotonic within receiver_epoch. A delayed lower grant is stale.
+     * </pre>
+     *
+     * <code>uint64 credit_sequence = 11;</code>
+     * @param value The creditSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setCreditSequence(long value) {
+      copyOnWrite();
+      instance.setCreditSequence(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * Monotonic within receiver_epoch. A delayed lower grant is stale.
+     * </pre>
+     *
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearCreditSequence() {
+      copyOnWrite();
+      instance.clearCreditSequence();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.Reconnect)
   }
   @java.lang.Override
@@ -902,10 +1196,14 @@ public  final class Reconnect extends
             "idempotencyKey_",
             "maxInflightAttempts_",
             "maxSegmentDurationMs_",
+            "playbackProtocolRevision_",
+            "receiverEpoch_",
+            "creditSequence_",
           };
           java.lang.String info =
-              "\u0000\b\u0000\u0000\u0001\b\b\u0000\u0001\u0000\u0001\u0208\u0002\u0208\u0003\u0003" +
-              "\u0004\u0003\u0005\u001b\u0006\u0208\u0007\u000b\b\u0003";
+              "\u0000\u000b\u0000\u0000\u0001\u000b\u000b\u0000\u0001\u0000\u0001\u0208\u0002\u0208" +
+              "\u0003\u0003\u0004\u0003\u0005\u001b\u0006\u0208\u0007\u000b\b\u0003\t\u000b\n\u0208" +
+              "\u000b\u0003";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

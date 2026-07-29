@@ -79,4 +79,34 @@ public interface PlaybackSegmentOrBuilder extends
    * @return The speechRateMultiplier.
    */
   double getSpeechRateMultiplier();
+
+  /**
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @return The playbackProtocolRevision.
+   */
+  int getPlaybackProtocolRevision();
+
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  java.lang.String getReceiverEpoch();
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  com.google.protobuf.ByteString
+      getReceiverEpochBytes();
+
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  long getCreditSequence();
+
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @return The attemptSequence.
+   */
+  long getAttemptSequence();
 }

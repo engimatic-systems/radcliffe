@@ -5,6 +5,8 @@ from radcliffe_protocol.radcliffe.v2.protocol_pb2 import (
     JOB_EVENT_KIND_SUCCEEDED,
     JOB_NOTIFICATION_POLICY_NEXT_SAFE_PAUSE,
     JOB_STATUS_SUCCEEDED,
+    PLAYBACK_RECONCILIATION_OUTCOME_READY,
+    PLAYBACK_STATUS_ACCEPTED,
     SENSITIVITY_PRIVATE,
     SOURCE_KIND_USER,
     SPEECH_RATE_NORMAL_1_0X,
@@ -17,6 +19,10 @@ from radcliffe_protocol.radcliffe.v2.protocol_pb2 import (
     JobRef,
     MessageEnvelope,
     OperationRef,
+    PlaybackAcknowledgement,
+    PlaybackReconciled,
+    PlaybackSegment,
+    Reconnect,
     ServerEvent,
     SpeechDeliveryAction,
 )
@@ -128,3 +134,57 @@ def test_job_event_round_trip_exposes_metadata_without_private_job_context() -> 
     assert parsed.job_event.job.status == JOB_STATUS_SUCCEEDED
     assert parsed.job_event.entity_ids == ["paper:one"]
     assert "instruction" not in str(parsed.job_event).lower()
+
+
+def test_bounded_playback_credit_identity_round_trips_without_sentinels() -> None:
+    operation = OperationRef(
+        session_id="session-1",
+        generation=3,
+        operation_id="operation-1",
+        cancellation_id="cancel-1",
+        trace_id=f"trc_{'b' * 32}",
+    )
+    segment = PlaybackSegment(
+        operation=operation,
+        playback_id="playback-1",
+        segment_id="segment-1",
+        duration_ms=1_000,
+        playback_protocol_revision=1,
+        receiver_epoch="receiver-1",
+        credit_sequence=4,
+        attempt_sequence=9,
+    )
+    accepted = PlaybackAcknowledgement(
+        acknowledgement_id="accepted-1",
+        operation=operation,
+        playback_id="playback-1",
+        segment_id="segment-1",
+        status=PLAYBACK_STATUS_ACCEPTED,
+        receiver_epoch="receiver-1",
+        credit_sequence=4,
+        attempt_sequence=9,
+    )
+    reconnect = Reconnect(
+        request_id="reconnect-1",
+        session_id="session-1",
+        generation=3,
+        latest_playback=[accepted],
+        max_inflight_attempts=1,
+        max_segment_duration_ms=30_000,
+        playback_protocol_revision=1,
+        receiver_epoch="receiver-1",
+        credit_sequence=4,
+    )
+    reconciled = PlaybackReconciled(
+        request_id="reconnect-1",
+        session_id="session-1",
+        generation=3,
+        playback_protocol_revision=1,
+        receiver_epoch="receiver-1",
+        credit_sequence=4,
+        outcome=PLAYBACK_RECONCILIATION_OUTCOME_READY,
+    )
+
+    assert PlaybackSegment.FromString(segment.SerializeToString()) == segment
+    assert Reconnect.FromString(reconnect.SerializeToString()) == reconnect
+    assert PlaybackReconciled.FromString(reconciled.SerializeToString()) == reconciled

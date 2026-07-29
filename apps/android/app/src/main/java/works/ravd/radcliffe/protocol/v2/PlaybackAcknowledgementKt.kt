@@ -208,6 +208,67 @@ public object PlaybackAcknowledgementKt {
     public fun clearPlaybackId() {
       _builder.clearPlaybackId()
     }
+
+    /**
+     * ```
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * ```
+     *
+     * `string receiver_epoch = 10;`
+     */
+    public var receiverEpoch: kotlin.String
+      @kotlin.jvm.JvmName("getReceiverEpoch")
+        get() = _builder.receiverEpoch
+      @kotlin.jvm.JvmName("setReceiverEpoch")
+        set(value) {
+        _builder.receiverEpoch = value
+      }
+    /**
+     * ```
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * ```
+     *
+     * `string receiver_epoch = 10;`
+     */
+    public fun clearReceiverEpoch() {
+      _builder.clearReceiverEpoch()
+    }
+
+    /**
+     * `uint64 credit_sequence = 11;`
+     */
+    public var creditSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getCreditSequence")
+        get() = _builder.creditSequence
+      @kotlin.jvm.JvmName("setCreditSequence")
+        set(value) {
+        _builder.creditSequence = value
+      }
+    /**
+     * `uint64 credit_sequence = 11;`
+     */
+    public fun clearCreditSequence() {
+      _builder.clearCreditSequence()
+    }
+
+    /**
+     * `uint64 attempt_sequence = 12;`
+     */
+    public var attemptSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getAttemptSequence")
+        get() = _builder.attemptSequence
+      @kotlin.jvm.JvmName("setAttemptSequence")
+        set(value) {
+        _builder.attemptSequence = value
+      }
+    /**
+     * `uint64 attempt_sequence = 12;`
+     */
+    public fun clearAttemptSequence() {
+      _builder.clearAttemptSequence()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement.copy(block: `works.ravd.radcliffe.protocol.v2`.PlaybackAcknowledgementKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement =

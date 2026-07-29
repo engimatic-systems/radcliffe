@@ -17,6 +17,7 @@ public  final class PlaybackReconciled extends
   private PlaybackReconciled() {
     requestId_ = "";
     sessionId_ = "";
+    receiverEpoch_ = "";
   }
   public static final int REQUEST_ID_FIELD_NUMBER = 1;
   private java.lang.String requestId_;
@@ -179,6 +180,148 @@ public  final class PlaybackReconciled extends
   private void clearReplayPending() {
 
     replayPending_ = false;
+  }
+
+  public static final int PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER = 5;
+  private int playbackProtocolRevision_;
+  /**
+   * <code>uint32 playback_protocol_revision = 5;</code>
+   * @return The playbackProtocolRevision.
+   */
+  @java.lang.Override
+  public int getPlaybackProtocolRevision() {
+    return playbackProtocolRevision_;
+  }
+  /**
+   * <code>uint32 playback_protocol_revision = 5;</code>
+   * @param value The playbackProtocolRevision to set.
+   */
+  private void setPlaybackProtocolRevision(int value) {
+
+    playbackProtocolRevision_ = value;
+  }
+  /**
+   * <code>uint32 playback_protocol_revision = 5;</code>
+   */
+  private void clearPlaybackProtocolRevision() {
+
+    playbackProtocolRevision_ = 0;
+  }
+
+  public static final int RECEIVER_EPOCH_FIELD_NUMBER = 6;
+  private java.lang.String receiverEpoch_;
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @return The receiverEpoch.
+   */
+  @java.lang.Override
+  public java.lang.String getReceiverEpoch() {
+    return receiverEpoch_;
+  }
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getReceiverEpochBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(receiverEpoch_);
+  }
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @param value The receiverEpoch to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setReceiverEpoch(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    receiverEpoch_ = value;
+  }
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   */
+  private void clearReceiverEpoch() {
+
+    receiverEpoch_ = getDefaultInstance().getReceiverEpoch();
+  }
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @param value The bytes for receiverEpoch to set.
+   */
+  private void setReceiverEpochBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    receiverEpoch_ = value.toStringUtf8();
+
+  }
+
+  public static final int CREDIT_SEQUENCE_FIELD_NUMBER = 7;
+  private long creditSequence_;
+  /**
+   * <code>uint64 credit_sequence = 7;</code>
+   * @return The creditSequence.
+   */
+  @java.lang.Override
+  public long getCreditSequence() {
+    return creditSequence_;
+  }
+  /**
+   * <code>uint64 credit_sequence = 7;</code>
+   * @param value The creditSequence to set.
+   */
+  private void setCreditSequence(long value) {
+
+    creditSequence_ = value;
+  }
+  /**
+   * <code>uint64 credit_sequence = 7;</code>
+   */
+  private void clearCreditSequence() {
+
+    creditSequence_ = 0L;
+  }
+
+  public static final int OUTCOME_FIELD_NUMBER = 8;
+  private int outcome_;
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @return The enum numeric value on the wire for outcome.
+   */
+  @java.lang.Override
+  public int getOutcomeValue() {
+    return outcome_;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @return The outcome.
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome getOutcome() {
+    works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome result = works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome.forNumber(outcome_);
+    return result == null ? works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome.UNRECOGNIZED : result;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @param value The enum numeric value on the wire for outcome to set.
+   */
+  private void setOutcomeValue(int value) {
+      outcome_ = value;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @param value The outcome to set.
+   */
+  private void setOutcome(works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome value) {
+    outcome_ = value.getNumber();
+
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   */
+  private void clearOutcome() {
+
+    outcome_ = 0;
   }
 
   public static works.ravd.radcliffe.protocol.v2.PlaybackReconciled parseFrom(
@@ -447,6 +590,157 @@ public  final class PlaybackReconciled extends
       return this;
     }
 
+    /**
+     * <code>uint32 playback_protocol_revision = 5;</code>
+     * @return The playbackProtocolRevision.
+     */
+    @java.lang.Override
+    public int getPlaybackProtocolRevision() {
+      return instance.getPlaybackProtocolRevision();
+    }
+    /**
+     * <code>uint32 playback_protocol_revision = 5;</code>
+     * @param value The playbackProtocolRevision to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPlaybackProtocolRevision(int value) {
+      copyOnWrite();
+      instance.setPlaybackProtocolRevision(value);
+      return this;
+    }
+    /**
+     * <code>uint32 playback_protocol_revision = 5;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPlaybackProtocolRevision() {
+      copyOnWrite();
+      instance.clearPlaybackProtocolRevision();
+      return this;
+    }
+
+    /**
+     * <code>string receiver_epoch = 6;</code>
+     * @return The receiverEpoch.
+     */
+    @java.lang.Override
+    public java.lang.String getReceiverEpoch() {
+      return instance.getReceiverEpoch();
+    }
+    /**
+     * <code>string receiver_epoch = 6;</code>
+     * @return The bytes for receiverEpoch.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getReceiverEpochBytes() {
+      return instance.getReceiverEpochBytes();
+    }
+    /**
+     * <code>string receiver_epoch = 6;</code>
+     * @param value The receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpoch(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setReceiverEpoch(value);
+      return this;
+    }
+    /**
+     * <code>string receiver_epoch = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearReceiverEpoch() {
+      copyOnWrite();
+      instance.clearReceiverEpoch();
+      return this;
+    }
+    /**
+     * <code>string receiver_epoch = 6;</code>
+     * @param value The bytes for receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpochBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setReceiverEpochBytes(value);
+      return this;
+    }
+
+    /**
+     * <code>uint64 credit_sequence = 7;</code>
+     * @return The creditSequence.
+     */
+    @java.lang.Override
+    public long getCreditSequence() {
+      return instance.getCreditSequence();
+    }
+    /**
+     * <code>uint64 credit_sequence = 7;</code>
+     * @param value The creditSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setCreditSequence(long value) {
+      copyOnWrite();
+      instance.setCreditSequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 credit_sequence = 7;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearCreditSequence() {
+      copyOnWrite();
+      instance.clearCreditSequence();
+      return this;
+    }
+
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+     * @return The enum numeric value on the wire for outcome.
+     */
+    @java.lang.Override
+    public int getOutcomeValue() {
+      return instance.getOutcomeValue();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+     * @param value The outcome to set.
+     * @return This builder for chaining.
+     */
+    public Builder setOutcomeValue(int value) {
+      copyOnWrite();
+      instance.setOutcomeValue(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+     * @return The outcome.
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome getOutcome() {
+      return instance.getOutcome();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+     * @param value The enum numeric value on the wire for outcome to set.
+     * @return This builder for chaining.
+     */
+    public Builder setOutcome(works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome value) {
+      copyOnWrite();
+      instance.setOutcome(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearOutcome() {
+      copyOnWrite();
+      instance.clearOutcome();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.PlaybackReconciled)
   }
   @java.lang.Override
@@ -467,10 +761,14 @@ public  final class PlaybackReconciled extends
             "sessionId_",
             "generation_",
             "replayPending_",
+            "playbackProtocolRevision_",
+            "receiverEpoch_",
+            "creditSequence_",
+            "outcome_",
           };
           java.lang.String info =
-              "\u0000\u0004\u0000\u0000\u0001\u0004\u0004\u0000\u0000\u0000\u0001\u0208\u0002\u0208" +
-              "\u0003\u0003\u0004\u0007";
+              "\u0000\b\u0000\u0000\u0001\b\b\u0000\u0000\u0000\u0001\u0208\u0002\u0208\u0003\u0003" +
+              "\u0004\u0007\u0005\u000b\u0006\u0208\u0007\u0003\b\f";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

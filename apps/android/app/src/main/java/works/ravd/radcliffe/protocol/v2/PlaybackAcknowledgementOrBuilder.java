@@ -102,4 +102,38 @@ public interface PlaybackAcknowledgementOrBuilder extends
    */
   com.google.protobuf.ByteString
       getPlaybackIdBytes();
+
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  java.lang.String getReceiverEpoch();
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  com.google.protobuf.ByteString
+      getReceiverEpochBytes();
+
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  long getCreditSequence();
+
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @return The attemptSequence.
+   */
+  long getAttemptSequence();
 }

@@ -106,6 +106,81 @@ public object PlaybackReconciledKt {
     public fun clearReplayPending() {
       _builder.clearReplayPending()
     }
+
+    /**
+     * `uint32 playback_protocol_revision = 5;`
+     */
+    public var playbackProtocolRevision: kotlin.Int
+      @kotlin.jvm.JvmName("getPlaybackProtocolRevision")
+        get() = _builder.playbackProtocolRevision
+      @kotlin.jvm.JvmName("setPlaybackProtocolRevision")
+        set(value) {
+        _builder.playbackProtocolRevision = value
+      }
+    /**
+     * `uint32 playback_protocol_revision = 5;`
+     */
+    public fun clearPlaybackProtocolRevision() {
+      _builder.clearPlaybackProtocolRevision()
+    }
+
+    /**
+     * `string receiver_epoch = 6;`
+     */
+    public var receiverEpoch: kotlin.String
+      @kotlin.jvm.JvmName("getReceiverEpoch")
+        get() = _builder.receiverEpoch
+      @kotlin.jvm.JvmName("setReceiverEpoch")
+        set(value) {
+        _builder.receiverEpoch = value
+      }
+    /**
+     * `string receiver_epoch = 6;`
+     */
+    public fun clearReceiverEpoch() {
+      _builder.clearReceiverEpoch()
+    }
+
+    /**
+     * `uint64 credit_sequence = 7;`
+     */
+    public var creditSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getCreditSequence")
+        get() = _builder.creditSequence
+      @kotlin.jvm.JvmName("setCreditSequence")
+        set(value) {
+        _builder.creditSequence = value
+      }
+    /**
+     * `uint64 credit_sequence = 7;`
+     */
+    public fun clearCreditSequence() {
+      _builder.clearCreditSequence()
+    }
+
+    /**
+     * `.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;`
+     */
+    public var outcome: works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome
+      @kotlin.jvm.JvmName("getOutcome")
+        get() = _builder.outcome
+      @kotlin.jvm.JvmName("setOutcome")
+        set(value) {
+        _builder.outcome = value
+      }
+    public var outcomeValue: kotlin.Int
+      @kotlin.jvm.JvmName("getOutcomeValue")
+        get() = _builder.outcomeValue
+      @kotlin.jvm.JvmName("setOutcomeValue")
+        set(value) {
+        _builder.outcomeValue = value
+      }
+    /**
+     * `.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;`
+     */
+    public fun clearOutcome() {
+      _builder.clearOutcome()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.PlaybackReconciled.copy(block: `works.ravd.radcliffe.protocol.v2`.PlaybackReconciledKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.PlaybackReconciled =

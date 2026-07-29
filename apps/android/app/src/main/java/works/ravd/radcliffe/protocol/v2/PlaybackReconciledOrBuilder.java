@@ -50,4 +50,39 @@ public interface PlaybackReconciledOrBuilder extends
    * @return The replayPending.
    */
   boolean getReplayPending();
+
+  /**
+   * <code>uint32 playback_protocol_revision = 5;</code>
+   * @return The playbackProtocolRevision.
+   */
+  int getPlaybackProtocolRevision();
+
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @return The receiverEpoch.
+   */
+  java.lang.String getReceiverEpoch();
+  /**
+   * <code>string receiver_epoch = 6;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  com.google.protobuf.ByteString
+      getReceiverEpochBytes();
+
+  /**
+   * <code>uint64 credit_sequence = 7;</code>
+   * @return The creditSequence.
+   */
+  long getCreditSequence();
+
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @return The enum numeric value on the wire for outcome.
+   */
+  int getOutcomeValue();
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciliationOutcome outcome = 8;</code>
+   * @return The outcome.
+   */
+  works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome getOutcome();
 }
