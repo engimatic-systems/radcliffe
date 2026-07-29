@@ -1,8 +1,8 @@
 ---
 id: rad-grf7
-status: open
+status: closed
 deps: [rad-g8os, rad-qa5h]
-links: [rad-f4j2]
+links: [rad-f4j2, rad-j02j, rad-l1ro]
 created: 2026-07-28T21:38:43Z
 type: task
 priority: 0
@@ -35,3 +35,7 @@ Final automated package on commit a65572b: Python 475 passed/1 skipped; Android 
 **2026-07-29T17:33:08Z**
 
 2026-07-29 physical Pixel acceptance increment at session ses_3aeffbc8c358a7d54979a50f422d0048: test 1 passed (the short count arrived as one natural burst, accepted because the response is inherently brief); test 2 multi-paragraph interruption/resume passed with exact continuation; test 3 Tailscale partition/restore passed; test 4 background/foreground passed without pause, stop, or catch-up burst. Test 5 Android force-stop was intentionally not run. The first test 6 backend restart preserved playback but subsequent source tools were denied because the restarted control plane had lost its in-memory session grant. Commit 265062e restores grants lazily from the durable owner-scoped active-session record, preserves the original expiry, and refuses ended/archived sessions. Regression coverage passes across a fresh app instance at an advanced operation generation; full Python verification is 476 passed/1 skipped. Deployed Sonnet 5 foreground/background health and operations/background/worker gates pass. A live isolated probe returned 200 before restart, 200 after full service restart, and 403 for the ended session after restart. Physical retries of tests 6-8 remain pending.
+
+**2026-07-29T17:48:25Z**
+
+2026-07-29 final physical Pixel disposition: tests 6-8 did not pass. On test 6, worker/backend restart during speech reconnected but silently skipped the latter unheard portion of the interrupted sentence; follow-up bug rad-j02j owns durable sentence-tail continuity. On the Bluetooth route test, speaker-to-Bluetooth and return route changes pushed the app into a listening-like state rather than preserving the conversation control state. The operator clarified the desired media contract: one earbud tap toggles user microphone mute/unmute, while two taps toggle full conversation pause/unpause; follow-up feature rad-l1ro owns those controls and route-change behavior. Android force-stop remained intentionally untested. The operator considers these lower-priority follow-ups, accepts closing this PR/epic without representing tests 6-8 as passes, and directs a clean handoff through the new tickets.
