@@ -7,7 +7,6 @@ created: 2026-07-13T03:19:33Z
 type: chore
 priority: 3
 assignee: coopwilliams
-parent: rad-2tft
 tags: [radcliffe, ci, optional, post-milestone-1, operator-interactive]
 ---
 # Add optional GitHub Actions CI after repository sponsorship is approved

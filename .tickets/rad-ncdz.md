@@ -1,6 +1,6 @@
 ---
 id: rad-ncdz
-status: open
+status: closed
 deps: [rad-l1jc]
 links: [rad-l1jc, rad-lezo, rad-nhai, rad-l386]
 created: 2026-07-13T01:52:53Z
@@ -35,3 +35,7 @@ User physically verified ordinary Pixel voice conversation and basic app control
 **2026-07-15T04:12:34Z**
 
 2026-07-14 Pixel source-read failure was not an OS permission failure: Whisper/model supplied the literal spoken path 'Radcliffe dash demo dot MD'. Added literal-first, narrowly scoped spoken Markdown filename normalization while preserving original audited arguments and rooted traversal controls. Full suite passes and a deployed control-plane smoke resolved the request to fixtures/sources/radcliffe-demo.md.
+
+**2026-07-27T14:54:57Z**
+
+The integrated Milestone 1 Pixel demo is accepted from the documented evidence ledger in docs/milestone-1-acceptance.md. The chosen tailnet LiveKit topology connects the enrolled Pixel and outbound worker; a Sonnet 5 physical run supplies nine consecutive sub-five-second first-audio measurements; heard-output and physical evidence cover <500 ms interruption and accepted replacement turns; read_source preserves the canonical fixture/hash with visible provenance; app/media controls resume from the device-persisted boundary; conversation end/restart/switch leaves no stale work; and the independent suite retains audio, state, envelope, playback, source, and tool-audit evidence. The README now contains the current reproducible demo procedure.

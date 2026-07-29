@@ -7,8 +7,7 @@ created: 2026-07-26T02:49:45Z
 type: feature
 priority: 1
 assignee: coopwilliams
-parent: rad-2tft
-tags: [radcliffe, source, playback, seek, voice]
+tags: [radcliffe, source, playback, seek, voice, post-m1]
 ---
 # Voice-driven find-in-source: seek to next or previous phrase match
 
@@ -51,4 +50,3 @@ DECIDED (1 and 2 settled with the operator; 3-7 confirmed as written):
 ## Acceptance Criteria
 
 A spoken request to seek to a phrase moves playback to the next sentence whose SPOKEN text contains that phrase; a request for the previous mention moves backward; repeated "next" requests walk successive matches. Matching is case-insensitive and word-boundary and runs against normalized speakable text, so every match corresponds to words the listener can actually hear. When the phrase appears nowhere, the tool returns an explicit no-match the model relays to the user, and playback state is completely unchanged. "No matches at all" and "no further matches in this direction" are distinguishable. Text skipped over by a seek is never recorded in the heard ledger. After seeking backward and then interrupting, a plain resume continues from the actual last playback position rather than the furthest point ever heard - covered by a regression test, since this is the failure mode the current max-based resume_boundary would produce. The full source text still never enters model context, and the exact-source guarantee and content hash are unaffected. Verified by a Pixel listen-through: seek forward to a phrase, seek back to a previous mention, request a phrase that does not occur, and hear the correct response in each case.
-

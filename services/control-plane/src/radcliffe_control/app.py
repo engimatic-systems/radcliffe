@@ -1552,11 +1552,11 @@ async def _apply_session_transition(
         principal_id=active.settings.owner_id,
         session_id=request.operation.session_id,
     )
-    if (
-        source is None
-        or source.status != "active"
-        or source.generation != request.operation.generation
-    ):
+    # Operation generations advance whenever the voice engine interrupts or reconnects.
+    # The catalog generation is a separate, durable lifecycle version. Authorization above
+    # rejects stale operation generations; the transition store atomically checks the
+    # catalog generation and active status before ending the source.
+    if source is None or source.status != "active":
         raise SessionActionConflictError("originating session generation is no longer active")
 
     destination: SessionRecord | None = None
@@ -1621,6 +1621,15 @@ async def _apply_session_transition(
                 detail="media worker failed to start",
             ) from error
 
+    if active.workers is not None:
+        # The transition response still has to travel back through the sidecar and source
+        # media worker so the worker can persist and publish the handoff to Android.
+        # Protect that worker from a reconciliation sweep which happens to land between
+        # the durable commit and delivery of the response.
+        await active.workers.defer_stop(
+            source.session_id,
+            grace_seconds=active.settings.worker_handoff_grace_seconds,
+        )
     result = await active.session_transitions.commit(
         request_id=request.request_id,
         idempotency_key=request.idempotency_key,
@@ -1764,11 +1773,13 @@ async def _completed_session_action_replay(
     )
     if result is None:
         return None
+    # The stored source generation is the durable catalog version, not the voice
+    # operation generation. Stable request/call identities and the action shape establish
+    # replay equivalence even if the client retries after another interruption.
     if (
         result.request_id != f"session:{request.call_id}"
         or result.idempotency_key != request.idempotency_key
         or result.source_session_id != request.session_id
-        or result.source_generation != request.generation
         or result.action.value != arguments.operation
     ):
         raise HTTPException(status_code=409, detail="session action replay changed parameters")

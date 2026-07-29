@@ -7,8 +7,7 @@ created: 2026-07-26T03:53:30Z
 type: bug
 priority: 1
 assignee: coopwilliams
-parent: rad-2tft
-tags: [radcliffe, tools, jobs, sources, discovery]
+tags: [radcliffe, tools, jobs, sources, discovery, post-m1]
 ---
 # Promoted job artifacts are readable but not discoverable, so the model denies they exist
 
@@ -45,4 +44,3 @@ RELATED: the list_sources call that failed at this point was denied outright, on
 ## Acceptance Criteria
 
 After a background job completes with promoted sources, the operator can ask for any promoted artifact by its human title and hear it read, without supplying a filename and without having to tell the model to check the job first. The model never asserts that a promoted artifact does not exist on the strength of a list_sources result: either that result includes promoted job sources, or it is explicitly scoped so absence from it is not evidence of absence. Asked to read a named job artifact, the model routes to read_job_source rather than list_sources. Promoted sources remain reachable only through appropriately scoped grants, with no standing read access to job workspaces added to the session grant. A regression test builds a completed job with promoted sources and asserts every one is discoverable by the top-level agent and readable by title. Verified by a Pixel run: complete a multi-source research job, then ask for one of its verbatim articles by name and hear it read.
-

@@ -207,6 +207,9 @@ bootstrap token, LiveKit API secret, and disabled cloud-provider keys. Per-sessi
 logs live under `RADCLIFFE_WORKER_LOG_DIRECTORY` (default `var/workers`).
 Compatibility sessions report `external` rather than pretending that the
 control-plane supervisor can observe their separately launched worker.
+Agent-driven transitions protect the source worker from reconciliation for
+`RADCLIFFE_WORKER_HANDOFF_GRACE_SECONDS` (default 5) so the committed result can
+reach the worker and Android client before source teardown.
 
 Context accounting is delegated over loopback to
 `RADCLIFFE_SIDECAR_URL` (default `http://127.0.0.1:8787`) so the count is taken

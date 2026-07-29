@@ -99,6 +99,41 @@ async def test_worker_failure_is_visible_and_reconcile_cleans_stale_sessions(tmp
 
 
 @pytest.mark.asyncio
+async def test_reconcile_honors_transition_delivery_grace_before_stopping_worker(
+    tmp_path,
+) -> None:
+    path = tmp_path / "workers.sqlite3"
+    await EventStore(path).migrate()
+    catalog = SessionCatalog(path)
+    record, _created = await catalog.create(principal_id="owner")
+    launched: list[FakeProcess] = []
+    now = [100.0]
+
+    async def launch(_record):
+        process = FakeProcess()
+        launched.append(process)
+        return process
+
+    supervisor = WorkerSupervisor(
+        catalog=catalog,
+        principal_id="owner",
+        launcher=launch,
+        monotonic=lambda: now[0],
+    )
+    await supervisor.ensure(record)
+    await supervisor.defer_stop(record.session_id, grace_seconds=5)
+
+    await supervisor.reconcile(())
+    assert not launched[0].terminated
+    assert await supervisor.running_session_ids() == (record.session_id,)
+
+    now[0] += 5
+    await supervisor.reconcile(())
+    assert launched[0].terminated
+    assert await supervisor.running_session_ids() == ()
+
+
+@pytest.mark.asyncio
 async def test_launch_failure_sets_durable_failed_status(tmp_path) -> None:
     path = tmp_path / "workers.sqlite3"
     await EventStore(path).migrate()

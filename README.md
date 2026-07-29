@@ -56,26 +56,36 @@ pretend that fake PCM was heard on a phone.
 
 For the physical M1 gate:
 
-1. Deploy and diagnose the pinned media edge using `infra/livekit/README.md`.
-2. Start the control plane with production `RADCLIFFE_LIVEKIT_*`, bootstrap,
-   internal-token, database, and source-root settings.
-3. Start the Pi sidecar with the same internal token, Tool Gateway URL, model
-   selection, and provider credential.
-4. The default private profile uses an installed Ollama model, MLX Whisper
-   `large-v3-turbo`, and the macOS `Samantha` voice converted to 24 kHz PCM.
-   Configure the LiveKit session values and run
-   `uv run python -m radcliffe_media.production`. The first transcription
-   downloads the MLX Whisper checkpoint; subsequent speech stays local.
-5. Install the debug app on the Pixel, enter the HTTPS control URL and bootstrap
-   token once, and save the profile. The app generates and persists its own
-   installation credential, enrolls idempotently, then deletes the saved
-   bootstrap ciphertext. Later launches authenticate as that revocable device
-   and load recent conversations. Tap New conversation for a server-generated
-   session, or choose an existing conversation to restore its timeline before
-   joining; use Settings only when the endpoint or enrollment changes.
-6. Perform the six scenarios in the spec and retain Pixel audio plus the ICE
-   candidate report. The LiveKit and Android tickets remain open until direct
-   UDP, TURN-only, lock-screen, and speaker runs are attached as evidence.
+1. Inspect the current Tailscale Serve allocation, then deploy the pinned
+   tailnet LiveKit checkpoint described in `infra/livekit/README.md`. The M1
+   phone path uses trusted tailnet HTTPS/WSS signaling and direct RTC to the
+   advertised tailnet node. Public TURN-only and changing-network coverage are
+   post-M1 work tracked by `rad-g9yr`.
+2. Install the persistent user-test services:
+
+   ```sh
+   make services-install-user-test
+   make services-status-local
+   ```
+
+   The foreground sidecar must report Anthropic `claude-sonnet-5`; the media
+   worker preloads NVIDIA Parakeet TDT 0.6B v3 before reporting input readiness
+   and speaks with Kokoro `bf_emma`. Qwen and Whisper are explicit
+   development/rollback paths, not user-acceptance evidence.
+3. Run `make check-background-jobs-local` before any background-job scenario.
+   It verifies that both foreground and background user-test paths are pinned
+   to Sonnet 5 and that the configured sandbox revision is current.
+4. Install the current debug app on the Pixel, enter the HTTPS control URL and
+   bootstrap token once, and save the profile. The app enrolls with its own
+   installation credential, deletes the saved bootstrap ciphertext, and later
+   authenticates as that revocable device.
+5. Tap New conversation, wait for the worker-confirmed Listening state, and run
+   the scenarios in
+   [`docs/milestone-1-acceptance.md`](docs/milestone-1-acceptance.md).
+6. Retain the session ID and content-free telemetry, then cross-check the phone
+   observation against the stored envelopes, playback acknowledgements, and
+   tool audit. The independent local report remains structural evidence; only
+   the Sonnet 5 Pixel run is user-acceptance evidence.
 
 When the user refers to a source without its exact filename, Pi first calls the
 separately granted `list_sources` tool. It receives only a bounded catalog of
@@ -210,7 +220,7 @@ seconds so a long continuous instruction is not split into a cancelled first
 chunk and a retained tail; the limit remains a hard memory and processing bound.
 A subminimum burst resets after normal endpoint silence rather
 than holding one endpoint open. Maximum-duration candidates must also meet
-`RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO` (default `0.05`). Before Whisper, a
+`RADCLIFFE_ENDPOINT_MAX_MIN_VOICE_RATIO` (default `0.05`). Before decoding, a
 local Silero pass requires at least two speech-like windows. After decoding,
 generic segment evidence rejects non-finite, repetitive, no-speech, or very
 low-log-probability output. Rejection logs contain only aggregate confidence

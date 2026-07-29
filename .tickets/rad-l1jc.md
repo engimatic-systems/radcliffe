@@ -1,6 +1,6 @@
 ---
 id: rad-l1jc
-status: in_progress
+status: closed
 deps: [rad-wnwh, rad-8i08, rad-h2lv, rad-ihso, rad-g7di, rad-au20, rad-ghti]
 links: [rad-enbx, rad-rwfl, rad-ghti, rad-9e2z, rad-ncdz, rad-lezo, rad-6dal]
 created: 2026-07-13T01:37:26Z
@@ -63,3 +63,7 @@ Oxford-derived black-box harness now creates an isolated LiveKit session and tem
 **2026-07-16T21:55:56Z**
 
 2026-07-16 the unified make check-conformance-local gate is green: isolated durable-session/restart 24/24, false-turn rejection 14/14, STT 13/13 at macro WER 0.0, and full voice 34/34. Dashboard now indexes 85 latest green checks at ~/agent-share/radcliffe/voice-tests/index.html. Latest voice evidence: artifacts/voice-conformance/20260716T215340Z/report.json.
+
+**2026-07-27T14:54:57Z**
+
+Milestone 1 conformance acceptance is complete. The isolated external harness judges heard audio and cross-checks protocol state, envelopes, playback acknowledgements, tool audit, canonical bytes, and hashes. Latest structural report artifacts/voice-conformance/20260721T042015Z/report.json passes normal/replacement latency, <500 ms interruption, exact read_source/TTS bypass, and persisted pause/resume. Physical Pixel acceptance is separately established by the linked Android, playback, interruption, source, and Sonnet 5 tickets; Qwen is not used as user-test evidence. README now routes to docs/milestone-1-acceptance.md, which documents the current Sonnet 5/Parakeet/Kokoro tailnet procedure and evidence index.

@@ -1,6 +1,6 @@
 ---
 id: rad-0mws
-status: in_progress
+status: closed
 deps: []
 links: [rad-fvx9, rad-9e2z, rad-rc9v, rad-wbza]
 created: 2026-07-17T23:53:05Z
@@ -56,3 +56,7 @@ Barge-in lifecycle fix 2026-07-21: endpoint capture/STT completion is no longer 
 **2026-07-27T04:57:01Z**
 
 2026-07-26 follow-up phone session ses_1606ba8a43d29f5ba7463625bd551ba4 provides a second deterministic natural-pause failure. The complete first request was persisted at 04:50:29.868Z. The one-word addendum 'Verbatim.' began while generation 1 was active but before any model delta, synthesized audio, playback segment, tool call, or model envelope existed. Because speech resumed outside the 750 ms post-endpoint grace, production classified it as disposition=interrupted at 04:50:29.997Z. context_replay then excluded the first USER envelope, so generation 2 truly received only the addendum and denied having request context. This is not a swallowed-response problem. Mitigation should separate response cancellation from user-context retention: treat verified speech before any client-heard assistant output as semantic continuation regardless of endpoint grace, carry unanswered user fragments into the next effective userMessage, and retain accepted USER envelopes while persisting only client-heard assistant prefixes. Add exact phone-timing regressions for no model delta, generated-but-unheard output, partially heard output, and an actual replacement request.
+
+**2026-07-27T14:54:57Z**
+
+Final physical acceptance passed on 2026-07-27 with the deployed Parakeet/Sonnet 5/Kokoro profile. In fresh Pixel session ses_ef2e10ab50a9d4193cb9e74c35d6fa90, the first 20.675-second utterance retained its opening test preamble and complete first Gettysburg sentence; two later natural-pause fragments were independently persisted, and the model later recalled both the preamble and the three-message chronology without omissions or repeats. Worker evidence shows input readiness before capture, accepted high-confidence Parakeet transcriptions, and no dropped leading words. This closes the reopened production recurrence in addition to the already-passing owner-consented 0600 corpus, readiness, confidence, and diagnostic gates.

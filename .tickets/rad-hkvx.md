@@ -7,8 +7,7 @@ created: 2026-07-25T17:45:19Z
 type: bug
 priority: 2
 assignee: coopwilliams
-parent: rad-2tft
-tags: [radcliffe, tools, authorization]
+tags: [radcliffe, tools, authorization, post-m1]
 ---
 # Investigate first-attempt read_source denial on promoted job sources
 
@@ -21,4 +20,3 @@ In ses_853b2faaef57834a4319a00bd0adb0f6 the tool_calls audit shows paired denied
 ## Acceptance Criteria
 
 The denial is reproduced deterministically in a test; the root cause is identified rather than retried around; an authorized promoted job source is readable on first attempt; and the failure mode, if it remains reachable, surfaces a specific error instead of a generic permission denial.
-

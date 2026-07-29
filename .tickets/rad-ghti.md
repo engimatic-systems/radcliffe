@@ -1,6 +1,6 @@
 ---
 id: rad-ghti
-status: in_progress
+status: closed
 deps: [rad-wnwh, rad-58mt, rad-8i08, rad-0ekb, rad-ihso, rad-g7di]
 links: [rad-rwfl, rad-lo0t, rad-chaa, rad-214n, rad-nu8n, rad-l1jc, rad-enbx, rad-9e2z, rad-fvx9, rad-6dal]
 created: 2026-07-13T01:52:53Z
@@ -59,3 +59,7 @@ Deferred physical observation from 2026-07-21 session ses_ece6459346fbe944ae5be9
 **2026-07-21T15:54:25Z**
 
 2026-07-21 latest Pixel session reproduced the deferred truncation on its first turn. USER sequence 1 contained only Using your read source tool; USER sequence 4 says the intended preceding request was not captured by the microphone. Later 4.3s, 5.3s, and 16.6s turns were transcribed completely, narrowing the recurrence toward first-turn readiness or capture startup rather than a general long-input size cap. Do not start remediation until the background-job retry operator gate is resolved.
+
+**2026-07-27T14:54:57Z**
+
+Milestone 1 voice pipeline acceptance is complete. All pipeline children and linked P0 regressions are closed, including first-utterance retention and interrupted-user context. The selected user-test configuration is documented as Parakeet TDT 0.6B v3, Sonnet 5, and Kokoro bf_emma. Physical Sonnet 5 session ses_c3ef928b38a19c18d656c8d145d6986c at revision da0027b recorded nine consecutive first-audio times under five seconds (3.908, 4.501, 3.984, 4.137, 4.087, 4.780, 3.482, 3.928, 3.426 seconds). Current Pixel acceptance also verifies ordered STT envelopes, streamed synthesis, playback-ledger segments, speech/tap cancellation, replacement playback, and long-pause preservation. Fake-provider and external heard-output coverage remains green.
