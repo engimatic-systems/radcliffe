@@ -70,7 +70,8 @@ describe("PiAgentOrchestrator", () => {
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("No Emojis");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("Do not use emoji characters");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("run_job");
-    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("5 words or less");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("SINGLE SENTENCE");
+    expect(RADCLIFFE_SYSTEM_PROMPT).toContain("no additional clauses or information");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("when a job is done, say so very succinctly");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("without a preamble");
     expect(RADCLIFFE_SYSTEM_PROMPT).toContain("foreground conversation");
@@ -1049,14 +1050,11 @@ describe("PiAgentOrchestrator", () => {
             type: "text",
             text:
               "The background job was accepted. " +
-              "Describe this job tool action in one short sentence using only a few words. " +
-              "Then provide any additional useful context the user requested; do not omit it. " +
+              "Acknowledge this job in one brief sentence with no additional clauses or information. " +
               "Do not quote job identifiers or serialized job metadata.",
           },
         ]);
-        return fauxAssistantMessage(
-          "I started it. While that runs, the earlier comparison still favors the smaller design.",
-        );
+        return fauxAssistantMessage("Working on it.");
       },
     ]);
     const tool = vi.fn(async () => ({
@@ -1090,11 +1088,11 @@ describe("PiAgentOrchestrator", () => {
         .filter((event) => event.type === "model_delta")
         .map((event) => ("text" in event ? event.text : ""))
         .join(""),
-    ).toBe("I started it. While that runs, the earlier comparison still favors the smaller design.");
+    ).toBe("Working on it.");
     expect(events).toContainEqual({
       type: "model_complete",
       requestId: "request-1",
-      text: "I started it. While that runs, the earlier comparison still favors the smaller design.",
+      text: "Working on it.",
     });
     expect(
       JSON.stringify(
