@@ -61,6 +61,8 @@ from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
+_SOURCE_CHUNK_CHARS = 320
+_SOURCE_CLAUSE_BOUNDARY = re.compile(r"(?:\n+|[,:;—–-]\s+)")
 _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
 _REGISTERED_TOOL_NAMES = frozenset(
     {
@@ -213,6 +215,15 @@ class _PreparedSpeech:
 
 
 @dataclass(frozen=True, slots=True)
+class _PreparedSourceSpeech:
+    """Bounded audio for one part of a stable source-render boundary."""
+
+    source_segment_id: str
+    completes_boundary: bool
+    prepared: _PreparedSpeech
+
+
+@dataclass(frozen=True, slots=True)
 class _QueuedModelSpeech:
     """A model chunk awaiting local synthesis and ordered playback."""
 
@@ -241,6 +252,7 @@ class _PendingPlayback:
     canonical_text: str
     source: SourceKind
     source_envelope: MessageEnvelope | None = None
+    completes_source_boundary: bool = True
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
     retry: asyncio.Event = field(default_factory=asyncio.Event)
     started: bool = False
@@ -1127,19 +1139,21 @@ class VoicePipeline:
         """Bound queued text while surfacing a failed speech worker without deadlocking."""
 
         put = asyncio.create_task(queue.put(item))
-        done, _pending = await asyncio.wait(
-            {put, worker},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if worker in done:
+        try:
+            done, _pending = await asyncio.wait(
+                {put, worker},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if worker in done:
+                await worker
+                if not allow_completion:
+                    raise RuntimeError("model speech worker stopped before the response ended")
+                return
+            await put
+        finally:
             if not put.done():
                 put.cancel()
-                await asyncio.gather(put, return_exceptions=True)
-            await worker
-            if not allow_completion:
-                raise RuntimeError("model speech worker stopped before the response ended")
-            return
-        await put
+            await asyncio.gather(put, return_exceptions=True)
 
     async def _prepare_model_speech(
         self,
@@ -1304,28 +1318,121 @@ class VoicePipeline:
         self,
         segments: Sequence[RenderSegment],
         turn: _ActiveTurn,
-        queue: asyncio.Queue[_PreparedSpeech | BaseException],
+        queue: asyncio.Queue[_PreparedSourceSpeech | BaseException],
     ) -> None:
         """Synthesize ahead of playback. The queue's maxsize is what bounds the look-ahead."""
 
         try:
             for segment in segments:
                 delivery = await self._segment_delivery(segment, turn)
-                audio = await self._synthesize(segment.canonical_text, delivery)
-                await queue.put(
-                    _PreparedSpeech(
-                        segment_id=segment.segment_id,
-                        boundary_index=segment.boundary_index,
-                        canonical_text=segment.canonical_text,
-                        delivery=delivery,
-                        audio=audio,
-                    )
+                pending_chunks = list(
+                    self._source_text_chunks(segment.canonical_text)
+                    if self.client_playback_acknowledgements
+                    else (segment.canonical_text,)
                 )
+                split = len(pending_chunks) > 1
+                part_index = 0
+                while pending_chunks:
+                    canonical_text = pending_chunks.pop(0)
+                    audio = await self._synthesize(canonical_text, delivery)
+                    if self.publisher.duration_ms(audio) > self._maximum_segment_duration_ms:
+                        halves = self._split_source_text(canonical_text)
+                        if halves is None:
+                            raise RuntimeError(
+                                f"source boundary {segment.boundary_index} cannot fit "
+                                "the receiver duration capacity"
+                            )
+                        split = True
+                        pending_chunks[0:0] = halves
+                        continue
+                    completes_boundary = not pending_chunks
+                    segment_id = (
+                        f"{segment.segment_id}:part:{part_index}"
+                        if split or not completes_boundary
+                        else segment.segment_id
+                    )
+                    await queue.put(
+                        _PreparedSourceSpeech(
+                            source_segment_id=segment.segment_id,
+                            completes_boundary=completes_boundary,
+                            prepared=_PreparedSpeech(
+                                segment_id=segment_id,
+                                boundary_index=segment.boundary_index,
+                                canonical_text=canonical_text,
+                                delivery=delivery,
+                                audio=audio,
+                            ),
+                        )
+                    )
+                    part_index += 1
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - handed to the reader rather than swallowed
             # Without this the reader would wait forever on a queue nobody will fill again.
             await queue.put(error)
+
+    @staticmethod
+    def _source_text_chunks(canonical_text: str) -> tuple[str, ...]:
+        """Split long prose deterministically before synthesis, preserving every character."""
+
+        chunks: list[str] = []
+        remainder = canonical_text
+        while len(remainder) > _SOURCE_CHUNK_CHARS:
+            window = remainder[:_SOURCE_CHUNK_CHARS]
+            minimum = _SOURCE_CHUNK_CHARS // 2
+            clause_boundaries = [
+                match.end()
+                for match in _SOURCE_CLAUSE_BOUNDARY.finditer(window)
+                if match.end() >= minimum
+            ]
+            whitespace = max(
+                window.rfind(" ", minimum),
+                window.rfind("\t", minimum),
+            )
+            boundary = (
+                clause_boundaries[-1]
+                if clause_boundaries
+                else whitespace + 1
+                if whitespace >= minimum
+                else _SOURCE_CHUNK_CHARS
+            )
+            chunks.append(remainder[:boundary])
+            remainder = remainder[boundary:]
+        if remainder:
+            chunks.append(remainder)
+        return tuple(chunks)
+
+    @staticmethod
+    def _split_source_text(canonical_text: str) -> tuple[str, str] | None:
+        """Bisect audio that still exceeds a receiver's negotiated duration."""
+
+        if len(canonical_text) < 2:
+            return None
+        midpoint = len(canonical_text) // 2
+        left_whitespace = max(
+            canonical_text.rfind(" ", 0, midpoint + 1),
+            canonical_text.rfind("\t", 0, midpoint + 1),
+            canonical_text.rfind("\n", 0, midpoint + 1),
+        )
+        right_candidates = [
+            position
+            for position in (
+                canonical_text.find(" ", midpoint),
+                canonical_text.find("\t", midpoint),
+                canonical_text.find("\n", midpoint),
+            )
+            if position >= 0
+        ]
+        right_whitespace = min(right_candidates, default=-1)
+        boundaries = [
+            boundary
+            for boundary in (left_whitespace + 1, right_whitespace + 1)
+            if 0 < boundary < len(canonical_text)
+        ]
+        boundary = (
+            min(boundaries, key=lambda item: abs(item - midpoint)) if boundaries else midpoint
+        )
+        return canonical_text[:boundary], canonical_text[boundary:]
 
     async def _speak_plan(
         self, envelope: MessageEnvelope, operation: Operation, turn: _ActiveTurn
@@ -1343,7 +1450,7 @@ class VoicePipeline:
             for segment in remaining:
                 turn.next_source_boundary = segment.boundary_index + 1
             return
-        queue: asyncio.Queue[_PreparedSpeech | BaseException] = asyncio.Queue(
+        queue: asyncio.Queue[_PreparedSourceSpeech | BaseException] = asyncio.Queue(
             maxsize=self.source_prefetch_depth
         )
         prefetch = asyncio.create_task(self._prefetch_source_audio(spoken, turn, queue))
@@ -1354,22 +1461,30 @@ class VoicePipeline:
                     # boundary anyway so resume positions keep lining up with the document.
                     turn.next_source_boundary = segment.boundary_index + 1
                     continue
-                prepared = await queue.get()
-                if isinstance(prepared, BaseException):
-                    raise prepared
-                if prepared.segment_id != segment.segment_id:
-                    raise RuntimeError("prefetched audio arrived out of order")
-                await self._speak(
-                    segment.canonical_text,
-                    segment.segment_id,
-                    segment.boundary_index,
-                    operation,
-                    turn,
-                    source=SourceKind.TEXT_SOURCE,
-                    wait_for_playback=True,
-                    source_envelope=envelope,
-                    prepared=prepared,
-                )
+                while True:
+                    source_audio = await queue.get()
+                    if isinstance(source_audio, BaseException):
+                        raise source_audio
+                    if (
+                        source_audio.source_segment_id != segment.segment_id
+                        or source_audio.prepared.boundary_index != segment.boundary_index
+                    ):
+                        raise RuntimeError("prefetched source audio arrived out of order")
+                    prepared = source_audio.prepared
+                    await self._speak(
+                        prepared.canonical_text,
+                        prepared.segment_id,
+                        segment.boundary_index,
+                        operation,
+                        turn,
+                        source=SourceKind.TEXT_SOURCE,
+                        wait_for_playback=True,
+                        source_envelope=envelope,
+                        prepared=prepared,
+                        completes_source_boundary=source_audio.completes_boundary,
+                    )
+                    if source_audio.completes_boundary:
+                        break
                 turn.next_source_boundary = segment.boundary_index + 1
         finally:
             # An interruption unwinds through here, discarding every sentence rendered ahead.
@@ -1458,6 +1573,7 @@ class VoicePipeline:
         wait_for_playback: bool = False,
         source_envelope: MessageEnvelope | None = None,
         prepared: _PreparedSpeech | None = None,
+        completes_source_boundary: bool = True,
     ) -> None:
         self._assert_owner(turn, operation)
         synth_started = monotonic()
@@ -1493,6 +1609,7 @@ class VoicePipeline:
                 canonical_text,
                 source,
                 source_envelope,
+                completes_source_boundary,
             )
             if self.client_playback_acknowledgements:
                 if self.events is None:
@@ -1843,7 +1960,9 @@ class VoicePipeline:
             "radcliffe.playback.position_ms": str(pending.latest_position_ms),
             "radcliffe.playback.duration_ms": str(pending.duration_ms),
             "radcliffe.playback.status": status.value,
-            PLAYBACK_COMPLETE_METADATA: str(status is PlaybackStatus.COMPLETED).lower(),
+            PLAYBACK_COMPLETE_METADATA: str(
+                status is PlaybackStatus.COMPLETED and pending.completes_source_boundary
+            ).lower(),
         }
         async with self._append_lock:
             envelope = MessageEnvelope.text(

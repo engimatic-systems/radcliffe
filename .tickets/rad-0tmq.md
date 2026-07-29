@@ -39,3 +39,7 @@ Automated verification for the Phase C slice: full Python suite 466 passed/1 ski
 **2026-07-29T02:17:05Z**
 
 Physical Phase C reconnect test passed on 2026-07-28: operator cut the connection immediately after hearing 'four'; after reconnect playback resumed with 'four' rather than skipping or duplicating an earlier completed segment. Follow-up trace profiling found completion-to-next-start gaps of 1.3-1.6 seconds: 0.6-0.95 seconds was next-segment TTS because model speech still synthesized behind the acknowledgement gate, with the remainder in device/data/media handoff. Model speech now keeps exactly one synthesized local segment ahead while retaining the one-attempt receiver admission window; automated UAT is green and physical gap UAT is pending.
+
+**2026-07-29T02:34:44Z**
+
+Physical model-gap UAT passed: operator reports the remaining gaps are shorter and acceptable. The same run exposed silent deterministic source reads. Trace and tool audit proved six native read_source calls succeeded and returned the full gwern-nicotine.md envelope; the first rendered boundary exceeded the new 30-second receiver capacity and was rejected after synthesis but before playback admission. The worker now divides oversized source boundaries into bounded playback parts while retaining the original logical resume boundary; only the final part advances it. The trace also exposed and the fix closes a cancelled model-queue put-task leak. Full Python suite is green; physical source-read UAT pending.

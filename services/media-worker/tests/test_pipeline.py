@@ -20,6 +20,7 @@ from radcliffe_domain.projection import (
     TURN_DISPOSITION_METADATA,
     TURN_ID_METADATA,
     context_replay,
+    resume_boundary,
 )
 from radcliffe_domain.session import (
     ConversationState,
@@ -86,6 +87,27 @@ class FakePublisher:
 
     async def flush(self) -> None:
         self.flushed = True
+
+
+class ScaledDurationPublisher(FakePublisher):
+    milliseconds_per_byte = 100
+
+    def duration_ms(self, pcm_audio: bytes) -> int:
+        return len(pcm_audio) * self.milliseconds_per_byte
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        await super().publish(
+            segment_id,
+            pcm_audio,
+            wait_for_playback=wait_for_playback,
+        )
+        return self.duration_ms(pcm_audio)
 
 
 class FailFirstPublisher(FakePublisher):
@@ -1735,6 +1757,90 @@ async def test_client_audio_sink_is_authoritative_for_source_boundary(tmp_path) 
         ("position", playback_id),
         ("completed", playback_id),
     ]
+
+
+@pytest.mark.asyncio
+async def test_long_source_is_bounded_before_device_playback_admission(tmp_path) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    canonical = ("long source words " * 32).strip() + "."
+    (root / "demo.md").write_text(canonical)
+    gateway_store = EventStore(tmp_path / "gateway.sqlite3")
+    await gateway_store.migrate()
+    worker_store = EventStore(tmp_path / "worker.sqlite3")
+    await worker_store.migrate()
+    grant = CapabilityGrant(
+        grant_id="grant-1",
+        session_id="s1",
+        generation=1,
+        readable_roots=(root,),
+        allowed_tools=frozenset({"read_source"}),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    events = FakeEvents()
+    publisher = ScaledDurationPublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        worker_store,
+        SourceOrchestrator(ToolGateway(gateway_store), grant),
+        FakeSynthesizer(),
+        publisher,
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Read demo.md"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    acknowledged = 0
+    while not turn.done():
+        for _ in range(1_000):
+            if len(events.playback_segments) > acknowledged or turn.done():
+                break
+            await asyncio.sleep(0.001)
+        if turn.done():
+            break
+        assert len(events.playback_segments) > acknowledged
+        (
+            operation,
+            playback_id,
+            segment_id,
+            boundary_index,
+            duration_ms,
+            *_,
+        ) = events.playback_segments[acknowledged]
+        assert duration_ms <= 30_000
+        assert boundary_index == 0
+        for suffix, status, position_ms, boundary in (
+            ("started", PlaybackStatus.STARTED, 0, boundary_index),
+            ("completed", PlaybackStatus.COMPLETED, duration_ms, boundary_index + 1),
+        ):
+            assert await pipeline.playback_acknowledgement(
+                PlaybackAcknowledgement(
+                    acknowledgement_id=f"device-{acknowledged}-{suffix}",
+                    operation=operation,
+                    segment_id=segment_id,
+                    status=status,
+                    position_ms=position_ms,
+                    boundary_index=boundary,
+                    occurred_at=datetime.now(UTC),
+                    playback_id=playback_id,
+                )
+            )
+        acknowledged += 1
+
+    await asyncio.wait_for(turn, timeout=1)
+
+    assert acknowledged > 1
+    assert all(":part:" in item[2] for item in events.playback_segments)
+    assert b"".join(publisher.audio).decode() == canonical
+    assert (
+        resume_boundary(
+            await worker_store.replay("s1"),
+            hashlib.sha256(canonical.encode()).digest(),
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio

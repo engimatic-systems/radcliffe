@@ -88,6 +88,29 @@ class BlockingPublisher:
         ]
 
 
+class ScaledDurationPublisher(BlockingPublisher):
+    """Makes the real fixture's long prose exceed the receiver's 30-second cap."""
+
+    milliseconds_per_byte = 100
+
+    def duration_ms(self, pcm_audio: bytes) -> int:
+        return len(pcm_audio) * self.milliseconds_per_byte
+
+    async def publish(
+        self,
+        segment_id: str,
+        pcm_audio: bytes,
+        *,
+        wait_for_playback: bool = False,
+    ) -> int:
+        await super().publish(
+            segment_id,
+            pcm_audio,
+            wait_for_playback=wait_for_playback,
+        )
+        return self.duration_ms(pcm_audio)
+
+
 class ReadingOrchestrator:
     def __init__(self, gateway: ToolGateway, grant: CapabilityGrant, path: str) -> None:
         self.gateway = gateway
@@ -134,6 +157,7 @@ async def build_pipeline(
     tmp_path: Path,
     *,
     synthesizer: RecordingSynthesizer | None = None,
+    publisher: BlockingPublisher | None = None,
 ) -> tuple[VoicePipeline, BlockingPublisher, RecordingSynthesizer, EventStore]:
     root = tmp_path / "sources"
     root.mkdir()
@@ -151,7 +175,7 @@ async def build_pipeline(
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     orchestrator = ReadingOrchestrator(ToolGateway(gateway_store), grant, "nicotine.md")
-    publisher = BlockingPublisher()
+    publisher = publisher or BlockingPublisher()
     tts = synthesizer or RecordingSynthesizer()
     pipeline = VoicePipeline("s1", worker_store, orchestrator, tts, publisher)
     await pipeline.start()
@@ -187,6 +211,46 @@ async def test_synthesis_runs_ahead_of_playback(tmp_path) -> None:
 
     publisher.release.set()
     await asyncio.wait_for(turn, timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_long_source_boundaries_are_split_below_receiver_duration_capacity(
+    tmp_path,
+) -> None:
+    publisher = ScaledDurationPublisher()
+    pipeline, _, tts, _ = await build_pipeline(tmp_path, publisher=publisher)
+
+    await pipeline.handle_transcript("Read me the nicotine article")
+
+    source_audio = [
+        (segment_id, text)
+        for segment_id, text in publisher.spoken
+        if segment_id.startswith("source:")
+    ]
+    assert source_audio
+    assert any(":part:" in segment_id for segment_id, _text in source_audio)
+    assert all(publisher.duration_ms(text.encode()) <= 30_000 for _segment_id, text in source_audio)
+    accepted_synthesis = [
+        text for text in tts.inputs if publisher.duration_ms(text.encode()) <= 30_000
+    ]
+    assert [text for _segment_id, text in source_audio] == accepted_synthesis
+
+
+@pytest.mark.asyncio
+async def test_source_subsegment_does_not_advance_the_logical_resume_boundary(
+    tmp_path,
+) -> None:
+    publisher = ScaledDurationPublisher()
+    publisher.block_at_boundary = 1
+    pipeline, _, _, store = await build_pipeline(tmp_path, publisher=publisher)
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Read me the nicotine article"))
+    await asyncio.wait_for(publisher.reached.wait(), timeout=5)
+
+    assert await heard_boundaries(store) == [0]
+
+    await pipeline.barge_in()
+    await asyncio.wait_for(turn, timeout=5)
 
 
 @pytest.mark.asyncio

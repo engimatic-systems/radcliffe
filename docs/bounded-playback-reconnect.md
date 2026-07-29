@@ -61,6 +61,14 @@ publish media, or advance a boundary. Only the ordered playback worker can cross
 that admission seam after Android returns the single receiver credit. Cancellation
 discards the prepared segment.
 
+If one deterministic source-render boundary would exceed the negotiated duration,
+the worker divides its canonical spoken text into bounded playback parts. Each part
+has a distinct segment identity but retains the original logical boundary index.
+Completed intermediate parts persist their heard text without advancing that
+boundary; only the final part marks it complete. An interruption therefore replays
+the logical boundary rather than skipping unheard text, and existing sentence-based
+resume indices remain stable.
+
 On `RoomEvent.Reconnecting`, Android mutes playback, removes its uncertain local
 attempt, and retains the latest acknowledgement for each recent attempt. After
 connection it sends `Reconnect`. The worker flushes its realtime output before
