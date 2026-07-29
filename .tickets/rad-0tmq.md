@@ -1,6 +1,6 @@
 ---
 id: rad-0tmq
-status: in_progress
+status: closed
 deps: []
 links: [rad-g9yr, rad-ig6k, rad-u6lm]
 created: 2026-07-28T21:37:14Z
@@ -43,3 +43,7 @@ Physical Phase C reconnect test passed on 2026-07-28: operator cut the connectio
 **2026-07-29T02:34:44Z**
 
 Physical model-gap UAT passed: operator reports the remaining gaps are shorter and acceptable. The same run exposed silent deterministic source reads. Trace and tool audit proved six native read_source calls succeeded and returned the full gwern-nicotine.md envelope; the first rendered boundary exceeded the new 30-second receiver capacity and was rejected after synthesis but before playback admission. The worker now divides oversized source boundaries into bounded playback parts while retaining the original logical resume boundary; only the final part advances it. The trace also exposed and the fix closes a cancelled model-queue put-task leak. Full Python suite is green; physical source-read UAT pending.
+
+**2026-07-29T02:46:00Z**
+
+Final physical source UAT passed in session ses_f6dffefb08271664a5f815a5fd4709fb. The first read_source call admitted logical boundary 0 as three bounded parts, completed boundary 1, and stopped on operator speech. The next read_source call began at boundary 2, audibly starting 'The psychological effects of nicotine...', exactly the next sentence. This confirms native tool success, bounded source subdivision, interruption, and durable next-boundary resume. The acceptance instruction had incorrectly placed 'I looked briefly...' after 'gateway drug'; the operator corrected it. Operator accepts this temporary-disconnect vertical slice and directs ticket closure and PR handoff. The still-open child tickets retain the explicitly unimplemented formal model, process-restart, route-change, and exhaustive chaos scope; this closure does not claim those follow-ups are complete.
