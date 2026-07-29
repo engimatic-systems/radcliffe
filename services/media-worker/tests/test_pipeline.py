@@ -2591,6 +2591,38 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
 
 
 @pytest.mark.asyncio
+async def test_model_audio_prefetch_is_one_segment_ahead_of_device_admission(tmp_path) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    synthesizer = FakeSynthesizer()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        ExactCountOrchestrator(),
+        synthesizer,
+        FakePublisher(),
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Count without long pauses"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    for _ in range(100):
+        if len(synthesizer.inputs) == 2:
+            break
+        await asyncio.sleep(0)
+
+    # The next segment is local audio already, but it has not crossed the admission gate.
+    assert len(synthesizer.inputs) == 2
+    assert len(events.playback_segments) == 1
+
+    await pipeline.barge_in()
+    await asyncio.wait_for(turn, timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_reconnect_replays_only_the_unfinished_model_segment_before_later_speech(
     tmp_path,
 ) -> None:

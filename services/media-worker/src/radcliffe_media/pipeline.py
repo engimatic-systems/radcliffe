@@ -213,6 +213,17 @@ class _PreparedSpeech:
 
 
 @dataclass(frozen=True, slots=True)
+class _QueuedModelSpeech:
+    """A model chunk awaiting local synthesis and ordered playback."""
+
+    segment_id: str
+    boundary_index: int
+    canonical_text: str
+    completed_display_text: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class _ModelPlaybackSegment:
     segment_id: str
     boundary_index: int
@@ -863,174 +874,230 @@ class VoicePipeline:
             ],
         }
         source_rendered = False
-        async for event in self.orchestrator.turn(request, turn.cancelled):
-            if turn.cancelled.is_set():
-                break
-            self._assert_owner(turn, operation)
-            if event.type == "tool_start":
-                turn.tool_started = True
-            elif event.type == "model_delta" and not source_rendered:
-                display_delta = _canonical_model_text(str(event.payload.get("text", "")))
-                raw_spoken = event.payload.get("spokenText")
-                spoken_delta = _canonical_model_text(
-                    raw_spoken if isinstance(raw_spoken, str) else display_delta
-                )
-                if not display_delta and not spoken_delta:
-                    continue
-                if turn.first_model_delta_at is None:
-                    turn.first_model_delta_at = monotonic()
-                    self._log_phase(
-                        turn,
-                        "first_model_delta",
-                        turn.first_model_delta_at - turn.started_at,
+        model_speech_queue: asyncio.Queue[_QueuedModelSpeech | None] | None = None
+        model_speech_task: asyncio.Task[None] | None = None
+        next_queued_model_boundary = turn.next_model_boundary
+
+        async def finish_model_speech() -> None:
+            nonlocal model_speech_queue, model_speech_task
+            if model_speech_queue is None or model_speech_task is None:
+                return
+            queue = model_speech_queue
+            task = model_speech_task
+            await self._queue_model_speech(queue, None, task, allow_completion=True)
+            await task
+            model_speech_queue = None
+            model_speech_task = None
+
+        try:
+            async for event in self.orchestrator.turn(request, turn.cancelled):
+                if turn.cancelled.is_set():
+                    break
+                self._assert_owner(turn, operation)
+                if event.type == "tool_start":
+                    # Preserve the original ordering: any spoken preamble finishes before
+                    # the tool transition is handled.
+                    await finish_model_speech()
+                    turn.tool_started = True
+                elif event.type == "model_delta" and not source_rendered:
+                    display_delta = _canonical_model_text(str(event.payload.get("text", "")))
+                    raw_spoken = event.payload.get("spokenText")
+                    spoken_delta = _canonical_model_text(
+                        raw_spoken if isinstance(raw_spoken, str) else display_delta
                     )
-                turn.model_text += display_delta
-                raw_categories = event.payload.get("spokenCategories")
-                categories = (
-                    sorted(
-                        {
-                            category
-                            for category in raw_categories
-                            if isinstance(category, str) and category in _SPOKEN_OUTPUT_CATEGORIES
-                        }
+                    if not display_delta and not spoken_delta:
+                        continue
+                    if turn.first_model_delta_at is None:
+                        turn.first_model_delta_at = monotonic()
+                        self._log_phase(
+                            turn,
+                            "first_model_delta",
+                            turn.first_model_delta_at - turn.started_at,
+                        )
+                    turn.model_text += display_delta
+                    raw_categories = event.payload.get("spokenCategories")
+                    categories = (
+                        sorted(
+                            {
+                                category
+                                for category in raw_categories
+                                if isinstance(category, str)
+                                and category in _SPOKEN_OUTPUT_CATEGORIES
+                            }
+                        )
+                        if isinstance(raw_categories, list)
+                        else []
                     )
-                    if isinstance(raw_categories, list)
-                    else []
-                )
-                for category in categories:
-                    self.telemetry.emit(
-                        component="media_worker",
-                        event="spoken_output",
-                        outcome="succeeded",
-                        session_id=self.engine.session_id,
-                        generation=operation.generation,
-                        phase=category,
-                        operation=operation,
-                    )
-                if categories:
-                    existing = set(
-                        turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(",")
-                    )
-                    existing.discard("")
-                    turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
-                        sorted(existing | set(categories))
-                    )
-                if not source_rendered:
-                    await self._speak_model_segment(
+                    for category in categories:
+                        self.telemetry.emit(
+                            component="media_worker",
+                            event="spoken_output",
+                            outcome="succeeded",
+                            session_id=self.engine.session_id,
+                            generation=operation.generation,
+                            phase=category,
+                            operation=operation,
+                        )
+                    if categories:
+                        existing = set(
+                            turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(
+                                ","
+                            )
+                        )
+                        existing.discard("")
+                        turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
+                            sorted(existing | set(categories))
+                        )
+                    chunks = self._model_speech_chunks(
                         display_delta,
                         spoken_delta,
                         operation,
-                        turn,
+                        next_queued_model_boundary,
                     )
-            elif event.type == "tool_end" and bool(event.payload.get("isError")):
-                raw_tool_name = event.payload.get("toolName")
-                tool_name = (
-                    raw_tool_name
-                    if isinstance(raw_tool_name, str) and raw_tool_name in _REGISTERED_TOOL_NAMES
-                    else "unknown"
-                )
-                result = event.payload.get("result")
-                result_details = result.get("details") if isinstance(result, dict) else None
-                recoverable = (
-                    isinstance(result_details, dict)
-                    and result_details.get("recoverable") is True
-                    and result_details.get("errorCode") == "invalid_arguments"
-                )
-                raw_error_code = (
-                    result_details.get("errorCode") if isinstance(result_details, dict) else None
-                )
-                error_code = (
-                    raw_error_code
-                    if isinstance(raw_error_code, str) and raw_error_code in _TOOL_FAILURE_MESSAGES
-                    else "execution_failed"
-                )
-                raw_field = (
-                    result_details.get("field")
-                    if recoverable and isinstance(result_details, dict)
-                    else None
-                )
-                field = (
-                    raw_field
-                    if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
-                    else "unknown"
-                )
-                metadata = {
-                    TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
-                    TURN_ID_METADATA: turn.turn_id,
-                    "radcliffe.tool.name": tool_name,
-                    "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
-                }
-                if recoverable:
-                    metadata["radcliffe.tool.error_code"] = "invalid_arguments"
-                    metadata["radcliffe.tool.invalid_field"] = field
-                else:
-                    metadata["radcliffe.tool.error_code"] = error_code
-                await self._append_text(
-                    SourceKind.SYSTEM,
-                    (
-                        "Tool arguments rejected"
-                        if recoverable
-                        else _TOOL_FAILURE_MESSAGES[error_code]
-                    ),
-                    metadata,
-                )
-                self.telemetry.emit(
-                    component="media_worker",
-                    event="tool_call",
-                    outcome="failed",
-                    session_id=self.engine.session_id,
-                    generation=operation.generation,
-                    phase=tool_name,
-                    operation=operation,
-                )
-            elif event.type == "tool_end":
-                source = await self._resolve_source(event.payload.get("result"))
-                if source is not None:
-                    if self.engine.state is ConversationState.THINKING:
-                        await self._transition(
-                            ConversationState.READING,
-                            "source authorized",
-                            operation,
-                            turn,
+                    if chunks and model_speech_task is None:
+                        model_speech_queue = asyncio.Queue(maxsize=1)
+                        model_speech_task = asyncio.create_task(
+                            self._speak_model_queue(
+                                model_speech_queue,
+                                operation,
+                                turn,
+                            ),
+                            name="radcliffe-model-speech",
                         )
-                    turn.next_source_boundary = await self._start_boundary(
-                        source,
-                        self._requested_start_boundary(event.payload.get("result")),
+                    if model_speech_queue is not None and model_speech_task is not None:
+                        for chunk in chunks:
+                            await self._queue_model_speech(
+                                model_speech_queue,
+                                chunk,
+                                model_speech_task,
+                            )
+                    next_queued_model_boundary += len(chunks)
+                    if not self.client_playback_acknowledgements:
+                        # Preserve the legacy in-process contract: handling a model delta does
+                        # not return to the producer until that delta has been published.
+                        await finish_model_speech()
+                elif event.type == "tool_end" and bool(event.payload.get("isError")):
+                    raw_tool_name = event.payload.get("toolName")
+                    tool_name = (
+                        raw_tool_name
+                        if isinstance(raw_tool_name, str)
+                        and raw_tool_name in _REGISTERED_TOOL_NAMES
+                        else "unknown"
                     )
-                    await self._speak_plan(source, operation, turn)
-                    source_rendered = True
-                else:
                     result = event.payload.get("result")
-                    if event.payload.get("toolName") == "run_job":
-                        await self._persist_background_job_reference(result, turn)
-                    if await self._handle_session_action_tool_result(result, turn):
-                        await self._finish_handoff_from_turn(turn)
-                        return
-                    await self._persist_configuration_update(result, turn)
-            elif event.type == "model_complete" and not source_rendered:
-                turn.model_text = _canonical_model_text(
-                    str(event.payload.get("text", turn.model_text))
-                )
-            elif event.type == "error":
-                if event.payload.get("code") == "cloud_budget_exhausted":
+                    result_details = result.get("details") if isinstance(result, dict) else None
+                    recoverable = (
+                        isinstance(result_details, dict)
+                        and result_details.get("recoverable") is True
+                        and result_details.get("errorCode") == "invalid_arguments"
+                    )
+                    raw_error_code = (
+                        result_details.get("errorCode")
+                        if isinstance(result_details, dict)
+                        else None
+                    )
+                    error_code = (
+                        raw_error_code
+                        if isinstance(raw_error_code, str)
+                        and raw_error_code in _TOOL_FAILURE_MESSAGES
+                        else "execution_failed"
+                    )
+                    raw_field = (
+                        result_details.get("field")
+                        if recoverable and isinstance(result_details, dict)
+                        else None
+                    )
+                    field = (
+                        raw_field
+                        if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
+                        else "unknown"
+                    )
+                    metadata = {
+                        TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+                        TURN_ID_METADATA: turn.turn_id,
+                        "radcliffe.tool.name": tool_name,
+                        "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
+                    }
+                    if recoverable:
+                        metadata["radcliffe.tool.error_code"] = "invalid_arguments"
+                        metadata["radcliffe.tool.invalid_field"] = field
+                    else:
+                        metadata["radcliffe.tool.error_code"] = error_code
                     await self._append_text(
                         SourceKind.SYSTEM,
-                        "Cloud session budget exhausted",
-                        {TURN_EVENT_METADATA: PROVIDER_BUDGET_EVENT},
-                        notify=True,
+                        (
+                            "Tool arguments rejected"
+                            if recoverable
+                            else _TOOL_FAILURE_MESSAGES[error_code]
+                        ),
+                        metadata,
                     )
-                raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
+                    self.telemetry.emit(
+                        component="media_worker",
+                        event="tool_call",
+                        outcome="failed",
+                        session_id=self.engine.session_id,
+                        generation=operation.generation,
+                        phase=tool_name,
+                        operation=operation,
+                    )
+                elif event.type == "tool_end":
+                    source = await self._resolve_source(event.payload.get("result"))
+                    if source is not None:
+                        await finish_model_speech()
+                        if self.engine.state is ConversationState.THINKING:
+                            await self._transition(
+                                ConversationState.READING,
+                                "source authorized",
+                                operation,
+                                turn,
+                            )
+                        turn.next_source_boundary = await self._start_boundary(
+                            source,
+                            self._requested_start_boundary(event.payload.get("result")),
+                        )
+                        await self._speak_plan(source, operation, turn)
+                        source_rendered = True
+                    else:
+                        result = event.payload.get("result")
+                        if event.payload.get("toolName") == "run_job":
+                            await self._persist_background_job_reference(result, turn)
+                        if await self._handle_session_action_tool_result(result, turn):
+                            await finish_model_speech()
+                            await self._finish_handoff_from_turn(turn)
+                            return
+                        await self._persist_configuration_update(result, turn)
+                elif event.type == "model_complete" and not source_rendered:
+                    await finish_model_speech()
+                    turn.model_text = _canonical_model_text(
+                        str(event.payload.get("text", turn.model_text))
+                    )
+                elif event.type == "error":
+                    if event.payload.get("code") == "cloud_budget_exhausted":
+                        await self._append_text(
+                            SourceKind.SYSTEM,
+                            "Cloud session budget exhausted",
+                            {TURN_EVENT_METADATA: PROVIDER_BUDGET_EVENT},
+                            notify=True,
+                        )
+                    raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
+
+            await finish_model_speech()
+        finally:
+            if model_speech_task is not None:
+                model_speech_task.cancel()
+                await asyncio.gather(model_speech_task, return_exceptions=True)
 
         self._assert_owner(turn, operation)
         await self._finish_completed(turn)
 
-    async def _speak_model_segment(
+    def _model_speech_chunks(
         self,
         display_text: str,
         spoken_text: str,
         operation: Operation,
-        turn: _ActiveTurn,
-    ) -> None:
+        starting_boundary: int,
+    ) -> tuple[_QueuedModelSpeech, ...]:
         chunks: list[tuple[str, str]] = []
         remainder = spoken_text
         while chunk := self._next_model_chunk(remainder):
@@ -1038,14 +1105,106 @@ class VoicePipeline:
             remainder = remainder[len(chunk) :]
         if remainder:
             chunks.append((remainder, "model response ready"))
-        for index, (chunk, reason) in enumerate(chunks):
-            await self._speak_model_chunk(
-                chunk,
-                operation,
-                turn,
-                reason,
+        return tuple(
+            _QueuedModelSpeech(
+                segment_id=f"{operation.operation_id}:model:{starting_boundary + index}",
+                boundary_index=starting_boundary + index,
+                canonical_text=chunk,
                 completed_display_text=display_text if index == len(chunks) - 1 else "",
+                reason=reason,
             )
+            for index, (chunk, reason) in enumerate(chunks)
+        )
+
+    async def _queue_model_speech(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        item: _QueuedModelSpeech | None,
+        worker: asyncio.Task[None],
+        *,
+        allow_completion: bool = False,
+    ) -> None:
+        """Bound queued text while surfacing a failed speech worker without deadlocking."""
+
+        put = asyncio.create_task(queue.put(item))
+        done, _pending = await asyncio.wait(
+            {put, worker},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if worker in done:
+            if not put.done():
+                put.cancel()
+                await asyncio.gather(put, return_exceptions=True)
+            await worker
+            if not allow_completion:
+                raise RuntimeError("model speech worker stopped before the response ended")
+            return
+        await put
+
+    async def _prepare_model_speech(
+        self,
+        item: _QueuedModelSpeech,
+        turn: _ActiveTurn,
+    ) -> tuple[_QueuedModelSpeech, _PreparedSpeech]:
+        delivery = SpeechDelivery.parse(
+            await self._effective_configuration(
+                ConfigurationKey.DEFAULT_SPEECH_RATE,
+                turn.turn_id,
+            )
+        )
+        audio = await self._synthesize(item.canonical_text, delivery)
+        return (
+            item,
+            _PreparedSpeech(
+                segment_id=item.segment_id,
+                boundary_index=item.boundary_index,
+                canonical_text=item.canonical_text,
+                delivery=delivery,
+                audio=audio,
+            ),
+        )
+
+    async def _prepare_next_model_speech(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        turn: _ActiveTurn,
+    ) -> tuple[_QueuedModelSpeech, _PreparedSpeech] | None:
+        item = await queue.get()
+        if item is None:
+            return None
+        return await self._prepare_model_speech(item, turn)
+
+    async def _speak_model_queue(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        operation: Operation,
+        turn: _ActiveTurn,
+    ) -> None:
+        """Keep one local audio segment ready while admitting only the current segment."""
+
+        current = await self._prepare_next_model_speech(queue, turn)
+        while current is not None:
+            item, prepared = current
+            # The task may wait for streaming model text or synthesize one chunk. It cannot
+            # announce playback; registration remains inside _speak_model_chunk below.
+            prepare_next = asyncio.create_task(
+                self._prepare_next_model_speech(queue, turn),
+                name="radcliffe-model-speech-lookahead",
+            )
+            try:
+                await self._speak_model_chunk(
+                    item.canonical_text,
+                    operation,
+                    turn,
+                    item.reason,
+                    completed_display_text=item.completed_display_text,
+                    prepared=prepared,
+                )
+            except BaseException:
+                prepare_next.cancel()
+                await asyncio.gather(prepare_next, return_exceptions=True)
+                raise
+            current = await prepare_next
 
     def _next_model_chunk(self, buffer: str) -> str | None:
         if not buffer:
@@ -1078,11 +1237,18 @@ class VoicePipeline:
         reason: str,
         *,
         completed_display_text: str | None = None,
+        prepared: _PreparedSpeech | None = None,
     ) -> None:
         if self.engine.state is ConversationState.THINKING:
             await self._transition(ConversationState.SPEAKING, reason, operation, turn)
         boundary = turn.next_model_boundary
         segment_id = f"{operation.operation_id}:model:{boundary}"
+        if prepared is not None and (
+            prepared.segment_id != segment_id
+            or prepared.boundary_index != boundary
+            or prepared.canonical_text != canonical_text
+        ):
+            raise RuntimeError("prefetched model audio arrived out of order")
         display_text = canonical_text if completed_display_text is None else completed_display_text
         turn.model_playback_segments.append(
             _ModelPlaybackSegment(
@@ -1100,6 +1266,7 @@ class VoicePipeline:
             turn,
             source=SourceKind.MODEL,
             wait_for_playback=self.client_playback_acknowledgements,
+            prepared=prepared,
         )
         turn.rendered_model_text += canonical_text
         if not self.client_playback_acknowledgements:

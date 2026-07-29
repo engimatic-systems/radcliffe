@@ -54,6 +54,13 @@ does not admit the next canonical segment until Android reports a terminal
 status. Wall-clock expiry does not return credit: the worker waits for receiver
 evidence, reconnect reconciliation, or explicit cancellation.
 
+Model speech keeps exactly one subsequent segment synthesized in local memory
+while the admitted segment plays. Preparation assigns the stable canonical
+segment identity but does not allocate a `playback_id`, announce the segment,
+publish media, or advance a boundary. Only the ordered playback worker can cross
+that admission seam after Android returns the single receiver credit. Cancellation
+discards the prepared segment.
+
 On `RoomEvent.Reconnecting`, Android mutes playback, removes its uncertain local
 attempt, and retains the latest acknowledgement for each recent attempt. After
 connection it sends `Reconnect`. The worker flushes its realtime output before
