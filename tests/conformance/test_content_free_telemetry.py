@@ -143,6 +143,27 @@ def test_cross_service_traces_reconstruct_without_content_or_unbounded_labels(tm
     assert session_pseudonym("private-session-1") in encoded
 
 
+def test_parser_accepts_v1_events_without_playback_bound_fields() -> None:
+    event = TELEMETRY.parse_event(
+        {
+            "schema": TELEMETRY.TELEMETRY_SCHEMA,
+            "occurred_at": "2026-07-28T00:00:00+00:00",
+            "component": "media_worker",
+            "event": "reconnect",
+            "outcome": "reconnected",
+            "trace_id": "",
+            "session": "ses_" + "a" * 20,
+            "generation": 1,
+            "operation": "",
+            "phase": "session",
+            "duration_ms": None,
+        }
+    )
+
+    assert event.queue_depth is None
+    assert event.queued_duration_ms is None
+
+
 def test_bundle_is_private_secret_scanned_and_drops_unsafe_operational_fields(tmp_path) -> None:
     telemetry_path = tmp_path / "events.jsonl"
     sink = TelemetrySink(telemetry_path, strict=True)

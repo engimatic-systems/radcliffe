@@ -7,6 +7,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.exoplayer.ExoPlayer
@@ -34,6 +39,8 @@ import works.ravd.radcliffe.protocol.v2.ControlCommand
 import works.ravd.radcliffe.protocol.v2.ConversationState
 import works.ravd.radcliffe.protocol.v2.OperationRef
 import works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement
+import works.ravd.radcliffe.protocol.v2.PlaybackReconciliationOutcome
+import works.ravd.radcliffe.protocol.v2.PlaybackStatus
 import works.ravd.radcliffe.protocol.v2.Reconnect
 import works.ravd.radcliffe.protocol.v2.ServerEvent
 import works.ravd.radcliffe.protocol.v2.SourceKind
@@ -47,18 +54,31 @@ class VoiceSessionService : MediaSessionService() {
     private lateinit var mediaSession: MediaSession
     private lateinit var earcons: EarconPlayer
     private var sessionId: String = ""
-    private val playbackTracker = DevicePlaybackTracker()
+    private lateinit var playbackTracker: DevicePlaybackTracker
     private val playbackSinks = mutableMapOf<RemoteAudioTrack, AudioTrackSink>()
     private val handledTransitions = mutableSetOf<String>()
     private var playbackPaused = false
     private var playbackSuppressedForInterruption = false
     private var playbackReconciling = false
+    private var playbackAwaitingAdmission = true
     private var pendingReconnectRequestId: String? = null
     private var serverGeneration = 0L
     private var roomTransportConnected = false
     private var playbackTrackReady = false
     private var roomWasConnected = false
     private var disconnectEarconPlayed = false
+    private val receiverEpoch = java.util.UUID.randomUUID().toString()
+    private var creditSequence = 0L
+    private lateinit var audioManager: AudioManager
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            if (addedDevices.any(AudioDeviceInfo::isSink)) reconcileAudioRoute()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            if (removedDevices.any(AudioDeviceInfo::isSink)) reconcileAudioRoute()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -68,6 +88,16 @@ class VoiceSessionService : MediaSessionService() {
         player = ExoPlayer.Builder(this).build()
         mediaSession = MediaSession.Builder(this, player).build()
         earcons = EarconPlayer(this)
+        val playbackSnapshots = PlaybackSnapshotStore(this)
+        playbackTracker = DevicePlaybackTracker(
+            initialAcknowledgements = playbackSnapshots.load(),
+            snapshotSink = playbackSnapshots::save,
+        )
+        audioManager = getSystemService(AudioManager::class.java)
+        audioManager.registerAudioDeviceCallback(
+            audioDeviceCallback,
+            Handler(Looper.getMainLooper()),
+        )
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
@@ -120,10 +150,12 @@ class VoiceSessionService : MediaSessionService() {
         roomWasConnected = false
         disconnectEarconPlayed = false
         serverGeneration = 0L
-        playbackReconciling = false
+        playbackReconciling = true
+        playbackAwaitingAdmission = true
         pendingReconnectRequestId = null
         roomTransportConnected = false
         playbackTrackReady = false
+        connected.setSpeakerMute(true)
         observe(connected)
         connected.connect(url, token)
         connected.localParticipant.setMicrophoneEnabled(true)
@@ -132,6 +164,7 @@ class VoiceSessionService : MediaSessionService() {
     private fun interrupt() {
         room?.setSpeakerMute(true)
         playbackSuppressedForInterruption = true
+        playbackAwaitingAdmission = true
         val playbackAcknowledgements = playbackTracker.invalidatePending("interrupted on device")
         SessionModel.state(VoiceState.LISTENING)
         sendControl(ControlCommand.Kind.KIND_INTERRUPT, playbackAcknowledgements)
@@ -139,8 +172,12 @@ class VoiceSessionService : MediaSessionService() {
 
     private fun setPaused(paused: Boolean) {
         playbackPaused = paused
-        if (!paused) playbackSuppressedForInterruption = false
-        room?.setSpeakerMute(paused)
+        if (paused) {
+            playbackAwaitingAdmission = true
+        } else {
+            playbackSuppressedForInterruption = false
+        }
+        room?.setSpeakerMute(true)
         if (paused) player.pause() else player.play()
         SessionModel.state(if (paused) VoiceState.PAUSED else VoiceState.LISTENING)
         notify(if (paused) "Paused" else "Listening", paused)
@@ -258,32 +295,63 @@ class VoiceSessionService : MediaSessionService() {
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
         if (event.hasPlaybackSegment()) {
-            serverGeneration = maxOf(serverGeneration, event.playbackSegment.operation.generation)
-            val accepted = playbackTracker.announce(event.playbackSegment)
+            val segment = event.playbackSegment
+            if (
+                segment.operation.sessionId != sessionId ||
+                segment.operation.generation == 0L ||
+                segment.operation.generation < serverGeneration
+            ) {
+                return
+            }
+            observeServerGeneration(segment.operation.generation)
+            if (playbackPaused) return
+            val acknowledgement = playbackTracker.announce(segment)
+            val accepted =
+                acknowledgement?.status ==
+                PlaybackStatus.PLAYBACK_STATUS_ACCEPTED &&
+                segment.receiverEpoch == receiverEpoch &&
+                segment.creditSequence == creditSequence
+            if (acknowledgement != null) {
+                room?.let { activeRoom ->
+                    scope.launch {
+                        publishPlaybackAcknowledgement(activeRoom, acknowledgement)
+                    }
+                }
+            }
             if (
                 accepted &&
-                (playbackSuppressedForInterruption || playbackReconciling) &&
+                (
+                    playbackSuppressedForInterruption ||
+                        playbackReconciling ||
+                        playbackAwaitingAdmission
+                    ) &&
                 !playbackPaused
             ) {
                 room?.setSpeakerMute(false)
                 playbackSuppressedForInterruption = false
                 playbackReconciling = false
+                playbackAwaitingAdmission = false
                 pendingReconnectRequestId = null
             }
         }
         if (event.hasPlaybackReconciled()) {
             val reconciled = event.playbackReconciled
-            serverGeneration = maxOf(serverGeneration, reconciled.generation)
+            if (reconciled.sessionId == sessionId) {
+                observeServerGeneration(reconciled.generation)
+            }
             if (
                 reconciled.sessionId == sessionId &&
                 reconciled.requestId == pendingReconnectRequestId &&
+                reconciled.playbackProtocolRevision ==
+                DevicePlaybackTracker.PLAYBACK_PROTOCOL_REVISION &&
+                reconciled.receiverEpoch == receiverEpoch &&
+                reconciled.creditSequence == creditSequence &&
+                reconciled.outcome ==
+                PlaybackReconciliationOutcome.PLAYBACK_RECONCILIATION_OUTCOME_READY &&
                 !reconciled.replayPending
             ) {
                 playbackReconciling = false
                 pendingReconnectRequestId = null
-                if (!playbackPaused && !playbackSuppressedForInterruption) {
-                    room?.setSpeakerMute(false)
-                }
             }
         }
         if (event.hasJobEvent()) {
@@ -294,7 +362,9 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasSessionReady()) {
-            serverGeneration = maxOf(serverGeneration, event.sessionReady.generation)
+            if (event.sessionReady.sessionId == sessionId) {
+                observeServerGeneration(event.sessionReady.generation)
+            }
             val current = SessionModel.state.value
             val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)
             if (ready != current) {
@@ -303,7 +373,14 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasStateChanged()) {
-            serverGeneration = maxOf(serverGeneration, event.stateChanged.operation.generation)
+            val operation = event.stateChanged.operation
+            if (
+                operation.sessionId != sessionId ||
+                operation.generation < serverGeneration
+            ) {
+                return
+            }
+            observeServerGeneration(operation.generation)
             if (event.stateChanged.reason == "interrupted") {
                 suppressInterruptedPlayback(event.stateChanged.operation)
             }
@@ -405,6 +482,23 @@ class VoiceSessionService : MediaSessionService() {
         }
     }
 
+    private fun observeServerGeneration(generation: Long) {
+        if (generation <= serverGeneration) return
+        serverGeneration = generation
+        val acknowledgements =
+            playbackTracker.invalidatePending("superseded by newer server generation")
+        if (acknowledgements.isEmpty()) return
+        room?.setSpeakerMute(true)
+        playbackAwaitingAdmission = true
+        room?.let { activeRoom ->
+            scope.launch {
+                acknowledgements.forEach {
+                    publishPlaybackAcknowledgement(activeRoom, it)
+                }
+            }
+        }
+    }
+
     private fun applyServerVoiceState(current: VoiceState) {
         val previous = SessionModel.state.value
         if (current == previous) return
@@ -426,6 +520,7 @@ class VoiceSessionService : MediaSessionService() {
         room?.setSpeakerMute(true)
         playbackPaused = false
         playbackSuppressedForInterruption = true
+        playbackAwaitingAdmission = true
         val activeRoom = room ?: return
         val acknowledgements = playbackTracker.invalidateThrough(
             operation,
@@ -607,18 +702,29 @@ class VoiceSessionService : MediaSessionService() {
     private fun beginPlaybackReconciliation() {
         room?.setSpeakerMute(true)
         playbackReconciling = true
+        playbackAwaitingAdmission = true
         pendingReconnectRequestId = null
         playbackTracker.suspendForReconnect()
         SessionModel.state(VoiceState.RECONNECTING)
     }
 
+    private fun reconcileAudioRoute() {
+        val activeRoom = room ?: return
+        if (playbackTracker.pendingCount() == 0 && !playbackReconciling) return
+        beginPlaybackReconciliation()
+        scope.launch { maybePublishReconnect(activeRoom) }
+    }
+
     private suspend fun maybePublishReconnect(activeRoom: Room) {
         if (!roomTransportConnected || !playbackTrackReady) return
+        if (pendingReconnectRequestId != null) return
         publishReconnect(activeRoom)
     }
 
     private suspend fun publishReconnect(activeRoom: Room) {
         val requestId = java.util.UUID.randomUUID().toString()
+        creditSequence += 1
+        playbackTracker.configureReceiverCredit(receiverEpoch, creditSequence)
         pendingReconnectRequestId = requestId
         val reconnect = Reconnect.newBuilder()
             .setRequestId(requestId)
@@ -629,6 +735,9 @@ class VoiceSessionService : MediaSessionService() {
             .setIdempotencyKey(requestId)
             .setMaxInflightAttempts(MAX_INFLIGHT_PLAYBACK_ATTEMPTS)
             .setMaxSegmentDurationMs(MAX_PLAYBACK_SEGMENT_DURATION_MS)
+            .setPlaybackProtocolRevision(DevicePlaybackTracker.PLAYBACK_PROTOCOL_REVISION)
+            .setReceiverEpoch(receiverEpoch)
+            .setCreditSequence(creditSequence)
             .build()
         val event = ClientEvent.newBuilder()
             .setProtocolVersion(2)
@@ -704,6 +813,7 @@ class VoiceSessionService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         playbackSinks.toMap().forEach { (track, sink) -> track.removeSink(sink) }
         playbackSinks.clear()
         room?.disconnect()

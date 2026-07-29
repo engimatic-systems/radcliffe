@@ -761,6 +761,9 @@ class EndpointProcessor(FrameProcessor):
         latest_playback: tuple[PlaybackAcknowledgement, ...],
         max_inflight_attempts: int,
         max_segment_duration_ms: int,
+        playback_protocol_revision: int,
+        receiver_epoch: str,
+        credit_sequence: int,
         idempotency_key: str,
     ) -> None:
         if self.voice is None:
@@ -772,6 +775,9 @@ class EndpointProcessor(FrameProcessor):
             latest_playback=latest_playback,
             max_inflight_attempts=max_inflight_attempts,
             max_segment_duration_ms=max_segment_duration_ms,
+            playback_protocol_revision=playback_protocol_revision,
+            receiver_epoch=receiver_epoch,
+            credit_sequence=credit_sequence,
             idempotency_key=idempotency_key,
         )
 

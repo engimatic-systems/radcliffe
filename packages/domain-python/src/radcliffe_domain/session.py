@@ -23,6 +23,7 @@ class ConversationState(StrEnum):
 
 
 class PlaybackStatus(StrEnum):
+    ACCEPTED = "accepted"
     STARTED = "started"
     POSITION = "position"
     COMPLETED = "completed"
@@ -120,6 +121,9 @@ class PlaybackAcknowledgement:
     occurred_at: datetime
     detail: str = ""
     playback_id: str = ""
+    receiver_epoch: str = ""
+    credit_sequence: int = 0
+    attempt_sequence: int = 0
 
 
 class InvalidTransitionError(ValueError):

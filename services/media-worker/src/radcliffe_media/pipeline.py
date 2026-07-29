@@ -54,7 +54,7 @@ from radcliffe_domain.session import (
     SessionEngine,
     StaleOperationError,
 )
-from radcliffe_domain.store import EventStore
+from radcliffe_domain.store import EventStore, PlaybackAttemptRecord
 from radcliffe_domain.telemetry import TelemetrySink, session_pseudonym
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
@@ -251,8 +251,12 @@ class _PendingPlayback:
     duration_ms: int
     canonical_text: str
     source: SourceKind
+    receiver_epoch: str
+    credit_sequence: int
+    attempt_sequence: int
     source_envelope: MessageEnvelope | None = None
     completes_source_boundary: bool = True
+    accepted: asyncio.Event = field(default_factory=asyncio.Event)
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
     retry: asyncio.Event = field(default_factory=asyncio.Event)
     started: bool = False
@@ -310,6 +314,9 @@ class VoiceEventSink(Protocol):
         canonical_sha256: bytes,
         source: SourceKind,
         speech_rate_multiplier: float,
+        receiver_epoch: str,
+        credit_sequence: int,
+        attempt_sequence: int,
     ) -> None: ...
 
     async def playback_reconciled(
@@ -317,6 +324,9 @@ class VoiceEventSink(Protocol):
         request_id: str,
         generation: int,
         replay_pending: bool,
+        receiver_epoch: str,
+        credit_sequence: int,
+        outcome: protocol_pb2.PlaybackReconciliationOutcome,
     ) -> None: ...
 
     async def agent_control_request(
@@ -376,10 +386,21 @@ class VoicePipeline:
         self._paused_source: _PausedSource | None = None
         self._pending_playback: dict[str, _PendingPlayback] = {}
         self._playback_lock = asyncio.Lock()
+        self._playback_ready = asyncio.Event()
         self._maximum_segment_duration_ms = 30_000
-        self._reconnect_outcomes: dict[str, bool] = {}
+        self._receiver_epoch = ""
+        self._credit_sequence = 0
+        self._attempt_sequence = 0
+        self._recovery_attempt: PlaybackAttemptRecord | None = None
+        self._recovery_task: asyncio.Task[None] | None = None
+        self._reconnect_outcomes: dict[str, tuple[bool, str, int]] = {}
 
     async def start(self) -> None:
+        self._recovery_attempt = await self.store.active_playback_attempt(self.engine.session_id)
+        next_generation = await self.store.advance_voice_generation(self.engine.session_id)
+        self.engine.generation = next_generation - 1
+        if self._recovery_attempt is not None:
+            self._attempt_sequence = self._recovery_attempt.attempt_sequence
         previous = self.engine.state
         self.engine.connect()
         await self._notify_state(previous, "session connected")
@@ -536,6 +557,11 @@ class VoicePipeline:
         self.engine.end()
         if previous is not ConversationState.IDLE:
             await self._notify_state(previous, "session ended")
+        else:
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
 
     async def handle_transcript(self, text: str) -> None:
         await self._handle_transcript(text)
@@ -1305,6 +1331,11 @@ class VoicePipeline:
         reason: str,
         operation: Operation | None = None,
     ) -> None:
+        if self.engine.generation > 0:
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
         if self.events is not None:
             await self.events.state_changed(
                 previous,
@@ -1597,9 +1628,13 @@ class VoicePipeline:
             duration <= 0 or duration > self._maximum_segment_duration_ms
         ):
             raise RuntimeError(f"playback segment {segment_id} exceeds receiver duration capacity")
+        if self.client_playback_acknowledgements:
+            await self._playback_ready.wait()
+            self._assert_owner(turn, operation)
 
         while True:
             playback_id = str(uuid4())
+            self._attempt_sequence += 1
             pending = _PendingPlayback(
                 operation,
                 playback_id,
@@ -1608,6 +1643,9 @@ class VoicePipeline:
                 duration,
                 canonical_text,
                 source,
+                self._receiver_epoch,
+                self._credit_sequence,
+                self._attempt_sequence,
                 source_envelope,
                 completes_source_boundary,
             )
@@ -1624,7 +1662,36 @@ class VoicePipeline:
                     )
                     if outstanding:
                         raise RuntimeError("receiver playback window is exhausted")
+                    await self.store.admit_playback_attempt(
+                        PlaybackAttemptRecord(
+                            playback_id=playback_id,
+                            session_id=operation.session_id,
+                            generation=operation.generation,
+                            operation_id=operation.operation_id,
+                            cancellation_id=operation.cancellation_id,
+                            trace_id=operation.trace_id,
+                            segment_id=segment_id,
+                            boundary_index=boundary_index,
+                            duration_ms=duration,
+                            canonical_text=canonical_text,
+                            source=source.value,
+                            source_envelope=(
+                                source_envelope.to_proto().SerializeToString(deterministic=True)
+                                if source_envelope is not None
+                                else None
+                            ),
+                            completes_source_boundary=completes_source_boundary,
+                            speech_rate_multiplier=delivery.multiplier,
+                            pcm_audio=audio,
+                            receiver_epoch=pending.receiver_epoch,
+                            credit_sequence=pending.credit_sequence,
+                            attempt_sequence=pending.attempt_sequence,
+                            status="announced",
+                            position_ms=0,
+                        )
+                    )
                     self._pending_playback[playback_id] = pending
+                self._emit_playback_bound(pending, "admitted")
                 await self.events.playback_segment(
                     operation,
                     playback_id,
@@ -1634,7 +1701,39 @@ class VoicePipeline:
                     hashlib.sha256(canonical_text.encode()).digest(),
                     source,
                     delivery.multiplier,
+                    pending.receiver_epoch,
+                    pending.credit_sequence,
+                    pending.attempt_sequence,
                 )
+                accepted_wait = asyncio.create_task(pending.accepted.wait())
+                retry_before_media = asyncio.create_task(pending.retry.wait())
+                try:
+                    try:
+                        await asyncio.wait(
+                            {accepted_wait, retry_before_media},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        for waiter in (accepted_wait, retry_before_media):
+                            if not waiter.done():
+                                waiter.cancel()
+                        await asyncio.gather(
+                            accepted_wait,
+                            retry_before_media,
+                            return_exceptions=True,
+                        )
+                except asyncio.CancelledError:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="cancelled",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "cancelled", retired=True)
+                    raise
+                if pending.retry.is_set():
+                    self._assert_owner(turn, operation)
+                    continue
             else:
                 await self.engine.acknowledge(
                     PlaybackAcknowledgement(
@@ -1662,7 +1761,15 @@ class VoicePipeline:
                     ),
                 )
             except asyncio.CancelledError:
-                if not self.client_playback_acknowledgements:
+                if self.client_playback_acknowledgements:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="cancelled",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "cancelled", retired=True)
+                else:
                     await self.engine.acknowledge(
                         PlaybackAcknowledgement(
                             acknowledgement_id=str(uuid4()),
@@ -1678,7 +1785,15 @@ class VoicePipeline:
                     )
                 raise
             except Exception as error:
-                if not self.client_playback_acknowledgements:
+                if self.client_playback_acknowledgements:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="failed",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "failed", retired=True)
+                else:
                     await self.engine.acknowledge(
                         PlaybackAcknowledgement(
                             acknowledgement_id=str(uuid4()),
@@ -1754,6 +1869,17 @@ class VoicePipeline:
                 raise ValueError("playback acknowledgement belongs to another operation")
             if pending.superseded:
                 return False
+            supplied_credit_identity = bool(
+                acknowledgement.receiver_epoch
+                or acknowledgement.credit_sequence
+                or acknowledgement.attempt_sequence
+            )
+            if supplied_credit_identity and (
+                acknowledgement.receiver_epoch != pending.receiver_epoch
+                or acknowledgement.credit_sequence != pending.credit_sequence
+                or acknowledgement.attempt_sequence != pending.attempt_sequence
+            ):
+                raise ValueError("playback acknowledgement has stale credit identity")
             terminal_status = acknowledgement.status in {
                 PlaybackStatus.COMPLETED,
                 PlaybackStatus.FLUSHED,
@@ -1782,8 +1908,16 @@ class VoicePipeline:
             if pending.terminal_status is not None:
                 if acknowledgement.status is not pending.terminal_status:
                     raise ValueError("playback acknowledgement followed a terminal status")
+            elif acknowledgement.status is PlaybackStatus.ACCEPTED:
+                if pending.accepted.is_set() or acknowledgement.position_ms != 0:
+                    raise ValueError("playback acceptance acknowledgement is invalid")
+                pending.accepted.set()
             elif acknowledgement.status is PlaybackStatus.STARTED:
-                if pending.started or acknowledgement.position_ms != 0:
+                if (
+                    not pending.accepted.is_set()
+                    or pending.started
+                    or acknowledgement.position_ms != 0
+                ):
                     raise ValueError("playback started acknowledgement is invalid")
                 pending.started = True
             elif acknowledgement.status is PlaybackStatus.POSITION:
@@ -1801,6 +1935,11 @@ class VoicePipeline:
             else:
                 raise ValueError("unsupported playback acknowledgement status")
             pending.latest_position_ms = acknowledgement.position_ms
+            await self.store.update_playback_attempt(
+                pending.playback_id,
+                status=acknowledgement.status.value,
+                position_ms=acknowledgement.position_ms,
+            )
             if acknowledgement.operation.generation == self.engine.generation:
                 persisted = await self.engine.acknowledge(acknowledgement)
             elif (
@@ -1853,6 +1992,7 @@ class VoicePipeline:
                 await self._persist_heard_source(pending, pending.terminal_status)
             if pending.terminal_status is not None:
                 pending.terminal.set()
+                self._emit_playback_bound(pending, "terminal")
             return persisted
 
     async def reconnect(
@@ -1864,6 +2004,9 @@ class VoicePipeline:
         latest_playback: tuple[PlaybackAcknowledgement, ...],
         max_inflight_attempts: int,
         max_segment_duration_ms: int,
+        playback_protocol_revision: int,
+        receiver_epoch: str,
+        credit_sequence: int,
         idempotency_key: str,
     ) -> bool:
         if session_id != self.engine.session_id:
@@ -1874,6 +2017,10 @@ class VoicePipeline:
             raise ValueError("bounded reconnect requires exactly one receiver attempt")
         if max_segment_duration_ms <= 0:
             raise ValueError("reconnect omitted the receiver duration capacity")
+        if playback_protocol_revision != 1:
+            raise ValueError("unsupported playback protocol revision")
+        if not receiver_epoch or credit_sequence <= 0:
+            raise ValueError("reconnect omitted the receiver credit identity")
         reconnect_key = idempotency_key or request_id
         if not reconnect_key:
             raise ValueError("reconnect omitted its idempotency identity")
@@ -1881,15 +2028,31 @@ class VoicePipeline:
         async with self._playback_lock:
             prior = self._reconnect_outcomes.get(reconnect_key)
         if prior is not None:
+            prior_replay, prior_epoch, prior_sequence = prior
+            if prior_epoch != receiver_epoch or prior_sequence != credit_sequence:
+                raise ValueError("reconnect idempotency identity was reused")
             if self.events is not None:
                 await self.events.playback_reconciled(
                     request_id,
                     self.engine.generation,
-                    prior,
+                    prior_replay,
+                    prior_epoch,
+                    prior_sequence,
+                    (
+                        protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING
+                        if prior_replay
+                        else protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_READY
+                    ),
                 )
-            return prior
+            return prior_replay
+
+        if receiver_epoch == self._receiver_epoch and credit_sequence <= self._credit_sequence:
+            raise ValueError("reconnect supplied stale receiver credit")
 
         self._maximum_segment_duration_ms = min(max_segment_duration_ms, 30_000)
+        self._receiver_epoch = receiver_epoch
+        self._credit_sequence = credit_sequence
+        self._playback_ready.set()
         await self.publisher.flush()
         snapshots = {item.playback_id: item for item in latest_playback}
         async with self._playback_lock:
@@ -1915,11 +2078,43 @@ class VoicePipeline:
             async with self._playback_lock:
                 if pending.terminal_status is None and not pending.superseded:
                     pending.superseded = True
+                    await self.store.update_playback_attempt(
+                        pending.playback_id,
+                        status="superseded",
+                        position_ms=pending.latest_position_ms,
+                    )
+                    self._emit_playback_bound(pending, "superseded")
                     pending.retry.set()
                     replay_pending = True
 
+        recovery = self._recovery_attempt
+        if recovery is not None and not outstanding:
+            snapshot = snapshots.get(recovery.playback_id)
+            recovered_pending = self._pending_from_record(recovery)
+            async with self._playback_lock:
+                self._pending_playback[recovery.playback_id] = recovered_pending
+            if snapshot is not None and snapshot.status in {
+                PlaybackStatus.COMPLETED,
+                PlaybackStatus.FLUSHED,
+                PlaybackStatus.FAILED,
+            }:
+                await self.playback_acknowledgement(snapshot, reconciled=True)
+                self._recovery_attempt = None
+            else:
+                recovered_pending.superseded = True
+                await self.store.update_playback_attempt(
+                    recovery.playback_id,
+                    status="superseded",
+                    position_ms=recovery.position_ms,
+                )
+                replay_pending = True
+
         async with self._playback_lock:
-            self._reconnect_outcomes[reconnect_key] = replay_pending
+            self._reconnect_outcomes[reconnect_key] = (
+                replay_pending,
+                receiver_epoch,
+                credit_sequence,
+            )
             while len(self._reconnect_outcomes) > 64:
                 self._reconnect_outcomes.pop(next(iter(self._reconnect_outcomes)))
         if self.events is not None:
@@ -1927,8 +2122,205 @@ class VoicePipeline:
                 request_id,
                 self.engine.generation,
                 replay_pending,
+                receiver_epoch,
+                credit_sequence,
+                (
+                    protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING
+                    if replay_pending
+                    else protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_READY
+                ),
             )
+        if (
+            replay_pending
+            and recovery is not None
+            and self._recovery_attempt is not None
+            and (self._recovery_task is None or self._recovery_task.done())
+        ):
+            self._recovery_task = asyncio.create_task(
+                self._recover_durable_playback(recovery),
+                name="radcliffe-playback-recovery",
+            )
+            self._recovery_task.add_done_callback(self._consume_background_task)
         return replay_pending
+
+    def _pending_from_record(self, record: PlaybackAttemptRecord) -> _PendingPlayback:
+        source_envelope = (
+            MessageEnvelope.from_proto(
+                protocol_pb2.MessageEnvelope.FromString(record.source_envelope)
+            )
+            if record.source_envelope is not None
+            else None
+        )
+        pending = _PendingPlayback(
+            operation=Operation(
+                session_id=record.session_id,
+                generation=record.generation,
+                operation_id=record.operation_id,
+                cancellation_id=record.cancellation_id,
+                trace_id=record.trace_id,
+            ),
+            playback_id=record.playback_id,
+            segment_id=record.segment_id,
+            boundary_index=record.boundary_index,
+            duration_ms=record.duration_ms,
+            canonical_text=record.canonical_text,
+            source=SourceKind(record.source),
+            receiver_epoch=record.receiver_epoch,
+            credit_sequence=record.credit_sequence,
+            attempt_sequence=record.attempt_sequence,
+            source_envelope=source_envelope,
+            completes_source_boundary=record.completes_source_boundary,
+            started=record.status in {"started", "position"},
+            latest_position_ms=record.position_ms,
+        )
+        if record.status == "accepted":
+            pending.accepted.set()
+        return pending
+
+    async def _recover_durable_playback(self, record: PlaybackAttemptRecord) -> None:
+        if self.events is None:
+            raise RuntimeError("durable playback recovery requires an event sink")
+        operation = Operation(
+            session_id=record.session_id,
+            generation=self.engine.generation,
+            operation_id=str(uuid4()),
+            cancellation_id=str(uuid4()),
+            trace_id=f"trc_{uuid4().hex}",
+        )
+        while True:
+            playback_id = str(uuid4())
+            self._attempt_sequence += 1
+            pending = _PendingPlayback(
+                operation=operation,
+                playback_id=playback_id,
+                segment_id=record.segment_id,
+                boundary_index=record.boundary_index,
+                duration_ms=record.duration_ms,
+                canonical_text=record.canonical_text,
+                source=SourceKind(record.source),
+                receiver_epoch=self._receiver_epoch,
+                credit_sequence=self._credit_sequence,
+                attempt_sequence=self._attempt_sequence,
+                source_envelope=(
+                    MessageEnvelope.from_proto(
+                        protocol_pb2.MessageEnvelope.FromString(record.source_envelope)
+                    )
+                    if record.source_envelope is not None
+                    else None
+                ),
+                completes_source_boundary=record.completes_source_boundary,
+            )
+            await self.store.admit_playback_attempt(
+                PlaybackAttemptRecord(
+                    playback_id=playback_id,
+                    session_id=record.session_id,
+                    generation=operation.generation,
+                    operation_id=operation.operation_id,
+                    cancellation_id=operation.cancellation_id,
+                    trace_id=operation.trace_id,
+                    segment_id=record.segment_id,
+                    boundary_index=record.boundary_index,
+                    duration_ms=record.duration_ms,
+                    canonical_text=record.canonical_text,
+                    source=record.source,
+                    source_envelope=record.source_envelope,
+                    completes_source_boundary=record.completes_source_boundary,
+                    speech_rate_multiplier=record.speech_rate_multiplier,
+                    pcm_audio=record.pcm_audio,
+                    receiver_epoch=pending.receiver_epoch,
+                    credit_sequence=pending.credit_sequence,
+                    attempt_sequence=pending.attempt_sequence,
+                    status="announced",
+                    position_ms=0,
+                )
+            )
+            async with self._playback_lock:
+                self._pending_playback[playback_id] = pending
+            self._emit_playback_bound(pending, "recovered")
+            await self.events.playback_segment(
+                operation,
+                playback_id,
+                record.segment_id,
+                record.boundary_index,
+                record.duration_ms,
+                hashlib.sha256(record.canonical_text.encode()).digest(),
+                SourceKind(record.source),
+                record.speech_rate_multiplier,
+                pending.receiver_epoch,
+                pending.credit_sequence,
+                pending.attempt_sequence,
+            )
+            accepted_wait = asyncio.create_task(pending.accepted.wait())
+            retry_wait = asyncio.create_task(pending.retry.wait())
+            try:
+                await asyncio.wait(
+                    {accepted_wait, retry_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for waiter in (accepted_wait, retry_wait):
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(accepted_wait, retry_wait, return_exceptions=True)
+            if pending.retry.is_set():
+                continue
+            await self.publisher.publish(
+                record.segment_id,
+                record.pcm_audio,
+                wait_for_playback=False,
+            )
+            terminal_wait = asyncio.create_task(pending.terminal.wait())
+            retry_wait = asyncio.create_task(pending.retry.wait())
+            try:
+                await asyncio.wait(
+                    {terminal_wait, retry_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for waiter in (terminal_wait, retry_wait):
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(terminal_wait, retry_wait, return_exceptions=True)
+            if pending.retry.is_set():
+                continue
+            if pending.terminal_status is PlaybackStatus.COMPLETED:
+                await self._persist_heard_source(pending, PlaybackStatus.COMPLETED)
+            self._recovery_attempt = None
+            return
+
+    def _emit_playback_bound(
+        self,
+        pending: _PendingPlayback,
+        phase: str,
+        *,
+        retired: bool | None = None,
+    ) -> None:
+        terminal = (
+            pending.terminal_status is not None or pending.superseded
+            if retired is None
+            else retired
+        )
+        self.telemetry.emit(
+            component="media_worker",
+            event="playback_bound",
+            outcome=(
+                "cancelled"
+                if phase == "cancelled"
+                else "failed"
+                if phase == "failed"
+                else "completed"
+                if terminal
+                else "ready"
+            ),
+            session_id=self.engine.session_id,
+            generation=pending.operation.generation,
+            phase=phase,
+            operation=pending.operation,
+            queue_depth=0 if terminal else 1,
+            queued_duration_ms=(
+                0 if terminal else max(0, pending.duration_ms - pending.latest_position_ms)
+            ),
+        )
 
     async def _persist_heard_source(
         self,
@@ -2025,6 +2417,7 @@ class VoicePipeline:
 
     async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
         task: asyncio.Task[None] | None = None
+        recovery_task = self._recovery_task
         should_flush = always_flush
         operation: Operation | None = None
         async with self._coordinator:
@@ -2039,6 +2432,24 @@ class VoicePipeline:
                     task.cancel()
         if should_flush:
             await self.publisher.flush()
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+            await asyncio.gather(recovery_task, return_exceptions=True)
+            async with self._playback_lock:
+                recovering = tuple(
+                    item
+                    for item in self._pending_playback.values()
+                    if item.terminal_status is None and not item.superseded
+                )
+                for item in recovering:
+                    item.superseded = True
+                    await self.store.update_playback_attempt(
+                        item.playback_id,
+                        status="cancelled",
+                        position_ms=item.latest_position_ms,
+                    )
+                    self._emit_playback_bound(item, "cancelled")
+            self._recovery_attempt = None
         if operation is not None:
             await self._commit_source_high_water(operation)
         current = asyncio.current_task()
@@ -2368,6 +2779,10 @@ class VoicePipeline:
         await self._persist_session_transition(result, None)
         if self.engine.state is not ConversationState.IDLE:
             self.engine.end()
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
         return True
 
     async def _persist_session_transition(
@@ -2413,6 +2828,10 @@ class VoicePipeline:
         await self._append_disposition(turn, "handed_off")
         self._paused_source = None
         self.engine.end()
+        await self.store.record_voice_generation(
+            self.engine.session_id,
+            self.engine.generation,
+        )
         self._active_turn = None
         self._emit_turn_outcome(turn, "completed")
 

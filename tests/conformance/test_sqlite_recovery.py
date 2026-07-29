@@ -258,11 +258,13 @@ def test_consistent_private_backup_verifies_current_app_and_restores_all_state(t
     assert "/private/source/path" not in encoded
     assert str(source) not in encoded
     assert manifest.inventory.table_rows == {
-        "schema_migrations": 13,
+        "schema_migrations": 14,
         "sessions": 1,
         "envelopes": 1,
         "tool_calls": 1,
         "playback_acknowledgements": 1,
+        "playback_attempts": 0,
+        "voice_generations": 0,
         "devices": 1,
         "device_auth_audit": 1,
         "configuration_values": 1,

@@ -174,4 +174,5 @@ async def test_existing_version_one_database_migrates_without_data_loss(tmp_path
             (11,),
             (12,),
             (13,),
+            (14,),
         ]
