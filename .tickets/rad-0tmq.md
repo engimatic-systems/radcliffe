@@ -1,6 +1,6 @@
 ---
 id: rad-0tmq
-status: closed
+status: open
 deps: []
 links: [rad-g9yr, rad-ig6k, rad-u6lm]
 created: 2026-07-28T21:37:14Z
