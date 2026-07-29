@@ -27,3 +27,7 @@ Every modeled state and transition has implementation coverage. Schedule explora
 **2026-07-29T04:22:34Z**
 
 Automated groundwork is complete on epic/rad-0tmq-complete-protocol: deterministic content-free schedules cover delay, metadata/media ordering, partition, both process restarts, background/foreground, route change and cancellation; TLC and implementation suites are green with maximum depth 1. This remains open for the explicit physical Pixel speaker/Bluetooth/soak evidence and is still dependency-gated by rad-qa5h.
+
+**2026-07-29T04:23:47Z**
+
+Final automated package on commit a65572b: Python 475 passed/1 skipped; Android unit/lint green; TypeScript check green; TLC 1,194 distinct states; 11 conformance schedules. Review APK /Users/ravd/agent-share/radcliffe/radcliffe-0.6.3-v14-bounded-playback-review-test.apk SHA-256 5cebacfd123fae7fec6c71406bb2c3001f02d77678f695a454c96e3d96bc81be (v3, non-debuggable, upgrade-compatible test signer). Required debug copy SHA-256 f29d742cecf54a84b2dcdb8ed7224f3a7a7307d3b9a46a250e621ed530fde836.
