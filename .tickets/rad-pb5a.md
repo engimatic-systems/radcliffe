@@ -1,6 +1,6 @@
 ---
 id: rad-pb5a
-status: open
+status: closed
 deps: [rad-pm6h]
 links: []
 created: 2026-07-28T21:37:55Z
@@ -27,3 +27,7 @@ The protobuf schema and generated Kotlin/Python bindings represent every modeled
 **2026-07-29T01:07:50Z**
 
 First additive wire slice implemented: Reconnect now carries max_inflight_attempts and max_segment_duration_ms; PlaybackReconciled supplies an explicit reconnect barrier. Full formal-model capability negotiation/restart compatibility remains open.
+
+**2026-07-29T04:22:34Z**
+
+Completed on epic/rad-0tmq-complete-protocol. Protocol v2 now carries revision, receiver epoch, credit sequence, attempt sequence, explicit metadata ACCEPTED, and reconciliation outcomes in regenerated Python/Kotlin bindings. Decode/transition tests fail closed on missing capability or identity, stale counters/generations and impossible lifecycle transitions are non-mutating, and docs specify old/new compatibility with no unbounded fallback.

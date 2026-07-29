@@ -1,6 +1,6 @@
 ---
 id: rad-fnho
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-07-28T21:37:26Z
@@ -35,3 +35,7 @@ Physical Pixel baseline completed across three sessions. The operator reports de
 **2026-07-29T01:07:50Z**
 
 The Phase C trace now has an enforceable seam documented in docs/bounded-playback-reconnect.md: sender admission immediately before Protocol v2 playback announcement/media publication; receiver credit returned only by decoded-PCM terminal evidence. The temporary-disconnect slice uses W=1 and D=30s. Remaining spike scenarios and physical measurements are still open.
+
+**2026-07-29T04:22:34Z**
+
+Completed on epic/rad-0tmq-complete-protocol. docs/bounded-playback-protocol.md maps every buffer/owner/bound/observable/control seam, incorporates the prior Pixel traces and gap measurements, specifies the exact durable-announcement/ACCEPTED admission seam, and provides reproducible content-free model/conformance commands. Harness result: 11 schedules, maximum admitted depth 1, maximum admitted duration 2,000 ms.

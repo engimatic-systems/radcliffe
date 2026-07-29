@@ -21,3 +21,9 @@ Add a deterministic schedule-driven conformance harness that can delay, duplicat
 ## Acceptance Criteria
 
 Every modeled state and transition has implementation coverage. Schedule exploration and soak runs never exceed the configured admitted-unheard bound, never advance heard state without Android evidence, never resurrect a cancelled generation, and never leave an attempt without a defined terminal or recoverable state. Long latency creates bounded buffering or silence rather than stacked catch-up playback. Reconnect and both process-restart directions converge without duplicate or skipped acknowledged speech. Pixel evidence confirms no burst of accumulated model responses, source reading starts and advances normally, barge-in remains prompt, and speaker/Bluetooth route changes preserve the protocol. The retained report includes model-check results, trace-refinement results, maximum observed queue depth/duration, and operator observations.
+
+## Notes
+
+**2026-07-29T04:22:34Z**
+
+Automated groundwork is complete on epic/rad-0tmq-complete-protocol: deterministic content-free schedules cover delay, metadata/media ordering, partition, both process restarts, background/foreground, route change and cancellation; TLC and implementation suites are green with maximum depth 1. This remains open for the explicit physical Pixel speaker/Bluetooth/soak evidence and is still dependency-gated by rad-qa5h.

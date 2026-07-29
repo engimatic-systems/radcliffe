@@ -47,3 +47,7 @@ Physical model-gap UAT passed: operator reports the remaining gaps are shorter a
 **2026-07-29T02:46:00Z**
 
 Final physical source UAT passed in session ses_f6dffefb08271664a5f815a5fd4709fb. The first read_source call admitted logical boundary 0 as three bounded parts, completed boundary 1, and stopped on operator speech. The next read_source call began at boundary 2, audibly starting 'The psychological effects of nicotine...', exactly the next sentence. This confirms native tool success, bounded source subdivision, interruption, and durable next-boundary resume. The acceptance instruction had incorrectly placed 'I looked briefly...' after 'gateway drug'; the operator corrected it. Operator accepts this temporary-disconnect vertical slice and directs ticket closure and PR handoff. The still-open child tickets retain the explicitly unimplemented formal model, process-restart, route-change, and exhaustive chaos scope; this closure does not claim those follow-ups are complete.
+
+**2026-07-29T04:22:34Z**
+
+The stacked completion branch closes rad-fnho, rad-pm6h, rad-pb5a and rad-g8os with checked-in report/model/protocol/durable-worker evidence. rad-qa5h and rad-grf7 intentionally remain open for the connected-Pixel instrumentation and physical speaker/Bluetooth/soak acceptance; the epic remains open until those operator gates pass.

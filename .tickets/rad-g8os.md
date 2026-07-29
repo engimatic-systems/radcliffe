@@ -1,6 +1,6 @@
 ---
 id: rad-g8os
-status: open
+status: closed
 deps: [rad-pb5a]
 links: []
 created: 2026-07-28T21:38:09Z
@@ -27,3 +27,7 @@ At all observable points, outstanding admitted audio satisfies the protocol boun
 **2026-07-29T01:07:50Z**
 
 First sender slice implemented: model/source/job speech share a one-attempt admission window, model speech waits for Android terminal evidence, reconnect supersedes only the uncertain transport attempt and retries the stable segment before later speech. Durable restart recovery remains open.
+
+**2026-07-29T04:22:34Z**
+
+Completed on epic/rad-0tmq-complete-protocol. The worker waits for revision-1 credit, durably admits exactly one <=30s retained-PCM attempt, waits for matching ACCEPTED before realtime media, validates monotonic decoded evidence, emits content-free depth/duration gauges, and recovers the retained segment before later work after worker restart. Full worker tests include ordering, reconnect, cancellation, durable restart and heard-boundary behavior.
