@@ -2,7 +2,7 @@
 id: rad-g9yr
 status: open
 deps: [rad-2tft]
-links: []
+links: [rad-ig6k, rad-0tmq]
 created: 2026-07-13T01:52:53Z
 type: feature
 priority: 1

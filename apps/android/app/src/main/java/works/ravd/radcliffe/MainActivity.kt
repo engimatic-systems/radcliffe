@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
         val messages by SessionModel.messages.collectAsState()
         val activeSessionId by SessionModel.sessionId.collectAsState()
         val backgroundJobs by BackgroundJobModel.jobs.collectAsState()
+        val earconDiagnostic by EarconPlaybackDiagnostics.state.collectAsState()
         val storedProfile by profiles.profile.collectAsState(initial = null)
         val showSystemMessages by profiles.showSystemMessages.collectAsState(initial = false)
         val liveConfigurationUpdates by BehaviorConfigurationModel.updates.collectAsState()
@@ -773,7 +774,11 @@ class MainActivity : ComponentActivity() {
                     configurationNotice = configurationNotice,
                     jobCommandInFlight = jobCommandInFlight,
                     jobNotice = jobNotice,
+                    earconDiagnostic = earconDiagnostic,
                     onDiagnostics = { diagnosticsVisible = !diagnosticsVisible },
+                    onPreviewEarcons = {
+                        command(VoiceSessionService.ACTION_PREVIEW_EARCONS)
+                    },
                     onShowSystemMessages = { show ->
                         scope.launch {
                             suspendRunCatching {
@@ -884,7 +889,9 @@ class MainActivity : ComponentActivity() {
         configurationNotice: String?,
         jobCommandInFlight: String?,
         jobNotice: String?,
+        earconDiagnostic: EarconPlaybackDiagnostic,
         onDiagnostics: () -> Unit,
+        onPreviewEarcons: () -> Unit,
         onShowSystemMessages: (Boolean) -> Unit,
         onExport: (ConversationExportFormat) -> Unit,
         onArchive: () -> Unit,
@@ -961,9 +968,21 @@ class MainActivity : ComponentActivity() {
         if (diagnosticsVisible) {
             Text("Session ID: $sessionId", style = MaterialTheme.typography.labelSmall)
             Text(
+                "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
                 "${messages.size} durable/live messages · ${visibleMessages.size} shown",
                 style = MaterialTheme.typography.labelSmall,
             )
+            Text(
+                "Earcons #${earconDiagnostic.sequence}: ${earconDiagnostic.status}" +
+                    (earconDiagnostic.cue?.let { " · ${it.name}" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            OutlinedButton(onClick = onPreviewEarcons) {
+                Text("Preview all cues")
+            }
         }
         LazyColumn(
             modifier = Modifier.weight(1f),

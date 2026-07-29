@@ -2,7 +2,7 @@
 id: rad-ig6k
 status: open
 deps: []
-links: [rad-uk3f]
+links: [rad-uk3f, rad-g9yr, rad-0tmq]
 created: 2026-07-21T15:19:35Z
 type: bug
 priority: 1

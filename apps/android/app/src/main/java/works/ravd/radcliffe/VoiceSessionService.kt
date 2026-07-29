@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,12 +44,15 @@ class VoiceSessionService : MediaSessionService() {
     private var room: Room? = null
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
+    private lateinit var earcons: EarconPlayer
     private var sessionId: String = ""
     private val playbackTracker = DevicePlaybackTracker()
     private val playbackSinks = mutableMapOf<RemoteAudioTrack, AudioTrackSink>()
     private val handledTransitions = mutableSetOf<String>()
     private var playbackPaused = false
     private var playbackSuppressedForInterruption = false
+    private var roomWasConnected = false
+    private var disconnectEarconPlayed = false
 
     override fun onCreate() {
         super.onCreate()
@@ -57,6 +61,7 @@ class VoiceSessionService : MediaSessionService() {
         )
         player = ExoPlayer.Builder(this).build()
         mediaSession = MediaSession.Builder(this, player).build()
+        earcons = EarconPlayer(this)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
@@ -69,6 +74,7 @@ class VoiceSessionService : MediaSessionService() {
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> requestStop()
+            ACTION_PREVIEW_EARCONS -> previewEarcons()
             ACTION_CONFIRM_AGENT_CONTROL -> respondToAgentControl(intent, true)
             ACTION_REJECT_AGENT_CONTROL -> respondToAgentControl(intent, false)
         }
@@ -105,6 +111,8 @@ class VoiceSessionService : MediaSessionService() {
         val connected = LiveKit.create(this@VoiceSessionService)
         room = connected
         sessionId = destinationSessionId
+        roomWasConnected = false
+        disconnectEarconPlayed = false
         observe(connected)
         connected.connect(url, token)
         connected.localParticipant.setMicrophoneEnabled(true)
@@ -197,6 +205,8 @@ class VoiceSessionService : MediaSessionService() {
             activeRoom.events.events.collect { event ->
                 if (room !== activeRoom) return@collect
                 when (event) {
+                    is RoomEvent.Connected -> roomWasConnected = true
+                    is RoomEvent.Disconnected -> playDisconnectEarcon()
                     is RoomEvent.Reconnecting -> SessionModel.state(VoiceState.RECONNECTING)
                     is RoomEvent.Reconnected -> SessionModel.state(VoiceState.CONNECTING)
                     is RoomEvent.TrackSubscribed -> attachPlaybackSink(event.track)
@@ -219,14 +229,17 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasJobEvent()) {
-            backgroundJobFromEvent(event.jobEvent, sessionId)?.let(BackgroundJobModel::update)
+            backgroundJobFromEvent(event.jobEvent, sessionId)?.let { job ->
+                if (BackgroundJobModel.update(job)) {
+                    earconForJobEvent(event.jobEvent.kind)?.let(earcons::play)
+                }
+            }
         }
         if (event.hasSessionReady()) {
             val current = SessionModel.state.value
             val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)
             if (ready != current) {
-                SessionModel.state(ready)
-                if (ready == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
+                applyServerVoiceState(ready)
                 notify("Listening", false)
             }
         }
@@ -245,8 +258,7 @@ class VoiceSessionService : MediaSessionService() {
                 ConversationState.CONVERSATION_STATE_FAILED -> VoiceState.FAILED
                 else -> VoiceState.IDLE
             }
-            SessionModel.state(current)
-            if (current == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
+            applyServerVoiceState(current)
         }
         if (event.hasAgentControlRequest()) {
             val request = event.agentControlRequest
@@ -330,6 +342,23 @@ class VoiceSessionService : MediaSessionService() {
                     ),
                 ),
             )
+        }
+    }
+
+    private fun applyServerVoiceState(current: VoiceState) {
+        val previous = SessionModel.state.value
+        if (current == previous) return
+        SessionModel.state(current)
+        earconForStateTransition(previous, current)?.let(earcons::play)
+        if (current == VoiceState.LISTENING) BehaviorConfigurationModel.expireTurnOverrides()
+    }
+
+    private fun previewEarcons() {
+        scope.launch {
+            Earcon.entries.forEach { cue ->
+                earcons.play(cue)
+                delay(600)
+            }
         }
     }
 
@@ -470,6 +499,7 @@ class VoiceSessionService : MediaSessionService() {
         destination: String,
     ) {
         val previousRoom = room
+        playDisconnectEarcon()
         if (previousRoom != null) {
             playbackTracker.flush("conversation transition").forEach {
                 runCatching { publishPlaybackAcknowledgement(previousRoom, it) }
@@ -535,6 +565,7 @@ class VoiceSessionService : MediaSessionService() {
     }
 
     private fun stopSession(resetState: Boolean = true) {
+        playDisconnectEarcon()
         room?.disconnect()
         room?.release()
         room = null
@@ -543,6 +574,12 @@ class VoiceSessionService : MediaSessionService() {
         if (resetState) SessionModel.state(VoiceState.IDLE)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun playDisconnectEarcon() {
+        if (!roomWasConnected || disconnectEarconPlayed) return
+        disconnectEarconPlayed = true
+        earcons.play(Earcon.SESSION_DISCONNECTED)
     }
 
     private fun notification(label: String, paused: Boolean): Notification {
@@ -579,6 +616,7 @@ class VoiceSessionService : MediaSessionService() {
         room?.release()
         mediaSession.release()
         player.release()
+        earcons.release()
         scope.cancel()
         super.onDestroy()
     }
@@ -589,6 +627,7 @@ class VoiceSessionService : MediaSessionService() {
         const val ACTION_PAUSE = "works.ravd.radcliffe.PAUSE"
         const val ACTION_RESUME = "works.ravd.radcliffe.RESUME"
         const val ACTION_STOP = "works.ravd.radcliffe.STOP"
+        const val ACTION_PREVIEW_EARCONS = "works.ravd.radcliffe.PREVIEW_EARCONS"
         const val ACTION_CONFIRM_AGENT_CONTROL = "works.ravd.radcliffe.CONFIRM_AGENT_CONTROL"
         const val ACTION_REJECT_AGENT_CONTROL = "works.ravd.radcliffe.REJECT_AGENT_CONTROL"
         const val EXTRA_URL = "livekit_url"
