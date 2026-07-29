@@ -251,7 +251,7 @@ def test_catalog_survives_control_plane_restart(tmp_path) -> None:
         assert credential.json()["generation"] == 1
 
 
-def test_context_usage_projects_current_history_without_leaking_content(tmp_path) -> None:
+def test_context_usage_counts_interrupted_user_history_without_returning_content(tmp_path) -> None:
     config = settings(tmp_path)
     usage = FakeContextUsageClient()
     with TestClient(create_app(config, context_usage_client=usage)) as client:
@@ -263,7 +263,7 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
                 session_id="context-session",
                 sequence=1,
                 source=SourceKind.USER,
-                text="abandoned private request",
+                text="interrupted private request",
                 metadata={TURN_ID_METADATA: "old-turn"},
             ),
             MessageEnvelope.text(
@@ -305,10 +305,10 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
             "session_id": "context-session",
             "model_id": "qwen3:8b",
             "context_limit": 1000,
-            "projected_input_tokens": 67,
+            "projected_input_tokens": 94,
             "reserved_output_tokens": 100,
-            "remaining_tokens": 833,
-            "percentage": 67 / 9,
+            "remaining_tokens": 806,
+            "percentage": 94 / 9,
             "projection_version": "context-v2",
             "measurement_basis": "test-exact-model-request",
             "exact": True,
@@ -321,7 +321,7 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
                 "currency": "USD",
                 "minimum_usd": 0.0,
                 "maximum_usd": 0.0,
-                "projected_input_tokens": 67,
+                "projected_input_tokens": 94,
                 "representative_output_tokens": 512,
                 "token_basis": "exact_projected_payload",
                 "cache_assumption": "cold",
@@ -337,7 +337,8 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
         assert "request_digest" not in body
         packets = usage.requests[-1]["packets"]
         assert isinstance(packets, list)
-        assert [packet["include"] for packet in packets] == [False, False, True, True]
+        assert [packet["include"] for packet in packets] == [True, False, True, True]
+        assert packets[0]["role"] == "user"
         assert packets[2]["role"] == "tool"
         assert packets[3]["role"] == "source"
 
@@ -355,7 +356,7 @@ def test_context_usage_projects_current_history_without_leaking_content(tmp_path
             "/v1/sessions/context-session/context-usage",
             headers=AUTHORIZATION,
         )
-        assert second.json()["projected_input_tokens"] == 78
+        assert second.json()["projected_input_tokens"] == 105
         assert usage.requests[-1]["requestId"] == "context-usage:context-session:5"
         assert (
             client.get("/v1/sessions/missing/context-usage", headers=AUTHORIZATION).status_code

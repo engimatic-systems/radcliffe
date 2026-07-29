@@ -273,6 +273,122 @@ describe("PiAgentOrchestrator", () => {
     );
   });
 
+  it("routes a retained interrupted job request together with its one-word addendum", async () => {
+    const faux = createFauxCore({ provider: "radcliffe-interrupted-user-context-test" });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "run_job",
+          {
+            instruction:
+              "Download the Gettysburg Address and save only its verbatim text as Markdown.",
+          },
+          { id: "retained-run-job" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Working on it."),
+    ]);
+    const stream = vi.fn(faux.streamSimple);
+    const tool = vi.fn(async () => ({
+      modelContent: "accepted",
+      details: { jobId: "job-1" },
+    }));
+    const model = { ...faux.getModel(), api: "anthropic-messages" as const };
+    const orchestrator = new PiAgentOrchestrator(model, stream, tool);
+    const first =
+      "Start a background job to get the Gettysburg Address and save it as Markdown.";
+    const userMessage = `${first}\nVerbatim.`;
+    const turn = request([
+      packet("prior-user", first, {
+        annotations: [
+          ["radcliffe.turn_disposition", "interrupted"],
+          ["radcliffe.turn_id", "turn-prior"],
+        ],
+      }),
+      packet("current-user", "Verbatim.", {
+        annotations: [["radcliffe.turn_id", "turn-current"]],
+      }),
+    ]);
+    turn.userMessage = userMessage;
+
+    await orchestrator.run(turn, () => undefined);
+
+    const modelMessages = stream.mock.calls[0]?.[1].messages;
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: `[Radcliffe user]\n${first}`,
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "[Radcliffe user]\nVerbatim.",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(modelMessages).match(/Gettysburg Address/g)).toHaveLength(1);
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: { type: "tool", name: "run_job" },
+    });
+    expect(tool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "run_job",
+        userMessage,
+        arguments: {
+          instruction:
+            "Download the Gettysburg Address and save only its verbatim text as Markdown.",
+        },
+      }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it("sends every buffered user fragment to the model exactly once in chronological order", () => {
+    const fragments = [
+      "This is a test of the Gettysburg Address.",
+      "Four score and seven years ago.",
+      "Now we are engaged in a great civil war.",
+      "What did I say?",
+    ];
+    const turn = request(
+      fragments.map((content, index) =>
+        packet(`user-${index + 1}`, content, {
+          annotations: [
+            [
+              "radcliffe.turn_disposition",
+              index === fragments.length - 1 ? "completed" : "interrupted",
+            ],
+            ["radcliffe.turn_id", `turn-${index + 1}`],
+          ],
+          timestamp: index + 1,
+        }),
+      ),
+    );
+    turn.userMessage = fragments.join("\n");
+
+    const context = modelContextFromRequest(turn);
+
+    expect(context.messages).toEqual(
+      fragments.map((content, index) => ({
+        role: "user",
+        content: `[Radcliffe user]\n${content}`,
+        timestamp: index + 1,
+      })),
+    );
+    for (const fragment of fragments) {
+      expect(
+        context.messages.filter(
+          (message) =>
+            message.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.includes(fragment),
+        ),
+      ).toHaveLength(1);
+    }
+  });
+
   it("keeps every schema available when a first-turn job request mentions later verbatim delivery", async () => {
     const faux = createFauxCore({ provider: "radcliffe-first-turn-schema-test" });
     faux.setResponses([

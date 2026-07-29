@@ -429,12 +429,20 @@ def context_replay(envelopes: tuple[MessageEnvelope, ...]) -> tuple[ContextPacke
         if disposition in EXCLUDED_TURN_DISPOSITIONS:
             annotations = dict(packet.annotations)
             annotations[TURN_DISPOSITION_METADATA] = disposition
-            packet = replace(
-                packet,
-                content=f"[excluded: {disposition} turn]",
-                annotations=tuple(sorted(annotations.items())),
-                include=False,
-            )
+            # A response disposition can suppress abandoned assistant/tool output, but accepted
+            # user speech remains part of the chronological conversation.
+            if envelope.source is SourceKind.USER:
+                packet = replace(
+                    packet,
+                    annotations=tuple(sorted(annotations.items())),
+                )
+            else:
+                packet = replace(
+                    packet,
+                    content=f"[excluded: {disposition} turn]",
+                    annotations=tuple(sorted(annotations.items())),
+                    include=False,
+                )
         packets.append(packet)
     return tuple(packets)
 

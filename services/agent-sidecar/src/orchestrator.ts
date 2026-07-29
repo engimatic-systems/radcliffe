@@ -1129,29 +1129,57 @@ function hasExplicitSourceReadIntent(text: string): boolean {
   );
 }
 
-function exactOutputFromPackets(packets: readonly ContextPacket[]): ExactOutputIntent | undefined {
+function exactOutputFromPackets(
+  packets: readonly ContextPacket[],
+  currentUserMessage?: string,
+): ExactOutputIntent | undefined {
   const current = packets.at(-1);
-  if (!current || current.source !== "user" || hasExplicitSourceReadIntent(current.content)) {
+  const content = currentUserMessage ?? current?.content;
+  if (!current || current.source !== "user" || !content || hasExplicitSourceReadIntent(content)) {
     return undefined;
   }
-  return classifyExactOutputIntent(current.content, packets.slice(0, -1));
+  return classifyExactOutputIntent(content, packets.slice(0, -1));
 }
 
 function includedPacketsForRequest(request: TurnRequest): ContextPacket[] {
-  const packets = request.packets.filter((packet) => packet.include);
+  // userMessage may contain the cumulative unanswered batch for deterministic intent routing.
+  // The model history must keep the persisted packets unchanged so each utterance appears once.
+  return request.packets.filter((packet) => packet.include);
+}
+
+function userMessageForRequest(
+  request: TurnRequest,
+  packets: readonly ContextPacket[],
+): string {
+  if (request.userMessage !== undefined) return request.userMessage;
   const current = packets.at(-1);
-  if (!request.userMessage || current?.source !== "user") return packets;
-  return [...packets.slice(0, -1), { ...current, content: request.userMessage }];
+  if (!current || current.source !== "user") return "";
+  const turnId =
+    Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
+  return packets
+    .filter(
+      (packet) =>
+        packet.source === "user" &&
+        (Object.fromEntries(packet.annotations)["radcliffe.turn_id"] ?? packet.messageId) ===
+          turnId,
+    )
+    .map((packet) => packet.content)
+    .join("\n");
 }
 
 export function modelContextFromRequest(request: TurnRequest) {
   const packets = includedPacketsForRequest(request);
+  const userMessage = userMessageForRequest(request, packets);
   const messages: RadcliffeContextMessage[] = packets.map((packet) => ({
     role: "radcliffe",
     packet,
   }));
   return {
-    systemPrompt: systemPrompt(request, undefined, exactOutputFromPackets(packets)),
+    systemPrompt: systemPrompt(
+      request,
+      undefined,
+      exactOutputFromPackets(packets, userMessage),
+    ),
     messages: convertRadcliffeContext(messages),
     tools: [
       {
@@ -1224,25 +1252,19 @@ export class PiAgentOrchestrator implements AgentOrchestrator {
     const packets = includedPacketsForRequest(request);
     if (packets.length === 0) throw new Error("turn requires an included context packet");
     const current = packets.at(-1)!;
+    const userMessage = userMessageForRequest(request, packets);
+    const currentUserMessage = current.source === "user" ? userMessage : current.content;
     const deliveryIntent =
-      current.source === "user" ? classifyDeliveryIntent(current.content) : undefined;
-    const exactOutputIntent = exactOutputFromPackets(packets);
+      current.source === "user" ? classifyDeliveryIntent(currentUserMessage) : undefined;
+    const exactOutputIntent = exactOutputFromPackets(packets, currentUserMessage);
     const jobOperation =
-      current.source === "user" ? explicitJobManagementOperation(current.content) : undefined;
-    const jobLaunch = current.source === "user" && explicitJobLaunchIntent(current.content);
+      current.source === "user"
+        ? explicitJobManagementOperation(currentUserMessage)
+        : undefined;
+    const jobLaunch =
+      current.source === "user" && explicitJobLaunchIntent(currentUserMessage);
     const turnId =
       Object.fromEntries(current.annotations)["radcliffe.turn_id"] ?? current.messageId;
-    const userMessage =
-      request.userMessage ??
-      packets
-        .filter(
-          (packet) =>
-            packet.source === "user" &&
-            (Object.fromEntries(packet.annotations)["radcliffe.turn_id"] ?? packet.messageId) ===
-              turnId,
-        )
-        .map((packet) => packet.content)
-        .join("\n");
     let deliveryPreparation: DeliveryPreparation | undefined;
     if (deliveryIntent && !deliveryIntent.sourceRead) {
       const callId = `delivery-rate:${request.requestId}`;
