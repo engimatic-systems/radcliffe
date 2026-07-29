@@ -749,6 +749,45 @@ class Runtime:
     job_executor: JobExecutorSupervisor | None
 
 
+def _source_grant(
+    settings: Settings,
+    record: SessionRecord,
+    *,
+    issued_at: datetime | None = None,
+) -> CapabilityGrant:
+    return CapabilityGrant(
+        grant_id=f"source:{record.session_id}:{record.generation}",
+        session_id=record.session_id,
+        generation=record.generation,
+        readable_roots=(settings.source_root.resolve(),),
+        allowed_tools=frozenset({"list_sources", "read_source"}),
+        expires_at=(issued_at or datetime.now(UTC))
+        + timedelta(seconds=settings.room_token_ttl_seconds),
+    )
+
+
+async def _restore_active_session(
+    active: Runtime,
+    session_id: str,
+) -> ActiveSession | None:
+    record = await active.catalog.get(
+        principal_id=active.settings.owner_id,
+        session_id=session_id,
+    )
+    if record is None or record.status != "active":
+        return None
+    session = ActiveSession(
+        latest_operation_generation=record.generation,
+        grant=_source_grant(
+            active.settings,
+            record,
+            issued_at=record.last_activity_at,
+        ),
+    )
+    active.sessions[session_id] = session
+    return session
+
+
 def _bearer(authorization: str | None, expected: str) -> None:
     supplied = authorization.removeprefix("Bearer ") if authorization else ""
     if not hmac.compare_digest(supplied, expected):
@@ -2213,15 +2252,7 @@ def create_app(
             session_id=record.session_id,
         )
         assert refreshed is not None
-        grant = CapabilityGrant(
-            grant_id=f"source:{record.session_id}:{record.generation}",
-            session_id=record.session_id,
-            generation=record.generation,
-            readable_roots=(active.settings.source_root.resolve(),),
-            allowed_tools=frozenset({"list_sources", "read_source"}),
-            expires_at=datetime.now(UTC)
-            + timedelta(seconds=active.settings.room_token_ttl_seconds),
-        )
+        grant = _source_grant(active.settings, record)
         async with active.lock:
             active.sessions[record.session_id] = ActiveSession(record.generation, grant)
 
@@ -2561,6 +2592,9 @@ def create_app(
             status=request.status,
         )
         assert record is not None
+        if record.status != "active":
+            async with active.lock:
+                active.sessions.pop(record.session_id, None)
         if active.workers is not None and record.worker_mode == "managed":
             if record.status == "active":
                 record = await ensure_worker(active, record)
@@ -2941,6 +2975,8 @@ def create_app(
                 if replay is not None:
                     return replay
             session = active.sessions.get(request.session_id)
+            if session is None:
+                session = await _restore_active_session(active, request.session_id)
             if session is None:
                 active.telemetry.emit(
                     component="control",
