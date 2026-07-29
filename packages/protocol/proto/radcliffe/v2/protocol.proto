@@ -43,6 +43,18 @@ enum PlaybackStatus {
   PLAYBACK_STATUS_COMPLETED = 3;
   PLAYBACK_STATUS_FLUSHED = 4;
   PLAYBACK_STATUS_FAILED = 5;
+  // The receiver accepted the metadata and reserved capacity. The sender must
+  // not publish the corresponding realtime media before this acknowledgement.
+  PLAYBACK_STATUS_ACCEPTED = 6;
+}
+
+enum PlaybackReconciliationOutcome {
+  PLAYBACK_RECONCILIATION_OUTCOME_UNSPECIFIED = 0;
+  PLAYBACK_RECONCILIATION_OUTCOME_READY = 1;
+  PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING = 2;
+  PLAYBACK_RECONCILIATION_OUTCOME_UNSUPPORTED_PROTOCOL = 3;
+  PLAYBACK_RECONCILIATION_OUTCOME_STALE_CREDIT = 4;
+  PLAYBACK_RECONCILIATION_OUTCOME_INVALID_CAPACITY = 5;
 }
 
 enum ToolOutcome {
@@ -249,6 +261,11 @@ message PlaybackAcknowledgement {
   google.protobuf.Timestamp occurred_at = 7;
   string detail = 8;
   string playback_id = 9;
+  // Process-local receiver identity and monotonically increasing credit grant.
+  // They prevent a delayed acknowledgement from spending current capacity.
+  string receiver_epoch = 10;
+  uint64 credit_sequence = 11;
+  uint64 attempt_sequence = 12;
 }
 
 message PlaybackSegment {
@@ -260,6 +277,10 @@ message PlaybackSegment {
   SourceKind source = 6;
   string playback_id = 7;
   double speech_rate_multiplier = 8;
+  uint32 playback_protocol_revision = 9;
+  string receiver_epoch = 10;
+  uint64 credit_sequence = 11;
+  uint64 attempt_sequence = 12;
 }
 
 message CapabilityGrant {
@@ -452,6 +473,12 @@ message Reconnect {
   uint32 max_inflight_attempts = 7;
   // The largest single attempt the receiver is willing to admit.
   uint64 max_segment_duration_ms = 8;
+  // Revision 1 requires metadata acceptance before realtime media publication.
+  uint32 playback_protocol_revision = 9;
+  // A fresh random value for each Android receiver process.
+  string receiver_epoch = 10;
+  // Monotonic within receiver_epoch. A delayed lower grant is stale.
+  uint64 credit_sequence = 11;
 }
 
 message PlaybackReconciled {
@@ -461,6 +488,10 @@ message PlaybackReconciled {
   // True when the sender retained an unfinished segment and will issue a new
   // playback attempt before later canonical speech.
   bool replay_pending = 4;
+  uint32 playback_protocol_revision = 5;
+  string receiver_epoch = 6;
+  uint64 credit_sequence = 7;
+  PlaybackReconciliationOutcome outcome = 8;
 }
 
 message ControlCommand {

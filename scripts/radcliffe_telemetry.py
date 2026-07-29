@@ -15,7 +15,7 @@ from radcliffe_domain.telemetry import TELEMETRY_SCHEMA, TelemetryEvent, validat
 
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE_SCHEMA = "radcliffe-diagnostic-bundle-v1"
-_EVENT_KEYS = {
+_REQUIRED_EVENT_KEYS = {
     "schema",
     "occurred_at",
     "component",
@@ -28,14 +28,26 @@ _EVENT_KEYS = {
     "phase",
     "duration_ms",
 }
+_OPTIONAL_EVENT_KEYS = {
+    "queue_depth",
+    "queued_duration_ms",
+}
 _OPERATION = re.compile(r"^[A-Za-z0-9_.:-]{0,128}$")
 
 
 def parse_event(payload: object) -> TelemetryEvent:
-    if not isinstance(payload, dict) or set(payload) != _EVENT_KEYS:
+    if (
+        not isinstance(payload, dict)
+        or not _REQUIRED_EVENT_KEYS.issubset(payload)
+        or set(payload) - _REQUIRED_EVENT_KEYS - _OPTIONAL_EVENT_KEYS
+    ):
         raise ValueError("telemetry event fields are invalid")
     if not isinstance(payload["duration_ms"], int | float | type(None)):
         raise ValueError("telemetry duration type is invalid")
+    if not isinstance(payload.get("queue_depth"), int | type(None)):
+        raise ValueError("telemetry queue depth type is invalid")
+    if not isinstance(payload.get("queued_duration_ms"), int | float | type(None)):
+        raise ValueError("telemetry queued duration type is invalid")
     event = TelemetryEvent(
         schema=str(payload["schema"]),
         occurred_at=str(payload["occurred_at"]),
@@ -48,6 +60,14 @@ def parse_event(payload: object) -> TelemetryEvent:
         operation=str(payload["operation"]),
         phase=str(payload["phase"]),
         duration_ms=(float(payload["duration_ms"]) if payload["duration_ms"] is not None else None),
+        queue_depth=(
+            int(payload["queue_depth"]) if payload.get("queue_depth") is not None else None
+        ),
+        queued_duration_ms=(
+            float(payload["queued_duration_ms"])
+            if payload.get("queued_duration_ms") is not None
+            else None
+        ),
     )
     validate_event(event)
     datetime.fromisoformat(event.occurred_at)
@@ -185,6 +205,8 @@ def trace_summaries(events: Iterable[TelemetryEvent]) -> tuple[dict[str, object]
                         "phase": item.phase,
                         "outcome": item.outcome,
                         "duration_ms": item.duration_ms,
+                        "queue_depth": item.queue_depth,
+                        "queued_duration_ms": item.queued_duration_ms,
                     }
                     for item in ordered
                 ],

@@ -47,6 +47,16 @@ class PlaybackStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PLAYBACK_STATUS_COMPLETED: _ClassVar[PlaybackStatus]
     PLAYBACK_STATUS_FLUSHED: _ClassVar[PlaybackStatus]
     PLAYBACK_STATUS_FAILED: _ClassVar[PlaybackStatus]
+    PLAYBACK_STATUS_ACCEPTED: _ClassVar[PlaybackStatus]
+
+class PlaybackReconciliationOutcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PLAYBACK_RECONCILIATION_OUTCOME_UNSPECIFIED: _ClassVar[PlaybackReconciliationOutcome]
+    PLAYBACK_RECONCILIATION_OUTCOME_READY: _ClassVar[PlaybackReconciliationOutcome]
+    PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING: _ClassVar[PlaybackReconciliationOutcome]
+    PLAYBACK_RECONCILIATION_OUTCOME_UNSUPPORTED_PROTOCOL: _ClassVar[PlaybackReconciliationOutcome]
+    PLAYBACK_RECONCILIATION_OUTCOME_STALE_CREDIT: _ClassVar[PlaybackReconciliationOutcome]
+    PLAYBACK_RECONCILIATION_OUTCOME_INVALID_CAPACITY: _ClassVar[PlaybackReconciliationOutcome]
 
 class ToolOutcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -204,6 +214,13 @@ PLAYBACK_STATUS_POSITION: PlaybackStatus
 PLAYBACK_STATUS_COMPLETED: PlaybackStatus
 PLAYBACK_STATUS_FLUSHED: PlaybackStatus
 PLAYBACK_STATUS_FAILED: PlaybackStatus
+PLAYBACK_STATUS_ACCEPTED: PlaybackStatus
+PLAYBACK_RECONCILIATION_OUTCOME_UNSPECIFIED: PlaybackReconciliationOutcome
+PLAYBACK_RECONCILIATION_OUTCOME_READY: PlaybackReconciliationOutcome
+PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING: PlaybackReconciliationOutcome
+PLAYBACK_RECONCILIATION_OUTCOME_UNSUPPORTED_PROTOCOL: PlaybackReconciliationOutcome
+PLAYBACK_RECONCILIATION_OUTCOME_STALE_CREDIT: PlaybackReconciliationOutcome
+PLAYBACK_RECONCILIATION_OUTCOME_INVALID_CAPACITY: PlaybackReconciliationOutcome
 TOOL_OUTCOME_UNSPECIFIED: ToolOutcome
 TOOL_OUTCOME_REQUESTED: ToolOutcome
 TOOL_OUTCOME_AUTHORIZED: ToolOutcome
@@ -413,7 +430,7 @@ class StateChanged(_message.Message):
     def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., previous: _Optional[_Union[ConversationState, str]] = ..., current: _Optional[_Union[ConversationState, str]] = ..., reason: _Optional[str] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class PlaybackAcknowledgement(_message.Message):
-    __slots__ = ("acknowledgement_id", "operation", "segment_id", "status", "position_ms", "boundary_index", "occurred_at", "detail", "playback_id")
+    __slots__ = ("acknowledgement_id", "operation", "segment_id", "status", "position_ms", "boundary_index", "occurred_at", "detail", "playback_id", "receiver_epoch", "credit_sequence", "attempt_sequence")
     ACKNOWLEDGEMENT_ID_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -423,6 +440,9 @@ class PlaybackAcknowledgement(_message.Message):
     OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
     DETAIL_FIELD_NUMBER: _ClassVar[int]
     PLAYBACK_ID_FIELD_NUMBER: _ClassVar[int]
+    RECEIVER_EPOCH_FIELD_NUMBER: _ClassVar[int]
+    CREDIT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     acknowledgement_id: str
     operation: OperationRef
     segment_id: str
@@ -432,10 +452,13 @@ class PlaybackAcknowledgement(_message.Message):
     occurred_at: _timestamp_pb2.Timestamp
     detail: str
     playback_id: str
-    def __init__(self, acknowledgement_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., status: _Optional[_Union[PlaybackStatus, str]] = ..., position_ms: _Optional[int] = ..., boundary_index: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., detail: _Optional[str] = ..., playback_id: _Optional[str] = ...) -> None: ...
+    receiver_epoch: str
+    credit_sequence: int
+    attempt_sequence: int
+    def __init__(self, acknowledgement_id: _Optional[str] = ..., operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., status: _Optional[_Union[PlaybackStatus, str]] = ..., position_ms: _Optional[int] = ..., boundary_index: _Optional[int] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., detail: _Optional[str] = ..., playback_id: _Optional[str] = ..., receiver_epoch: _Optional[str] = ..., credit_sequence: _Optional[int] = ..., attempt_sequence: _Optional[int] = ...) -> None: ...
 
 class PlaybackSegment(_message.Message):
-    __slots__ = ("operation", "segment_id", "boundary_index", "duration_ms", "canonical_sha256", "source", "playback_id", "speech_rate_multiplier")
+    __slots__ = ("operation", "segment_id", "boundary_index", "duration_ms", "canonical_sha256", "source", "playback_id", "speech_rate_multiplier", "playback_protocol_revision", "receiver_epoch", "credit_sequence", "attempt_sequence")
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
     BOUNDARY_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -444,6 +467,10 @@ class PlaybackSegment(_message.Message):
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     PLAYBACK_ID_FIELD_NUMBER: _ClassVar[int]
     SPEECH_RATE_MULTIPLIER_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    RECEIVER_EPOCH_FIELD_NUMBER: _ClassVar[int]
+    CREDIT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     operation: OperationRef
     segment_id: str
     boundary_index: int
@@ -452,7 +479,11 @@ class PlaybackSegment(_message.Message):
     source: SourceKind
     playback_id: str
     speech_rate_multiplier: float
-    def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., boundary_index: _Optional[int] = ..., duration_ms: _Optional[int] = ..., canonical_sha256: _Optional[bytes] = ..., source: _Optional[_Union[SourceKind, str]] = ..., playback_id: _Optional[str] = ..., speech_rate_multiplier: _Optional[float] = ...) -> None: ...
+    playback_protocol_revision: int
+    receiver_epoch: str
+    credit_sequence: int
+    attempt_sequence: int
+    def __init__(self, operation: _Optional[_Union[OperationRef, _Mapping]] = ..., segment_id: _Optional[str] = ..., boundary_index: _Optional[int] = ..., duration_ms: _Optional[int] = ..., canonical_sha256: _Optional[bytes] = ..., source: _Optional[_Union[SourceKind, str]] = ..., playback_id: _Optional[str] = ..., speech_rate_multiplier: _Optional[float] = ..., playback_protocol_revision: _Optional[int] = ..., receiver_epoch: _Optional[str] = ..., credit_sequence: _Optional[int] = ..., attempt_sequence: _Optional[int] = ...) -> None: ...
 
 class CapabilityGrant(_message.Message):
     __slots__ = ("grant_id", "session_id", "readable_roots", "allowed_tools", "expires_at")
@@ -759,7 +790,7 @@ class JobEvent(_message.Message):
     def __init__(self, schema_version: _Optional[int] = ..., event_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobEventKind, str]] = ..., notification_policy: _Optional[_Union[JobNotificationPolicy, str]] = ..., priority: _Optional[int] = ..., detail_code: _Optional[str] = ..., entity_ids: _Optional[_Iterable[str]] = ..., artifact_ids: _Optional[_Iterable[str]] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., delivery_sequence: _Optional[int] = ...) -> None: ...
 
 class Reconnect(_message.Message):
-    __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key", "max_inflight_attempts", "max_segment_duration_ms")
+    __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key", "max_inflight_attempts", "max_segment_duration_ms", "playback_protocol_revision", "receiver_epoch", "credit_sequence")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
@@ -768,6 +799,9 @@ class Reconnect(_message.Message):
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
     MAX_INFLIGHT_ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
     MAX_SEGMENT_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    RECEIVER_EPOCH_FIELD_NUMBER: _ClassVar[int]
+    CREDIT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     session_id: str
     generation: int
@@ -776,19 +810,30 @@ class Reconnect(_message.Message):
     idempotency_key: str
     max_inflight_attempts: int
     max_segment_duration_ms: int
-    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., last_acknowledged_sequence: _Optional[int] = ..., latest_playback: _Optional[_Iterable[_Union[PlaybackAcknowledgement, _Mapping]]] = ..., idempotency_key: _Optional[str] = ..., max_inflight_attempts: _Optional[int] = ..., max_segment_duration_ms: _Optional[int] = ...) -> None: ...
+    playback_protocol_revision: int
+    receiver_epoch: str
+    credit_sequence: int
+    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., last_acknowledged_sequence: _Optional[int] = ..., latest_playback: _Optional[_Iterable[_Union[PlaybackAcknowledgement, _Mapping]]] = ..., idempotency_key: _Optional[str] = ..., max_inflight_attempts: _Optional[int] = ..., max_segment_duration_ms: _Optional[int] = ..., playback_protocol_revision: _Optional[int] = ..., receiver_epoch: _Optional[str] = ..., credit_sequence: _Optional[int] = ...) -> None: ...
 
 class PlaybackReconciled(_message.Message):
-    __slots__ = ("request_id", "session_id", "generation", "replay_pending")
+    __slots__ = ("request_id", "session_id", "generation", "replay_pending", "playback_protocol_revision", "receiver_epoch", "credit_sequence", "outcome")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     REPLAY_PENDING_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    RECEIVER_EPOCH_FIELD_NUMBER: _ClassVar[int]
+    CREDIT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    OUTCOME_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     session_id: str
     generation: int
     replay_pending: bool
-    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., replay_pending: _Optional[bool] = ...) -> None: ...
+    playback_protocol_revision: int
+    receiver_epoch: str
+    credit_sequence: int
+    outcome: PlaybackReconciliationOutcome
+    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., replay_pending: _Optional[bool] = ..., playback_protocol_revision: _Optional[int] = ..., receiver_epoch: _Optional[str] = ..., credit_sequence: _Optional[int] = ..., outcome: _Optional[_Union[PlaybackReconciliationOutcome, str]] = ...) -> None: ...
 
 class ControlCommand(_message.Message):
     __slots__ = ("command_id", "kind", "operation", "idempotency_key")

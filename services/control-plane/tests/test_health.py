@@ -222,3 +222,72 @@ def test_session_token_is_room_scoped_and_tool_content_bypasses_model(tmp_path) 
         )
         assert stale_generation.status_code == 403
         assert stale_generation.json()["detail"] == "stale operation generation"
+
+
+def test_tool_grant_recovers_only_for_active_session_after_control_restart(tmp_path) -> None:
+    config = settings(tmp_path)
+    (config.source_root / "demo.md").write_text("Restart-safe source.\n")
+    tool_headers = {"Authorization": "Bearer internal-token-1234"}
+
+    def list_sources(client: TestClient, session_id: str, generation: int, call_id: str):
+        return client.post(
+            "/v1/tool-calls",
+            headers=tool_headers,
+            json={
+                "session_id": session_id,
+                "generation": generation,
+                **TOOL_CORRELATION,
+                "call_id": call_id,
+                "idempotency_key": call_id,
+                "tool_name": "list_sources",
+                "arguments": {},
+            },
+        )
+
+    with TestClient(create_app(config)) as client:
+        enrollment = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": "Bearer bootstrap-token-123"},
+            json={
+                "installation_id": "restart-installation-1234",
+                "display_name": "Restart Pixel",
+                "credential": DEVICE_CREDENTIAL,
+            },
+        )
+        assert enrollment.status_code == 200
+        for session_id in ("restart-active", "restart-ended"):
+            session = client.post(
+                "/v1/sessions",
+                headers=DEVICE_AUTHORIZATION,
+                json={"session_id": session_id, "participant_identity": "pixel"},
+            )
+            assert session.status_code == 200
+
+        advanced = list_sources(client, "restart-active", 4, "before-restart")
+        assert advanced.status_code == 200
+        ended = client.patch(
+            "/v1/sessions/restart-ended",
+            headers=DEVICE_AUTHORIZATION,
+            json={"status": "ended"},
+        )
+        assert ended.status_code == 200
+        ended_while_running = list_sources(
+            client,
+            "restart-ended",
+            2,
+            "ended-before-restart",
+        )
+        assert ended_while_running.status_code == 403
+        assert ended_while_running.json()["detail"] == "unknown session"
+
+    with TestClient(create_app(config)) as client:
+        recovered = list_sources(client, "restart-active", 5, "after-restart")
+        assert recovered.status_code == 200
+        assert json.loads(recovered.json()["modelContent"]) == {
+            "paths": ["demo.md"],
+            "truncated": False,
+        }
+
+        inactive = list_sources(client, "restart-ended", 2, "ended-after-restart")
+        assert inactive.status_code == 403
+        assert inactive.json()["detail"] == "unknown session"

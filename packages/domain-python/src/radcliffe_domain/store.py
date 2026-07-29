@@ -37,6 +37,30 @@ class EnvelopePage:
     next_after: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class PlaybackAttemptRecord:
+    playback_id: str
+    session_id: str
+    generation: int
+    operation_id: str
+    cancellation_id: str
+    trace_id: str
+    segment_id: str
+    boundary_index: int
+    duration_ms: int
+    canonical_text: str
+    source: str
+    source_envelope: bytes | None
+    completes_source_boundary: bool
+    speech_rate_multiplier: float
+    pcm_audio: bytes
+    receiver_epoch: str
+    credit_sequence: int
+    attempt_sequence: int
+    status: str
+    position_ms: int
+
+
 class EventStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -199,6 +223,169 @@ class EventStore:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def admit_playback_attempt(self, attempt: PlaybackAttemptRecord) -> None:
+        if attempt.status != "announced":
+            raise ValueError("a new playback attempt must begin announced")
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            existing = await (
+                await db.execute(
+                    "SELECT * FROM playback_attempts WHERE playback_id = ?",
+                    (attempt.playback_id,),
+                )
+            ).fetchone()
+            if existing is not None:
+                await db.rollback()
+                raise StoreConflictError("playback attempt identity was reused")
+            await db.execute(
+                """INSERT INTO playback_attempts(
+                    playback_id, session_id, generation, operation_id,
+                    cancellation_id, trace_id, segment_id, boundary_index,
+                    duration_ms, canonical_text, source, source_envelope,
+                    completes_source_boundary, speech_rate_multiplier, pcm_audio,
+                    receiver_epoch, credit_sequence, attempt_sequence, status,
+                    position_ms, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    attempt.playback_id,
+                    attempt.session_id,
+                    attempt.generation,
+                    attempt.operation_id,
+                    attempt.cancellation_id,
+                    attempt.trace_id,
+                    attempt.segment_id,
+                    attempt.boundary_index,
+                    attempt.duration_ms,
+                    attempt.canonical_text,
+                    attempt.source,
+                    attempt.source_envelope,
+                    int(attempt.completes_source_boundary),
+                    attempt.speech_rate_multiplier,
+                    attempt.pcm_audio,
+                    attempt.receiver_epoch,
+                    attempt.credit_sequence,
+                    attempt.attempt_sequence,
+                    attempt.status,
+                    attempt.position_ms,
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def update_playback_attempt(
+        self,
+        playback_id: str,
+        *,
+        status: str,
+        position_ms: int,
+    ) -> bool:
+        allowed = {
+            "accepted",
+            "started",
+            "position",
+            "completed",
+            "flushed",
+            "failed",
+            "superseded",
+            "cancelled",
+        }
+        if status not in allowed or position_ms < 0:
+            raise ValueError("invalid playback-attempt update")
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """UPDATE playback_attempts
+                SET status = ?, position_ms = MAX(position_ms, ?), updated_at = ?
+                WHERE playback_id = ?""",
+                (
+                    status,
+                    position_ms,
+                    datetime.now(UTC).isoformat(),
+                    playback_id,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def active_playback_attempt(
+        self,
+        session_id: str,
+    ) -> PlaybackAttemptRecord | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            row = await (
+                await db.execute(
+                    """SELECT * FROM playback_attempts
+                    WHERE session_id = ?
+                    AND status IN ('announced', 'accepted', 'started', 'position')
+                    ORDER BY attempt_sequence DESC, created_at DESC LIMIT 1""",
+                    (session_id,),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return PlaybackAttemptRecord(
+            playback_id=row["playback_id"],
+            session_id=row["session_id"],
+            generation=row["generation"],
+            operation_id=row["operation_id"],
+            cancellation_id=row["cancellation_id"],
+            trace_id=row["trace_id"],
+            segment_id=row["segment_id"],
+            boundary_index=row["boundary_index"],
+            duration_ms=row["duration_ms"],
+            canonical_text=row["canonical_text"],
+            source=row["source"],
+            source_envelope=row["source_envelope"],
+            completes_source_boundary=bool(row["completes_source_boundary"]),
+            speech_rate_multiplier=row["speech_rate_multiplier"],
+            pcm_audio=row["pcm_audio"],
+            receiver_epoch=row["receiver_epoch"],
+            credit_sequence=row["credit_sequence"],
+            attempt_sequence=row["attempt_sequence"],
+            status=row["status"],
+            position_ms=row["position_ms"],
+        )
+
+    async def advance_voice_generation(self, session_id: str) -> int:
+        if not session_id:
+            raise ValueError("session identity must not be blank")
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (
+                await db.execute(
+                    "SELECT generation FROM voice_generations WHERE session_id = ?",
+                    (session_id,),
+                )
+            ).fetchone()
+            generation = (int(row[0]) if row is not None else 0) + 1
+            await db.execute(
+                """INSERT INTO voice_generations(session_id, generation, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    generation = excluded.generation,
+                    updated_at = excluded.updated_at""",
+                (session_id, generation, now),
+            )
+            await db.commit()
+            return generation
+
+    async def record_voice_generation(self, session_id: str, generation: int) -> None:
+        if not session_id or generation <= 0:
+            raise ValueError("voice generation must have a session and positive value")
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO voice_generations(session_id, generation, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    generation = MAX(voice_generations.generation, excluded.generation),
+                    updated_at = excluded.updated_at""",
+                (session_id, generation, datetime.now(UTC).isoformat()),
+            )
+            await db.commit()
 
     async def playback_boundary(self, session_id: str, segment_id: str) -> int:
         async with aiosqlite.connect(self.path) as db:

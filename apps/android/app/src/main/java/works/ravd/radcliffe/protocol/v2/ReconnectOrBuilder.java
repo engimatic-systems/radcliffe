@@ -92,4 +92,44 @@ public interface ReconnectOrBuilder extends
    * @return The maxSegmentDurationMs.
    */
   long getMaxSegmentDurationMs();
+
+  /**
+   * <pre>
+   * Revision 1 requires metadata acceptance before realtime media publication.
+   * </pre>
+   *
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @return The playbackProtocolRevision.
+   */
+  int getPlaybackProtocolRevision();
+
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  java.lang.String getReceiverEpoch();
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  com.google.protobuf.ByteString
+      getReceiverEpochBytes();
+
+  /**
+   * <pre>
+   * Monotonic within receiver_epoch. A delayed lower grant is stale.
+   * </pre>
+   *
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  long getCreditSequence();
 }

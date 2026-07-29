@@ -86,6 +86,9 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
             position_ms=1200,
             boundary_index=2,
             occurred_at=occurred_at,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
+            attempt_sequence=1,
         ),
     )
 
@@ -102,6 +105,11 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
     legacy.playback_acknowledgement.operation.trace_id = ""
     assert await handler.handle(legacy.SerializeToString(deterministic=True))
     assert target.acknowledgements[1].operation.trace_id == trace_id_for_operation("operation-1")
+
+    legacy.playback_acknowledgement.acknowledgement_id = "ack-missing-credit"
+    legacy.playback_acknowledgement.receiver_epoch = ""
+    assert not await handler.handle(legacy.SerializeToString(deterministic=True))
+    assert len(target.acknowledgements) == 2
 
 
 @pytest.mark.asyncio
@@ -125,6 +133,9 @@ async def test_protocol_v2_reconnect_snapshot_and_capacity_are_dispatched() -> N
         position_ms=600,
         boundary_index=1,
         occurred_at=occurred_at,
+        receiver_epoch="receiver-1",
+        credit_sequence=1,
+        attempt_sequence=1,
     )
     event = protocol_pb2.ClientEvent(
         protocol_version=2,
@@ -136,6 +147,9 @@ async def test_protocol_v2_reconnect_snapshot_and_capacity_are_dispatched() -> N
             idempotency_key="reconnect-1",
             max_inflight_attempts=1,
             max_segment_duration_ms=30_000,
+            playback_protocol_revision=1,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
         ),
     )
 
@@ -144,6 +158,9 @@ async def test_protocol_v2_reconnect_snapshot_and_capacity_are_dispatched() -> N
     assert reconnect["request_id"] == "reconnect-1"
     assert reconnect["max_inflight_attempts"] == 1
     assert reconnect["max_segment_duration_ms"] == 30_000
+    assert reconnect["playback_protocol_revision"] == 1
+    assert reconnect["receiver_epoch"] == "receiver-1"
+    assert reconnect["credit_sequence"] == 1
     assert reconnect["latest_playback"][0].position_ms == 600
 
     event.reconnect.max_inflight_attempts = 2
@@ -174,6 +191,9 @@ async def test_protocol_v2_rejects_malformed_trace_identity() -> None:
             position_ms=1,
             boundary_index=1,
             occurred_at=occurred_at,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
+            attempt_sequence=1,
         ),
     )
 

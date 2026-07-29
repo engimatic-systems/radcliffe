@@ -123,6 +123,9 @@ class LiveKitEventSink:
         canonical_sha256: bytes,
         source: SourceKind,
         speech_rate_multiplier: float,
+        receiver_epoch: str,
+        credit_sequence: int,
+        attempt_sequence: int,
     ) -> None:
         event = protocol_pb2.ServerEvent(
             protocol_version=2,
@@ -141,6 +144,10 @@ class LiveKitEventSink:
                 canonical_sha256=canonical_sha256,
                 source=_SOURCE_TO_PROTO[source],
                 speech_rate_multiplier=speech_rate_multiplier,
+                playback_protocol_revision=1,
+                receiver_epoch=receiver_epoch,
+                credit_sequence=credit_sequence,
+                attempt_sequence=attempt_sequence,
             ),
         )
         await self._send(event)
@@ -150,6 +157,9 @@ class LiveKitEventSink:
         request_id: str,
         generation: int,
         replay_pending: bool,
+        receiver_epoch: str,
+        credit_sequence: int,
+        outcome: protocol_pb2.PlaybackReconciliationOutcome,
     ) -> None:
         event = protocol_pb2.ServerEvent(
             protocol_version=2,
@@ -158,6 +168,10 @@ class LiveKitEventSink:
                 session_id=self.session_id,
                 generation=generation,
                 replay_pending=replay_pending,
+                playback_protocol_revision=1,
+                receiver_epoch=receiver_epoch,
+                credit_sequence=credit_sequence,
+                outcome=outcome,
             ),
         )
         await self._send(event)

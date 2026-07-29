@@ -12,6 +12,8 @@ import java.util.UUID
 class DevicePlaybackTracker(
     private val acknowledgementId: () -> String = { UUID.randomUUID().toString() },
     private val clockMs: () -> Long = System::currentTimeMillis,
+    initialAcknowledgements: List<PlaybackAcknowledgement> = emptyList(),
+    private val snapshotSink: (List<PlaybackAcknowledgement>) -> Unit = {},
 ) {
     private data class Pending(
         val segment: PlaybackSegment,
@@ -24,24 +26,62 @@ class DevicePlaybackTracker(
     private val knownPlaybackIds = mutableSetOf<String>()
     private val latestByPlaybackId = linkedMapOf<String, PlaybackAcknowledgement>()
     private val invalidatedGenerationBySession = mutableMapOf<String, Long>()
+    private var receiverEpoch = ""
+    private var creditSequence = 0L
+
+    init {
+        initialAcknowledgements.takeLast(MAX_RECONNECT_SNAPSHOTS).forEach { acknowledgement ->
+            if (acknowledgement.playbackId.isNotBlank()) {
+                knownPlaybackIds += acknowledgement.playbackId
+                latestByPlaybackId[acknowledgement.playbackId] = acknowledgement
+            }
+        }
+    }
 
     @Synchronized
-    fun announce(segment: PlaybackSegment): Boolean {
+    fun configureReceiverCredit(epoch: String, sequence: Long) {
+        require(epoch.isNotBlank()) { "receiver epoch must not be blank" }
+        require(sequence > 0) { "credit sequence must be positive" }
+        require(epoch != receiverEpoch || sequence > creditSequence) {
+            "receiver credit must move forwards"
+        }
+        receiverEpoch = epoch
+        creditSequence = sequence
+    }
+
+    @Synchronized
+    fun announce(segment: PlaybackSegment): PlaybackAcknowledgement? {
         val operation = segment.operation
         if (
             segment.playbackId.isBlank() ||
             segment.segmentId.isBlank() ||
             segment.durationMs == 0L ||
+            segment.durationMs > MAX_SEGMENT_DURATION_MS ||
             operation.sessionId.isBlank() ||
             operation.generation == 0L
         ) {
-            return false
+            return null
+        }
+        latestByPlaybackId[segment.playbackId]?.let { return it }
+        if (
+            segment.playbackProtocolRevision != PLAYBACK_PROTOCOL_REVISION ||
+            segment.receiverEpoch != receiverEpoch ||
+            segment.creditSequence != creditSequence ||
+            segment.attemptSequence == 0L
+        ) {
+            return null
         }
         val invalidatedGeneration = invalidatedGenerationBySession[operation.sessionId] ?: 0L
-        if (operation.generation <= invalidatedGeneration) return false
-        if (!knownPlaybackIds.add(segment.playbackId)) return false
-        pending.addLast(Pending(segment))
-        return true
+        if (operation.generation <= invalidatedGeneration) return null
+        if (pending.isNotEmpty() || !knownPlaybackIds.add(segment.playbackId)) return null
+        val item = Pending(segment)
+        pending.addLast(item)
+        return item.acknowledgement(
+            PlaybackStatus.PLAYBACK_STATUS_ACCEPTED,
+            positionMs = 0,
+            boundaryIndex = segment.boundaryIndex,
+            nowMs = clockMs(),
+        )
     }
 
     @Synchronized
@@ -187,11 +227,15 @@ class DevicePlaybackTracker(
             .setBoundaryIndex(boundaryIndex)
             .setOccurredAt(nowMs.timestamp())
             .setDetail(detail)
+            .setReceiverEpoch(segment.receiverEpoch)
+            .setCreditSequence(segment.creditSequence)
+            .setAttemptSequence(segment.attemptSequence)
             .build()
         latestByPlaybackId[segment.playbackId] = acknowledgement
         while (latestByPlaybackId.size > MAX_RECONNECT_SNAPSHOTS) {
             latestByPlaybackId.remove(latestByPlaybackId.keys.first())
         }
+        snapshotSink(latestByPlaybackId.values.toList())
         return acknowledgement
     }
 
@@ -199,6 +243,9 @@ class DevicePlaybackTracker(
         private const val POSITION_INTERVAL_MS = 250L
         private const val AUDIBLE_PCM16_PEAK = 96
         private const val MAX_RECONNECT_SNAPSHOTS = 64
+        const val PLAYBACK_PROTOCOL_REVISION = 1
+        const val MAX_INFLIGHT_ATTEMPTS = 1
+        const val MAX_SEGMENT_DURATION_MS = 30_000L
 
         fun isAudible(buffer: ByteBuffer, bitsPerSample: Int): Boolean {
             if (bitsPerSample != 16) return buffer.hasRemaining()

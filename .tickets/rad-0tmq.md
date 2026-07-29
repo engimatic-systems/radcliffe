@@ -1,8 +1,8 @@
 ---
 id: rad-0tmq
-status: open
+status: closed
 deps: []
-links: [rad-g9yr, rad-ig6k, rad-u6lm]
+links: [rad-g9yr, rad-ig6k, rad-u6lm, rad-j02j]
 created: 2026-07-28T21:37:14Z
 type: epic
 priority: 0
@@ -47,3 +47,11 @@ Physical model-gap UAT passed: operator reports the remaining gaps are shorter a
 **2026-07-29T02:46:00Z**
 
 Final physical source UAT passed in session ses_f6dffefb08271664a5f815a5fd4709fb. The first read_source call admitted logical boundary 0 as three bounded parts, completed boundary 1, and stopped on operator speech. The next read_source call began at boundary 2, audibly starting 'The psychological effects of nicotine...', exactly the next sentence. This confirms native tool success, bounded source subdivision, interruption, and durable next-boundary resume. The acceptance instruction had incorrectly placed 'I looked briefly...' after 'gateway drug'; the operator corrected it. Operator accepts this temporary-disconnect vertical slice and directs ticket closure and PR handoff. The still-open child tickets retain the explicitly unimplemented formal model, process-restart, route-change, and exhaustive chaos scope; this closure does not claim those follow-ups are complete.
+
+**2026-07-29T04:22:34Z**
+
+The stacked completion branch closes rad-fnho, rad-pm6h, rad-pb5a and rad-g8os with checked-in report/model/protocol/durable-worker evidence. rad-qa5h and rad-grf7 intentionally remain open for the connected-Pixel instrumentation and physical speaker/Bluetooth/soak acceptance; the epic remains open until those operator gates pass.
+
+**2026-07-29T17:48:25Z**
+
+2026-07-29 operator-directed final disposition: the bounded W=1 protocol, formal model, durable worker/Android state, and automated chaos package are accepted and this PR should close. Physical tests 1-4 passed; Android force-stop was intentionally skipped; tests 6-8 were not accepted. The restart skipped an unheard sentence tail (rad-j02j), and Bluetooth route/media controls need explicit one-tap microphone mute plus two-tap conversation pause semantics (rad-l1ro). These are intentionally deferred as lower-priority follow-ups outside this epic. Closing the epic records completion of the chosen protocol slice, not a claim that the deferred physical behaviors passed.

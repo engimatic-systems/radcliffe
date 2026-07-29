@@ -1,8 +1,8 @@
 ---
 id: rad-qa5h
-status: open
+status: closed
 deps: [rad-pb5a]
-links: []
+links: [rad-l1ro]
 created: 2026-07-28T21:38:21Z
 type: feature
 priority: 0
@@ -27,3 +27,11 @@ Android never accepts more admitted-unheard audio than its advertised bound and 
 **2026-07-29T01:07:50Z**
 
 First receiver slice implemented: Android retains bounded latest physical acknowledgements, suspends uncertain local playback on reconnect, waits for room plus playback-track readiness, sends the snapshot/capacity handshake, and remains muted until replay admission or no-replay reconciliation. Route/process-death coverage remains open.
+
+**2026-07-29T04:22:34Z**
+
+Implementation is complete on epic/rad-0tmq-complete-protocol: Android owns W=1 acceptance/decoded progress, persists content-free snapshots synchronously across process death, rejects stale revision/epoch/credit/generation, stays muted until matching metadata acceptance, and reconciles transport plus speaker/Bluetooth route changes. Unit/lint are green. This remains open because no Pixel is attached to run the required instrumentation/route acceptance.
+
+**2026-07-29T17:48:25Z**
+
+2026-07-29 operator closeout: the bounded Android receiver implementation and automated refinement coverage are accepted for this PR, but physical Bluetooth routing exposed a separate product-control gap. Route changes entered a listening-like state, and the intended hardware contract is now explicit in rad-l1ro: one earbud tap toggles microphone mute/unmute; two taps toggle conversation pause/unpause; route changes preserve state. The operator defers that lower-priority work and directs this implementation ticket closed without claiming the Bluetooth control behavior passed.
