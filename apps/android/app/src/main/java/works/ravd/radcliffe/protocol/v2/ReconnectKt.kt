@@ -184,6 +184,133 @@ public object ReconnectKt {
     public fun clearIdempotencyKey() {
       _builder.clearIdempotencyKey()
     }
+
+    /**
+     * ```
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * ```
+     *
+     * `uint32 max_inflight_attempts = 7;`
+     */
+    public var maxInflightAttempts: kotlin.Int
+      @kotlin.jvm.JvmName("getMaxInflightAttempts")
+        get() = _builder.maxInflightAttempts
+      @kotlin.jvm.JvmName("setMaxInflightAttempts")
+        set(value) {
+        _builder.maxInflightAttempts = value
+      }
+    /**
+     * ```
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * ```
+     *
+     * `uint32 max_inflight_attempts = 7;`
+     */
+    public fun clearMaxInflightAttempts() {
+      _builder.clearMaxInflightAttempts()
+    }
+
+    /**
+     * ```
+     * The largest single attempt the receiver is willing to admit.
+     * ```
+     *
+     * `uint64 max_segment_duration_ms = 8;`
+     */
+    public var maxSegmentDurationMs: kotlin.Long
+      @kotlin.jvm.JvmName("getMaxSegmentDurationMs")
+        get() = _builder.maxSegmentDurationMs
+      @kotlin.jvm.JvmName("setMaxSegmentDurationMs")
+        set(value) {
+        _builder.maxSegmentDurationMs = value
+      }
+    /**
+     * ```
+     * The largest single attempt the receiver is willing to admit.
+     * ```
+     *
+     * `uint64 max_segment_duration_ms = 8;`
+     */
+    public fun clearMaxSegmentDurationMs() {
+      _builder.clearMaxSegmentDurationMs()
+    }
+
+    /**
+     * ```
+     * Revision 1 requires metadata acceptance before realtime media publication.
+     * ```
+     *
+     * `uint32 playback_protocol_revision = 9;`
+     */
+    public var playbackProtocolRevision: kotlin.Int
+      @kotlin.jvm.JvmName("getPlaybackProtocolRevision")
+        get() = _builder.playbackProtocolRevision
+      @kotlin.jvm.JvmName("setPlaybackProtocolRevision")
+        set(value) {
+        _builder.playbackProtocolRevision = value
+      }
+    /**
+     * ```
+     * Revision 1 requires metadata acceptance before realtime media publication.
+     * ```
+     *
+     * `uint32 playback_protocol_revision = 9;`
+     */
+    public fun clearPlaybackProtocolRevision() {
+      _builder.clearPlaybackProtocolRevision()
+    }
+
+    /**
+     * ```
+     * A fresh random value for each Android receiver process.
+     * ```
+     *
+     * `string receiver_epoch = 10;`
+     */
+    public var receiverEpoch: kotlin.String
+      @kotlin.jvm.JvmName("getReceiverEpoch")
+        get() = _builder.receiverEpoch
+      @kotlin.jvm.JvmName("setReceiverEpoch")
+        set(value) {
+        _builder.receiverEpoch = value
+      }
+    /**
+     * ```
+     * A fresh random value for each Android receiver process.
+     * ```
+     *
+     * `string receiver_epoch = 10;`
+     */
+    public fun clearReceiverEpoch() {
+      _builder.clearReceiverEpoch()
+    }
+
+    /**
+     * ```
+     * Monotonic within receiver_epoch. A delayed lower grant is stale.
+     * ```
+     *
+     * `uint64 credit_sequence = 11;`
+     */
+    public var creditSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getCreditSequence")
+        get() = _builder.creditSequence
+      @kotlin.jvm.JvmName("setCreditSequence")
+        set(value) {
+        _builder.creditSequence = value
+      }
+    /**
+     * ```
+     * Monotonic within receiver_epoch. A delayed lower grant is stale.
+     * ```
+     *
+     * `uint64 credit_sequence = 11;`
+     */
+    public fun clearCreditSequence() {
+      _builder.clearCreditSequence()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.Reconnect.copy(block: `works.ravd.radcliffe.protocol.v2`.ReconnectKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.Reconnect =

@@ -19,6 +19,7 @@ public  final class PlaybackAcknowledgement extends
     segmentId_ = "";
     detail_ = "";
     playbackId_ = "";
+    receiverEpoch_ = "";
   }
   private int bitField0_;
   public static final int ACKNOWLEDGEMENT_ID_FIELD_NUMBER = 1;
@@ -401,6 +402,131 @@ public  final class PlaybackAcknowledgement extends
     checkByteStringIsUtf8(value);
     playbackId_ = value.toStringUtf8();
 
+  }
+
+  public static final int RECEIVER_EPOCH_FIELD_NUMBER = 10;
+  private java.lang.String receiverEpoch_;
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  @java.lang.Override
+  public java.lang.String getReceiverEpoch() {
+    return receiverEpoch_;
+  }
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getReceiverEpochBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(receiverEpoch_);
+  }
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The receiverEpoch to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setReceiverEpoch(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    receiverEpoch_ = value;
+  }
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   */
+  private void clearReceiverEpoch() {
+
+    receiverEpoch_ = getDefaultInstance().getReceiverEpoch();
+  }
+  /**
+   * <pre>
+   * Process-local receiver identity and monotonically increasing credit grant.
+   * They prevent a delayed acknowledgement from spending current capacity.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The bytes for receiverEpoch to set.
+   */
+  private void setReceiverEpochBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    receiverEpoch_ = value.toStringUtf8();
+
+  }
+
+  public static final int CREDIT_SEQUENCE_FIELD_NUMBER = 11;
+  private long creditSequence_;
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  @java.lang.Override
+  public long getCreditSequence() {
+    return creditSequence_;
+  }
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @param value The creditSequence to set.
+   */
+  private void setCreditSequence(long value) {
+
+    creditSequence_ = value;
+  }
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   */
+  private void clearCreditSequence() {
+
+    creditSequence_ = 0L;
+  }
+
+  public static final int ATTEMPT_SEQUENCE_FIELD_NUMBER = 12;
+  private long attemptSequence_;
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @return The attemptSequence.
+   */
+  @java.lang.Override
+  public long getAttemptSequence() {
+    return attemptSequence_;
+  }
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @param value The attemptSequence to set.
+   */
+  private void setAttemptSequence(long value) {
+
+    attemptSequence_ = value;
+  }
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   */
+  private void clearAttemptSequence() {
+
+    attemptSequence_ = 0L;
   }
 
   public static works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement parseFrom(
@@ -892,6 +1018,136 @@ public  final class PlaybackAcknowledgement extends
       return this;
     }
 
+    /**
+     * <pre>
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return The receiverEpoch.
+     */
+    @java.lang.Override
+    public java.lang.String getReceiverEpoch() {
+      return instance.getReceiverEpoch();
+    }
+    /**
+     * <pre>
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return The bytes for receiverEpoch.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getReceiverEpochBytes() {
+      return instance.getReceiverEpochBytes();
+    }
+    /**
+     * <pre>
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpoch(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setReceiverEpoch(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearReceiverEpoch() {
+      copyOnWrite();
+      instance.clearReceiverEpoch();
+      return this;
+    }
+    /**
+     * <pre>
+     * Process-local receiver identity and monotonically increasing credit grant.
+     * They prevent a delayed acknowledgement from spending current capacity.
+     * </pre>
+     *
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The bytes for receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpochBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setReceiverEpochBytes(value);
+      return this;
+    }
+
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return The creditSequence.
+     */
+    @java.lang.Override
+    public long getCreditSequence() {
+      return instance.getCreditSequence();
+    }
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @param value The creditSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setCreditSequence(long value) {
+      copyOnWrite();
+      instance.setCreditSequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearCreditSequence() {
+      copyOnWrite();
+      instance.clearCreditSequence();
+      return this;
+    }
+
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @return The attemptSequence.
+     */
+    @java.lang.Override
+    public long getAttemptSequence() {
+      return instance.getAttemptSequence();
+    }
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @param value The attemptSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setAttemptSequence(long value) {
+      copyOnWrite();
+      instance.setAttemptSequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearAttemptSequence() {
+      copyOnWrite();
+      instance.clearAttemptSequence();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.PlaybackAcknowledgement)
   }
   @java.lang.Override
@@ -918,10 +1174,14 @@ public  final class PlaybackAcknowledgement extends
             "occurredAt_",
             "detail_",
             "playbackId_",
+            "receiverEpoch_",
+            "creditSequence_",
+            "attemptSequence_",
           };
           java.lang.String info =
-              "\u0000\t\u0000\u0001\u0001\t\t\u0000\u0000\u0000\u0001\u0208\u0002\u1009\u0000\u0003" +
-              "\u0208\u0004\f\u0005\u0003\u0006\u000b\u0007\u1009\u0001\b\u0208\t\u0208";
+              "\u0000\f\u0000\u0001\u0001\f\f\u0000\u0000\u0000\u0001\u0208\u0002\u1009\u0000\u0003" +
+              "\u0208\u0004\f\u0005\u0003\u0006\u000b\u0007\u1009\u0001\b\u0208\t\u0208\n\u0208" +
+              "\u000b\u0003\f\u0003";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

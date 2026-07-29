@@ -54,13 +54,15 @@ from radcliffe_domain.session import (
     SessionEngine,
     StaleOperationError,
 )
-from radcliffe_domain.store import EventStore
+from radcliffe_domain.store import EventStore, PlaybackAttemptRecord
 from radcliffe_domain.telemetry import TelemetrySink, session_pseudonym
 from radcliffe_protocol.radcliffe.v2 import protocol_pb2
 
 from radcliffe_media.sidecar import SidecarEvent
 
 _SENTENCE = re.compile(r".+?[.!?](?:[\"')\]]*)\s+", re.DOTALL)
+_SOURCE_CHUNK_CHARS = 320
+_SOURCE_CLAUSE_BOUNDARY = re.compile(r"(?:\n+|[,:;—–-]\s+)")
 _CLARIFICATION_TEXT = "I didn't catch that clearly. Please say it again."
 _REGISTERED_TOOL_NAMES = frozenset(
     {
@@ -213,6 +215,26 @@ class _PreparedSpeech:
 
 
 @dataclass(frozen=True, slots=True)
+class _PreparedSourceSpeech:
+    """Bounded audio for one part of a stable source-render boundary."""
+
+    source_segment_id: str
+    completes_boundary: bool
+    prepared: _PreparedSpeech
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedModelSpeech:
+    """A model chunk awaiting local synthesis and ordered playback."""
+
+    segment_id: str
+    boundary_index: int
+    canonical_text: str
+    completed_display_text: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class _ModelPlaybackSegment:
     segment_id: str
     boundary_index: int
@@ -229,12 +251,19 @@ class _PendingPlayback:
     duration_ms: int
     canonical_text: str
     source: SourceKind
+    receiver_epoch: str
+    credit_sequence: int
+    attempt_sequence: int
     source_envelope: MessageEnvelope | None = None
+    completes_source_boundary: bool = True
+    accepted: asyncio.Event = field(default_factory=asyncio.Event)
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
+    retry: asyncio.Event = field(default_factory=asyncio.Event)
     started: bool = False
     latest_position_ms: int = 0
     terminal_status: PlaybackStatus | None = None
     heard_character_count: int = 0
+    superseded: bool = False
 
 
 class Orchestrator(Protocol):
@@ -285,6 +314,19 @@ class VoiceEventSink(Protocol):
         canonical_sha256: bytes,
         source: SourceKind,
         speech_rate_multiplier: float,
+        receiver_epoch: str,
+        credit_sequence: int,
+        attempt_sequence: int,
+    ) -> None: ...
+
+    async def playback_reconciled(
+        self,
+        request_id: str,
+        generation: int,
+        replay_pending: bool,
+        receiver_epoch: str,
+        credit_sequence: int,
+        outcome: protocol_pb2.PlaybackReconciliationOutcome,
     ) -> None: ...
 
     async def agent_control_request(
@@ -344,8 +386,21 @@ class VoicePipeline:
         self._paused_source: _PausedSource | None = None
         self._pending_playback: dict[str, _PendingPlayback] = {}
         self._playback_lock = asyncio.Lock()
+        self._playback_ready = asyncio.Event()
+        self._maximum_segment_duration_ms = 30_000
+        self._receiver_epoch = ""
+        self._credit_sequence = 0
+        self._attempt_sequence = 0
+        self._recovery_attempt: PlaybackAttemptRecord | None = None
+        self._recovery_task: asyncio.Task[None] | None = None
+        self._reconnect_outcomes: dict[str, tuple[bool, str, int]] = {}
 
     async def start(self) -> None:
+        self._recovery_attempt = await self.store.active_playback_attempt(self.engine.session_id)
+        next_generation = await self.store.advance_voice_generation(self.engine.session_id)
+        self.engine.generation = next_generation - 1
+        if self._recovery_attempt is not None:
+            self._attempt_sequence = self._recovery_attempt.attempt_sequence
         previous = self.engine.state
         self.engine.connect()
         await self._notify_state(previous, "session connected")
@@ -502,6 +557,11 @@ class VoicePipeline:
         self.engine.end()
         if previous is not ConversationState.IDLE:
             await self._notify_state(previous, "session ended")
+        else:
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
 
     async def handle_transcript(self, text: str) -> None:
         await self._handle_transcript(text)
@@ -852,174 +912,230 @@ class VoicePipeline:
             ],
         }
         source_rendered = False
-        async for event in self.orchestrator.turn(request, turn.cancelled):
-            if turn.cancelled.is_set():
-                break
-            self._assert_owner(turn, operation)
-            if event.type == "tool_start":
-                turn.tool_started = True
-            elif event.type == "model_delta" and not source_rendered:
-                display_delta = _canonical_model_text(str(event.payload.get("text", "")))
-                raw_spoken = event.payload.get("spokenText")
-                spoken_delta = _canonical_model_text(
-                    raw_spoken if isinstance(raw_spoken, str) else display_delta
-                )
-                if not display_delta and not spoken_delta:
-                    continue
-                if turn.first_model_delta_at is None:
-                    turn.first_model_delta_at = monotonic()
-                    self._log_phase(
-                        turn,
-                        "first_model_delta",
-                        turn.first_model_delta_at - turn.started_at,
+        model_speech_queue: asyncio.Queue[_QueuedModelSpeech | None] | None = None
+        model_speech_task: asyncio.Task[None] | None = None
+        next_queued_model_boundary = turn.next_model_boundary
+
+        async def finish_model_speech() -> None:
+            nonlocal model_speech_queue, model_speech_task
+            if model_speech_queue is None or model_speech_task is None:
+                return
+            queue = model_speech_queue
+            task = model_speech_task
+            await self._queue_model_speech(queue, None, task, allow_completion=True)
+            await task
+            model_speech_queue = None
+            model_speech_task = None
+
+        try:
+            async for event in self.orchestrator.turn(request, turn.cancelled):
+                if turn.cancelled.is_set():
+                    break
+                self._assert_owner(turn, operation)
+                if event.type == "tool_start":
+                    # Preserve the original ordering: any spoken preamble finishes before
+                    # the tool transition is handled.
+                    await finish_model_speech()
+                    turn.tool_started = True
+                elif event.type == "model_delta" and not source_rendered:
+                    display_delta = _canonical_model_text(str(event.payload.get("text", "")))
+                    raw_spoken = event.payload.get("spokenText")
+                    spoken_delta = _canonical_model_text(
+                        raw_spoken if isinstance(raw_spoken, str) else display_delta
                     )
-                turn.model_text += display_delta
-                raw_categories = event.payload.get("spokenCategories")
-                categories = (
-                    sorted(
-                        {
-                            category
-                            for category in raw_categories
-                            if isinstance(category, str) and category in _SPOKEN_OUTPUT_CATEGORIES
-                        }
+                    if not display_delta and not spoken_delta:
+                        continue
+                    if turn.first_model_delta_at is None:
+                        turn.first_model_delta_at = monotonic()
+                        self._log_phase(
+                            turn,
+                            "first_model_delta",
+                            turn.first_model_delta_at - turn.started_at,
+                        )
+                    turn.model_text += display_delta
+                    raw_categories = event.payload.get("spokenCategories")
+                    categories = (
+                        sorted(
+                            {
+                                category
+                                for category in raw_categories
+                                if isinstance(category, str)
+                                and category in _SPOKEN_OUTPUT_CATEGORIES
+                            }
+                        )
+                        if isinstance(raw_categories, list)
+                        else []
                     )
-                    if isinstance(raw_categories, list)
-                    else []
-                )
-                for category in categories:
-                    self.telemetry.emit(
-                        component="media_worker",
-                        event="spoken_output",
-                        outcome="succeeded",
-                        session_id=self.engine.session_id,
-                        generation=operation.generation,
-                        phase=category,
-                        operation=operation,
-                    )
-                if categories:
-                    existing = set(
-                        turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(",")
-                    )
-                    existing.discard("")
-                    turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
-                        sorted(existing | set(categories))
-                    )
-                if not source_rendered:
-                    await self._speak_model_segment(
+                    for category in categories:
+                        self.telemetry.emit(
+                            component="media_worker",
+                            event="spoken_output",
+                            outcome="succeeded",
+                            session_id=self.engine.session_id,
+                            generation=operation.generation,
+                            phase=category,
+                            operation=operation,
+                        )
+                    if categories:
+                        existing = set(
+                            turn.model_metadata.get("radcliffe.spoken_output.categories", "").split(
+                                ","
+                            )
+                        )
+                        existing.discard("")
+                        turn.model_metadata["radcliffe.spoken_output.categories"] = ",".join(
+                            sorted(existing | set(categories))
+                        )
+                    chunks = self._model_speech_chunks(
                         display_delta,
                         spoken_delta,
                         operation,
-                        turn,
+                        next_queued_model_boundary,
                     )
-            elif event.type == "tool_end" and bool(event.payload.get("isError")):
-                raw_tool_name = event.payload.get("toolName")
-                tool_name = (
-                    raw_tool_name
-                    if isinstance(raw_tool_name, str) and raw_tool_name in _REGISTERED_TOOL_NAMES
-                    else "unknown"
-                )
-                result = event.payload.get("result")
-                result_details = result.get("details") if isinstance(result, dict) else None
-                recoverable = (
-                    isinstance(result_details, dict)
-                    and result_details.get("recoverable") is True
-                    and result_details.get("errorCode") == "invalid_arguments"
-                )
-                raw_error_code = (
-                    result_details.get("errorCode") if isinstance(result_details, dict) else None
-                )
-                error_code = (
-                    raw_error_code
-                    if isinstance(raw_error_code, str) and raw_error_code in _TOOL_FAILURE_MESSAGES
-                    else "execution_failed"
-                )
-                raw_field = (
-                    result_details.get("field")
-                    if recoverable and isinstance(result_details, dict)
-                    else None
-                )
-                field = (
-                    raw_field
-                    if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
-                    else "unknown"
-                )
-                metadata = {
-                    TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
-                    TURN_ID_METADATA: turn.turn_id,
-                    "radcliffe.tool.name": tool_name,
-                    "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
-                }
-                if recoverable:
-                    metadata["radcliffe.tool.error_code"] = "invalid_arguments"
-                    metadata["radcliffe.tool.invalid_field"] = field
-                else:
-                    metadata["radcliffe.tool.error_code"] = error_code
-                await self._append_text(
-                    SourceKind.SYSTEM,
-                    (
-                        "Tool arguments rejected"
-                        if recoverable
-                        else _TOOL_FAILURE_MESSAGES[error_code]
-                    ),
-                    metadata,
-                )
-                self.telemetry.emit(
-                    component="media_worker",
-                    event="tool_call",
-                    outcome="failed",
-                    session_id=self.engine.session_id,
-                    generation=operation.generation,
-                    phase=tool_name,
-                    operation=operation,
-                )
-            elif event.type == "tool_end":
-                source = await self._resolve_source(event.payload.get("result"))
-                if source is not None:
-                    if self.engine.state is ConversationState.THINKING:
-                        await self._transition(
-                            ConversationState.READING,
-                            "source authorized",
-                            operation,
-                            turn,
+                    if chunks and model_speech_task is None:
+                        model_speech_queue = asyncio.Queue(maxsize=1)
+                        model_speech_task = asyncio.create_task(
+                            self._speak_model_queue(
+                                model_speech_queue,
+                                operation,
+                                turn,
+                            ),
+                            name="radcliffe-model-speech",
                         )
-                    turn.next_source_boundary = await self._start_boundary(
-                        source,
-                        self._requested_start_boundary(event.payload.get("result")),
+                    if model_speech_queue is not None and model_speech_task is not None:
+                        for chunk in chunks:
+                            await self._queue_model_speech(
+                                model_speech_queue,
+                                chunk,
+                                model_speech_task,
+                            )
+                    next_queued_model_boundary += len(chunks)
+                    if not self.client_playback_acknowledgements:
+                        # Preserve the legacy in-process contract: handling a model delta does
+                        # not return to the producer until that delta has been published.
+                        await finish_model_speech()
+                elif event.type == "tool_end" and bool(event.payload.get("isError")):
+                    raw_tool_name = event.payload.get("toolName")
+                    tool_name = (
+                        raw_tool_name
+                        if isinstance(raw_tool_name, str)
+                        and raw_tool_name in _REGISTERED_TOOL_NAMES
+                        else "unknown"
                     )
-                    await self._speak_plan(source, operation, turn)
-                    source_rendered = True
-                else:
                     result = event.payload.get("result")
-                    if event.payload.get("toolName") == "run_job":
-                        await self._persist_background_job_reference(result, turn)
-                    if await self._handle_session_action_tool_result(result, turn):
-                        await self._finish_handoff_from_turn(turn)
-                        return
-                    await self._persist_configuration_update(result, turn)
-            elif event.type == "model_complete" and not source_rendered:
-                turn.model_text = _canonical_model_text(
-                    str(event.payload.get("text", turn.model_text))
-                )
-            elif event.type == "error":
-                if event.payload.get("code") == "cloud_budget_exhausted":
+                    result_details = result.get("details") if isinstance(result, dict) else None
+                    recoverable = (
+                        isinstance(result_details, dict)
+                        and result_details.get("recoverable") is True
+                        and result_details.get("errorCode") == "invalid_arguments"
+                    )
+                    raw_error_code = (
+                        result_details.get("errorCode")
+                        if isinstance(result_details, dict)
+                        else None
+                    )
+                    error_code = (
+                        raw_error_code
+                        if isinstance(raw_error_code, str)
+                        and raw_error_code in _TOOL_FAILURE_MESSAGES
+                        else "execution_failed"
+                    )
+                    raw_field = (
+                        result_details.get("field")
+                        if recoverable and isinstance(result_details, dict)
+                        else None
+                    )
+                    field = (
+                        raw_field
+                        if isinstance(raw_field, str) and re.fullmatch(r"[a-z_]{1,48}", raw_field)
+                        else "unknown"
+                    )
+                    metadata = {
+                        TURN_EVENT_METADATA: TOOL_FAILURE_EVENT,
+                        TURN_ID_METADATA: turn.turn_id,
+                        "radcliffe.tool.name": tool_name,
+                        "radcliffe.tool.outcome": "rejected" if recoverable else "failed",
+                    }
+                    if recoverable:
+                        metadata["radcliffe.tool.error_code"] = "invalid_arguments"
+                        metadata["radcliffe.tool.invalid_field"] = field
+                    else:
+                        metadata["radcliffe.tool.error_code"] = error_code
                     await self._append_text(
                         SourceKind.SYSTEM,
-                        "Cloud session budget exhausted",
-                        {TURN_EVENT_METADATA: PROVIDER_BUDGET_EVENT},
-                        notify=True,
+                        (
+                            "Tool arguments rejected"
+                            if recoverable
+                            else _TOOL_FAILURE_MESSAGES[error_code]
+                        ),
+                        metadata,
                     )
-                raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
+                    self.telemetry.emit(
+                        component="media_worker",
+                        event="tool_call",
+                        outcome="failed",
+                        session_id=self.engine.session_id,
+                        generation=operation.generation,
+                        phase=tool_name,
+                        operation=operation,
+                    )
+                elif event.type == "tool_end":
+                    source = await self._resolve_source(event.payload.get("result"))
+                    if source is not None:
+                        await finish_model_speech()
+                        if self.engine.state is ConversationState.THINKING:
+                            await self._transition(
+                                ConversationState.READING,
+                                "source authorized",
+                                operation,
+                                turn,
+                            )
+                        turn.next_source_boundary = await self._start_boundary(
+                            source,
+                            self._requested_start_boundary(event.payload.get("result")),
+                        )
+                        await self._speak_plan(source, operation, turn)
+                        source_rendered = True
+                    else:
+                        result = event.payload.get("result")
+                        if event.payload.get("toolName") == "run_job":
+                            await self._persist_background_job_reference(result, turn)
+                        if await self._handle_session_action_tool_result(result, turn):
+                            await finish_model_speech()
+                            await self._finish_handoff_from_turn(turn)
+                            return
+                        await self._persist_configuration_update(result, turn)
+                elif event.type == "model_complete" and not source_rendered:
+                    await finish_model_speech()
+                    turn.model_text = _canonical_model_text(
+                        str(event.payload.get("text", turn.model_text))
+                    )
+                elif event.type == "error":
+                    if event.payload.get("code") == "cloud_budget_exhausted":
+                        await self._append_text(
+                            SourceKind.SYSTEM,
+                            "Cloud session budget exhausted",
+                            {TURN_EVENT_METADATA: PROVIDER_BUDGET_EVENT},
+                            notify=True,
+                        )
+                    raise RuntimeError(str(event.payload.get("message", "sidecar failed")))
+
+            await finish_model_speech()
+        finally:
+            if model_speech_task is not None:
+                model_speech_task.cancel()
+                await asyncio.gather(model_speech_task, return_exceptions=True)
 
         self._assert_owner(turn, operation)
         await self._finish_completed(turn)
 
-    async def _speak_model_segment(
+    def _model_speech_chunks(
         self,
         display_text: str,
         spoken_text: str,
         operation: Operation,
-        turn: _ActiveTurn,
-    ) -> None:
+        starting_boundary: int,
+    ) -> tuple[_QueuedModelSpeech, ...]:
         chunks: list[tuple[str, str]] = []
         remainder = spoken_text
         while chunk := self._next_model_chunk(remainder):
@@ -1027,14 +1143,108 @@ class VoicePipeline:
             remainder = remainder[len(chunk) :]
         if remainder:
             chunks.append((remainder, "model response ready"))
-        for index, (chunk, reason) in enumerate(chunks):
-            await self._speak_model_chunk(
-                chunk,
-                operation,
-                turn,
-                reason,
+        return tuple(
+            _QueuedModelSpeech(
+                segment_id=f"{operation.operation_id}:model:{starting_boundary + index}",
+                boundary_index=starting_boundary + index,
+                canonical_text=chunk,
                 completed_display_text=display_text if index == len(chunks) - 1 else "",
+                reason=reason,
             )
+            for index, (chunk, reason) in enumerate(chunks)
+        )
+
+    async def _queue_model_speech(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        item: _QueuedModelSpeech | None,
+        worker: asyncio.Task[None],
+        *,
+        allow_completion: bool = False,
+    ) -> None:
+        """Bound queued text while surfacing a failed speech worker without deadlocking."""
+
+        put = asyncio.create_task(queue.put(item))
+        try:
+            done, _pending = await asyncio.wait(
+                {put, worker},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if worker in done:
+                await worker
+                if not allow_completion:
+                    raise RuntimeError("model speech worker stopped before the response ended")
+                return
+            await put
+        finally:
+            if not put.done():
+                put.cancel()
+            await asyncio.gather(put, return_exceptions=True)
+
+    async def _prepare_model_speech(
+        self,
+        item: _QueuedModelSpeech,
+        turn: _ActiveTurn,
+    ) -> tuple[_QueuedModelSpeech, _PreparedSpeech]:
+        delivery = SpeechDelivery.parse(
+            await self._effective_configuration(
+                ConfigurationKey.DEFAULT_SPEECH_RATE,
+                turn.turn_id,
+            )
+        )
+        audio = await self._synthesize(item.canonical_text, delivery)
+        return (
+            item,
+            _PreparedSpeech(
+                segment_id=item.segment_id,
+                boundary_index=item.boundary_index,
+                canonical_text=item.canonical_text,
+                delivery=delivery,
+                audio=audio,
+            ),
+        )
+
+    async def _prepare_next_model_speech(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        turn: _ActiveTurn,
+    ) -> tuple[_QueuedModelSpeech, _PreparedSpeech] | None:
+        item = await queue.get()
+        if item is None:
+            return None
+        return await self._prepare_model_speech(item, turn)
+
+    async def _speak_model_queue(
+        self,
+        queue: asyncio.Queue[_QueuedModelSpeech | None],
+        operation: Operation,
+        turn: _ActiveTurn,
+    ) -> None:
+        """Keep one local audio segment ready while admitting only the current segment."""
+
+        current = await self._prepare_next_model_speech(queue, turn)
+        while current is not None:
+            item, prepared = current
+            # The task may wait for streaming model text or synthesize one chunk. It cannot
+            # announce playback; registration remains inside _speak_model_chunk below.
+            prepare_next = asyncio.create_task(
+                self._prepare_next_model_speech(queue, turn),
+                name="radcliffe-model-speech-lookahead",
+            )
+            try:
+                await self._speak_model_chunk(
+                    item.canonical_text,
+                    operation,
+                    turn,
+                    item.reason,
+                    completed_display_text=item.completed_display_text,
+                    prepared=prepared,
+                )
+            except BaseException:
+                prepare_next.cancel()
+                await asyncio.gather(prepare_next, return_exceptions=True)
+                raise
+            current = await prepare_next
 
     def _next_model_chunk(self, buffer: str) -> str | None:
         if not buffer:
@@ -1067,11 +1277,18 @@ class VoicePipeline:
         reason: str,
         *,
         completed_display_text: str | None = None,
+        prepared: _PreparedSpeech | None = None,
     ) -> None:
         if self.engine.state is ConversationState.THINKING:
             await self._transition(ConversationState.SPEAKING, reason, operation, turn)
         boundary = turn.next_model_boundary
         segment_id = f"{operation.operation_id}:model:{boundary}"
+        if prepared is not None and (
+            prepared.segment_id != segment_id
+            or prepared.boundary_index != boundary
+            or prepared.canonical_text != canonical_text
+        ):
+            raise RuntimeError("prefetched model audio arrived out of order")
         display_text = canonical_text if completed_display_text is None else completed_display_text
         turn.model_playback_segments.append(
             _ModelPlaybackSegment(
@@ -1088,6 +1305,8 @@ class VoicePipeline:
             operation,
             turn,
             source=SourceKind.MODEL,
+            wait_for_playback=self.client_playback_acknowledgements,
+            prepared=prepared,
         )
         turn.rendered_model_text += canonical_text
         if not self.client_playback_acknowledgements:
@@ -1112,6 +1331,11 @@ class VoicePipeline:
         reason: str,
         operation: Operation | None = None,
     ) -> None:
+        if self.engine.generation > 0:
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
         if self.events is not None:
             await self.events.state_changed(
                 previous,
@@ -1125,28 +1349,121 @@ class VoicePipeline:
         self,
         segments: Sequence[RenderSegment],
         turn: _ActiveTurn,
-        queue: asyncio.Queue[_PreparedSpeech | BaseException],
+        queue: asyncio.Queue[_PreparedSourceSpeech | BaseException],
     ) -> None:
         """Synthesize ahead of playback. The queue's maxsize is what bounds the look-ahead."""
 
         try:
             for segment in segments:
                 delivery = await self._segment_delivery(segment, turn)
-                audio = await self._synthesize(segment.canonical_text, delivery)
-                await queue.put(
-                    _PreparedSpeech(
-                        segment_id=segment.segment_id,
-                        boundary_index=segment.boundary_index,
-                        canonical_text=segment.canonical_text,
-                        delivery=delivery,
-                        audio=audio,
-                    )
+                pending_chunks = list(
+                    self._source_text_chunks(segment.canonical_text)
+                    if self.client_playback_acknowledgements
+                    else (segment.canonical_text,)
                 )
+                split = len(pending_chunks) > 1
+                part_index = 0
+                while pending_chunks:
+                    canonical_text = pending_chunks.pop(0)
+                    audio = await self._synthesize(canonical_text, delivery)
+                    if self.publisher.duration_ms(audio) > self._maximum_segment_duration_ms:
+                        halves = self._split_source_text(canonical_text)
+                        if halves is None:
+                            raise RuntimeError(
+                                f"source boundary {segment.boundary_index} cannot fit "
+                                "the receiver duration capacity"
+                            )
+                        split = True
+                        pending_chunks[0:0] = halves
+                        continue
+                    completes_boundary = not pending_chunks
+                    segment_id = (
+                        f"{segment.segment_id}:part:{part_index}"
+                        if split or not completes_boundary
+                        else segment.segment_id
+                    )
+                    await queue.put(
+                        _PreparedSourceSpeech(
+                            source_segment_id=segment.segment_id,
+                            completes_boundary=completes_boundary,
+                            prepared=_PreparedSpeech(
+                                segment_id=segment_id,
+                                boundary_index=segment.boundary_index,
+                                canonical_text=canonical_text,
+                                delivery=delivery,
+                                audio=audio,
+                            ),
+                        )
+                    )
+                    part_index += 1
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - handed to the reader rather than swallowed
             # Without this the reader would wait forever on a queue nobody will fill again.
             await queue.put(error)
+
+    @staticmethod
+    def _source_text_chunks(canonical_text: str) -> tuple[str, ...]:
+        """Split long prose deterministically before synthesis, preserving every character."""
+
+        chunks: list[str] = []
+        remainder = canonical_text
+        while len(remainder) > _SOURCE_CHUNK_CHARS:
+            window = remainder[:_SOURCE_CHUNK_CHARS]
+            minimum = _SOURCE_CHUNK_CHARS // 2
+            clause_boundaries = [
+                match.end()
+                for match in _SOURCE_CLAUSE_BOUNDARY.finditer(window)
+                if match.end() >= minimum
+            ]
+            whitespace = max(
+                window.rfind(" ", minimum),
+                window.rfind("\t", minimum),
+            )
+            boundary = (
+                clause_boundaries[-1]
+                if clause_boundaries
+                else whitespace + 1
+                if whitespace >= minimum
+                else _SOURCE_CHUNK_CHARS
+            )
+            chunks.append(remainder[:boundary])
+            remainder = remainder[boundary:]
+        if remainder:
+            chunks.append(remainder)
+        return tuple(chunks)
+
+    @staticmethod
+    def _split_source_text(canonical_text: str) -> tuple[str, str] | None:
+        """Bisect audio that still exceeds a receiver's negotiated duration."""
+
+        if len(canonical_text) < 2:
+            return None
+        midpoint = len(canonical_text) // 2
+        left_whitespace = max(
+            canonical_text.rfind(" ", 0, midpoint + 1),
+            canonical_text.rfind("\t", 0, midpoint + 1),
+            canonical_text.rfind("\n", 0, midpoint + 1),
+        )
+        right_candidates = [
+            position
+            for position in (
+                canonical_text.find(" ", midpoint),
+                canonical_text.find("\t", midpoint),
+                canonical_text.find("\n", midpoint),
+            )
+            if position >= 0
+        ]
+        right_whitespace = min(right_candidates, default=-1)
+        boundaries = [
+            boundary
+            for boundary in (left_whitespace + 1, right_whitespace + 1)
+            if 0 < boundary < len(canonical_text)
+        ]
+        boundary = (
+            min(boundaries, key=lambda item: abs(item - midpoint)) if boundaries else midpoint
+        )
+        return canonical_text[:boundary], canonical_text[boundary:]
 
     async def _speak_plan(
         self, envelope: MessageEnvelope, operation: Operation, turn: _ActiveTurn
@@ -1164,7 +1481,7 @@ class VoicePipeline:
             for segment in remaining:
                 turn.next_source_boundary = segment.boundary_index + 1
             return
-        queue: asyncio.Queue[_PreparedSpeech | BaseException] = asyncio.Queue(
+        queue: asyncio.Queue[_PreparedSourceSpeech | BaseException] = asyncio.Queue(
             maxsize=self.source_prefetch_depth
         )
         prefetch = asyncio.create_task(self._prefetch_source_audio(spoken, turn, queue))
@@ -1175,22 +1492,30 @@ class VoicePipeline:
                     # boundary anyway so resume positions keep lining up with the document.
                     turn.next_source_boundary = segment.boundary_index + 1
                     continue
-                prepared = await queue.get()
-                if isinstance(prepared, BaseException):
-                    raise prepared
-                if prepared.segment_id != segment.segment_id:
-                    raise RuntimeError("prefetched audio arrived out of order")
-                await self._speak(
-                    segment.canonical_text,
-                    segment.segment_id,
-                    segment.boundary_index,
-                    operation,
-                    turn,
-                    source=SourceKind.TEXT_SOURCE,
-                    wait_for_playback=True,
-                    source_envelope=envelope,
-                    prepared=prepared,
-                )
+                while True:
+                    source_audio = await queue.get()
+                    if isinstance(source_audio, BaseException):
+                        raise source_audio
+                    if (
+                        source_audio.source_segment_id != segment.segment_id
+                        or source_audio.prepared.boundary_index != segment.boundary_index
+                    ):
+                        raise RuntimeError("prefetched source audio arrived out of order")
+                    prepared = source_audio.prepared
+                    await self._speak(
+                        prepared.canonical_text,
+                        prepared.segment_id,
+                        segment.boundary_index,
+                        operation,
+                        turn,
+                        source=SourceKind.TEXT_SOURCE,
+                        wait_for_playback=True,
+                        source_envelope=envelope,
+                        prepared=prepared,
+                        completes_source_boundary=source_audio.completes_boundary,
+                    )
+                    if source_audio.completes_boundary:
+                        break
                 turn.next_source_boundary = segment.boundary_index + 1
         finally:
             # An interruption unwinds through here, discarding every sentence rendered ahead.
@@ -1279,6 +1604,7 @@ class VoicePipeline:
         wait_for_playback: bool = False,
         source_envelope: MessageEnvelope | None = None,
         prepared: _PreparedSpeech | None = None,
+        completes_source_boundary: bool = True,
     ) -> None:
         self._assert_owner(turn, operation)
         synth_started = monotonic()
@@ -1296,108 +1622,217 @@ class VoicePipeline:
             )
             audio = await self._synthesize(canonical_text, delivery)
         duration = self.publisher.duration_ms(audio)
-        playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)
         self._assert_owner(turn, operation)
-        pending = _PendingPlayback(
-            operation,
-            playback_id,
-            segment_id,
-            boundary_index,
-            duration,
-            canonical_text,
-            source,
-            source_envelope,
-        )
+        if self.client_playback_acknowledgements and (
+            duration <= 0 or duration > self._maximum_segment_duration_ms
+        ):
+            raise RuntimeError(f"playback segment {segment_id} exceeds receiver duration capacity")
         if self.client_playback_acknowledgements:
-            if self.events is None:
-                raise RuntimeError("client playback authority requires an event sink")
-            async with self._playback_lock:
-                self._pending_playback[playback_id] = pending
-            await self.events.playback_segment(
+            await self._playback_ready.wait()
+            self._assert_owner(turn, operation)
+
+        while True:
+            playback_id = str(uuid4())
+            self._attempt_sequence += 1
+            pending = _PendingPlayback(
                 operation,
                 playback_id,
                 segment_id,
                 boundary_index,
                 duration,
-                hashlib.sha256(canonical_text.encode()).digest(),
+                canonical_text,
                 source,
-                delivery.multiplier,
+                self._receiver_epoch,
+                self._credit_sequence,
+                self._attempt_sequence,
+                source_envelope,
+                completes_source_boundary,
             )
-        else:
-            await self.engine.acknowledge(
-                PlaybackAcknowledgement(
-                    acknowledgement_id=str(uuid4()),
-                    operation=operation,
-                    segment_id=segment_id,
-                    status=PlaybackStatus.STARTED,
-                    position_ms=0,
-                    boundary_index=boundary_index,
-                    occurred_at=datetime.now(UTC),
-                    playback_id=playback_id,
-                )
-            )
-        self._assert_owner(turn, operation)
-        publish_started = monotonic()
-        if turn.first_audio_at is None:
-            turn.first_audio_at = publish_started
-            self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
-        try:
-            published_duration = await self.publisher.publish(
-                segment_id,
-                audio,
-                wait_for_playback=wait_for_playback,
-            )
-        except asyncio.CancelledError:
-            if not self.client_playback_acknowledgements:
-                await self.engine.acknowledge(
-                    PlaybackAcknowledgement(
-                        acknowledgement_id=str(uuid4()),
-                        operation=operation,
-                        segment_id=segment_id,
-                        status=PlaybackStatus.FLUSHED,
-                        position_ms=0,
-                        boundary_index=boundary_index,
-                        occurred_at=datetime.now(UTC),
-                        detail="playback cancelled before boundary completion",
-                        playback_id=playback_id,
+            if self.client_playback_acknowledgements:
+                if self.events is None:
+                    raise RuntimeError("client playback authority requires an event sink")
+                async with self._playback_lock:
+                    outstanding = tuple(
+                        item
+                        for item in self._pending_playback.values()
+                        if item.operation == operation
+                        and item.terminal_status is None
+                        and not item.superseded
                     )
-                )
-            raise
-        except Exception as error:
-            if not self.client_playback_acknowledgements:
-                await self.engine.acknowledge(
-                    PlaybackAcknowledgement(
-                        acknowledgement_id=str(uuid4()),
-                        operation=operation,
-                        segment_id=segment_id,
-                        status=PlaybackStatus.FAILED,
-                        position_ms=0,
-                        boundary_index=boundary_index,
-                        occurred_at=datetime.now(UTC),
-                        detail=type(error).__name__,
-                        playback_id=playback_id,
+                    if outstanding:
+                        raise RuntimeError("receiver playback window is exhausted")
+                    await self.store.admit_playback_attempt(
+                        PlaybackAttemptRecord(
+                            playback_id=playback_id,
+                            session_id=operation.session_id,
+                            generation=operation.generation,
+                            operation_id=operation.operation_id,
+                            cancellation_id=operation.cancellation_id,
+                            trace_id=operation.trace_id,
+                            segment_id=segment_id,
+                            boundary_index=boundary_index,
+                            duration_ms=duration,
+                            canonical_text=canonical_text,
+                            source=source.value,
+                            source_envelope=(
+                                source_envelope.to_proto().SerializeToString(deterministic=True)
+                                if source_envelope is not None
+                                else None
+                            ),
+                            completes_source_boundary=completes_source_boundary,
+                            speech_rate_multiplier=delivery.multiplier,
+                            pcm_audio=audio,
+                            receiver_epoch=pending.receiver_epoch,
+                            credit_sequence=pending.credit_sequence,
+                            attempt_sequence=pending.attempt_sequence,
+                            status="announced",
+                            position_ms=0,
+                        )
                     )
+                    self._pending_playback[playback_id] = pending
+                self._emit_playback_bound(pending, "admitted")
+                await self.events.playback_segment(
+                    operation,
+                    playback_id,
+                    segment_id,
+                    boundary_index,
+                    duration,
+                    hashlib.sha256(canonical_text.encode()).digest(),
+                    source,
+                    delivery.multiplier,
+                    pending.receiver_epoch,
+                    pending.credit_sequence,
+                    pending.attempt_sequence,
                 )
-            raise
-        self._log_phase(turn, "publish", monotonic() - publish_started)
-        self._assert_owner(turn, operation)
-        if published_duration != duration:
-            raise RuntimeError("published audio duration changed after playback announcement")
-        if self.client_playback_acknowledgements:
-            if wait_for_playback:
+                accepted_wait = asyncio.create_task(pending.accepted.wait())
+                retry_before_media = asyncio.create_task(pending.retry.wait())
                 try:
-                    await asyncio.wait_for(
-                        pending.terminal.wait(),
-                        timeout=self.playback_ack_timeout_seconds,
+                    try:
+                        await asyncio.wait(
+                            {accepted_wait, retry_before_media},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        for waiter in (accepted_wait, retry_before_media):
+                            if not waiter.done():
+                                waiter.cancel()
+                        await asyncio.gather(
+                            accepted_wait,
+                            retry_before_media,
+                            return_exceptions=True,
+                        )
+                except asyncio.CancelledError:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="cancelled",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "cancelled", retired=True)
+                    raise
+                if pending.retry.is_set():
+                    self._assert_owner(turn, operation)
+                    continue
+            else:
+                await self.engine.acknowledge(
+                    PlaybackAcknowledgement(
+                        acknowledgement_id=str(uuid4()),
+                        operation=operation,
+                        segment_id=segment_id,
+                        status=PlaybackStatus.STARTED,
+                        position_ms=0,
+                        boundary_index=boundary_index,
+                        occurred_at=datetime.now(UTC),
+                        playback_id=playback_id,
                     )
-                except TimeoutError as error:
-                    raise RuntimeError(
-                        f"client did not acknowledge playback segment {segment_id}"
-                    ) from error
+                )
+            self._assert_owner(turn, operation)
+            publish_started = monotonic()
+            if turn.first_audio_at is None:
+                turn.first_audio_at = publish_started
+                self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
+            try:
+                published_duration = await self.publisher.publish(
+                    segment_id,
+                    audio,
+                    wait_for_playback=(
+                        False if self.client_playback_acknowledgements else wait_for_playback
+                    ),
+                )
+            except asyncio.CancelledError:
+                if self.client_playback_acknowledgements:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="cancelled",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "cancelled", retired=True)
+                else:
+                    await self.engine.acknowledge(
+                        PlaybackAcknowledgement(
+                            acknowledgement_id=str(uuid4()),
+                            operation=operation,
+                            segment_id=segment_id,
+                            status=PlaybackStatus.FLUSHED,
+                            position_ms=0,
+                            boundary_index=boundary_index,
+                            occurred_at=datetime.now(UTC),
+                            detail="playback cancelled before boundary completion",
+                            playback_id=playback_id,
+                        )
+                    )
+                raise
+            except Exception as error:
+                if self.client_playback_acknowledgements:
+                    async with self._playback_lock:
+                        await self.store.update_playback_attempt(
+                            playback_id,
+                            status="failed",
+                            position_ms=pending.latest_position_ms,
+                        )
+                        self._emit_playback_bound(pending, "failed", retired=True)
+                else:
+                    await self.engine.acknowledge(
+                        PlaybackAcknowledgement(
+                            acknowledgement_id=str(uuid4()),
+                            operation=operation,
+                            segment_id=segment_id,
+                            status=PlaybackStatus.FAILED,
+                            position_ms=0,
+                            boundary_index=boundary_index,
+                            occurred_at=datetime.now(UTC),
+                            detail=type(error).__name__,
+                            playback_id=playback_id,
+                        )
+                    )
+                raise
+            self._log_phase(turn, "publish", monotonic() - publish_started)
+            self._assert_owner(turn, operation)
+            if published_duration != duration:
+                raise RuntimeError("published audio duration changed after playback announcement")
+            if self.client_playback_acknowledgements:
+                if not wait_for_playback:
+                    return
+                terminal_wait = asyncio.create_task(pending.terminal.wait())
+                retry_wait = asyncio.create_task(pending.retry.wait())
+                try:
+                    await asyncio.wait(
+                        {terminal_wait, retry_wait},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    for waiter in (terminal_wait, retry_wait):
+                        if not waiter.done():
+                            waiter.cancel()
+                    await asyncio.gather(terminal_wait, retry_wait, return_exceptions=True)
+                if pending.retry.is_set():
+                    self._assert_owner(turn, operation)
+                    continue
                 if pending.terminal_status is not PlaybackStatus.COMPLETED:
                     raise asyncio.CancelledError
-        else:
+                return
             await self.engine.acknowledge(
                 PlaybackAcknowledgement(
                     acknowledgement_id=str(uuid4()),
@@ -1414,8 +1849,14 @@ class VoicePipeline:
             pending.latest_position_ms = duration
             pending.terminal_status = PlaybackStatus.COMPLETED
             await self._persist_heard_source(pending, PlaybackStatus.COMPLETED)
+            return
 
-    async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> bool:
+    async def playback_acknowledgement(
+        self,
+        acknowledgement: PlaybackAcknowledgement,
+        *,
+        reconciled: bool = False,
+    ) -> bool:
         async with self._playback_lock:
             if not acknowledgement.playback_id:
                 raise ValueError("playback acknowledgement omitted the playback attempt")
@@ -1426,6 +1867,19 @@ class VoicePipeline:
                 raise ValueError("playback acknowledgement refers to another segment")
             if acknowledgement.operation != pending.operation:
                 raise ValueError("playback acknowledgement belongs to another operation")
+            if pending.superseded:
+                return False
+            supplied_credit_identity = bool(
+                acknowledgement.receiver_epoch
+                or acknowledgement.credit_sequence
+                or acknowledgement.attempt_sequence
+            )
+            if supplied_credit_identity and (
+                acknowledgement.receiver_epoch != pending.receiver_epoch
+                or acknowledgement.credit_sequence != pending.credit_sequence
+                or acknowledgement.attempt_sequence != pending.attempt_sequence
+            ):
+                raise ValueError("playback acknowledgement has stale credit identity")
             terminal_status = acknowledgement.status in {
                 PlaybackStatus.COMPLETED,
                 PlaybackStatus.FLUSHED,
@@ -1454,24 +1908,38 @@ class VoicePipeline:
             if pending.terminal_status is not None:
                 if acknowledgement.status is not pending.terminal_status:
                     raise ValueError("playback acknowledgement followed a terminal status")
+            elif acknowledgement.status is PlaybackStatus.ACCEPTED:
+                if pending.accepted.is_set() or acknowledgement.position_ms != 0:
+                    raise ValueError("playback acceptance acknowledgement is invalid")
+                pending.accepted.set()
             elif acknowledgement.status is PlaybackStatus.STARTED:
-                if pending.started or acknowledgement.position_ms != 0:
+                if (
+                    not pending.accepted.is_set()
+                    or pending.started
+                    or acknowledgement.position_ms != 0
+                ):
                     raise ValueError("playback started acknowledgement is invalid")
                 pending.started = True
             elif acknowledgement.status is PlaybackStatus.POSITION:
                 if not pending.started:
                     raise ValueError("playback position arrived before playback started")
             elif acknowledgement.status is PlaybackStatus.COMPLETED:
-                if not pending.started:
+                if not pending.started and not reconciled:
                     raise ValueError("playback completion arrived before playback started")
                 if acknowledgement.position_ms < pending.duration_ms:
                     raise ValueError("playback completed before the announced duration")
+                pending.started = True
                 pending.terminal_status = acknowledgement.status
             elif acknowledgement.status in {PlaybackStatus.FLUSHED, PlaybackStatus.FAILED}:
                 pending.terminal_status = acknowledgement.status
             else:
                 raise ValueError("unsupported playback acknowledgement status")
             pending.latest_position_ms = acknowledgement.position_ms
+            await self.store.update_playback_attempt(
+                pending.playback_id,
+                status=acknowledgement.status.value,
+                position_ms=acknowledgement.position_ms,
+            )
             if acknowledgement.operation.generation == self.engine.generation:
                 persisted = await self.engine.acknowledge(acknowledgement)
             elif (
@@ -1524,7 +1992,335 @@ class VoicePipeline:
                 await self._persist_heard_source(pending, pending.terminal_status)
             if pending.terminal_status is not None:
                 pending.terminal.set()
+                self._emit_playback_bound(pending, "terminal")
             return persisted
+
+    async def reconnect(
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        generation: int,
+        latest_playback: tuple[PlaybackAcknowledgement, ...],
+        max_inflight_attempts: int,
+        max_segment_duration_ms: int,
+        playback_protocol_revision: int,
+        receiver_epoch: str,
+        credit_sequence: int,
+        idempotency_key: str,
+    ) -> bool:
+        if session_id != self.engine.session_id:
+            raise ValueError("reconnect belongs to another session")
+        if generation > self.engine.generation:
+            raise StaleOperationError("reconnect generation is ahead of the worker")
+        if max_inflight_attempts != 1:
+            raise ValueError("bounded reconnect requires exactly one receiver attempt")
+        if max_segment_duration_ms <= 0:
+            raise ValueError("reconnect omitted the receiver duration capacity")
+        if playback_protocol_revision != 1:
+            raise ValueError("unsupported playback protocol revision")
+        if not receiver_epoch or credit_sequence <= 0:
+            raise ValueError("reconnect omitted the receiver credit identity")
+        reconnect_key = idempotency_key or request_id
+        if not reconnect_key:
+            raise ValueError("reconnect omitted its idempotency identity")
+
+        async with self._playback_lock:
+            prior = self._reconnect_outcomes.get(reconnect_key)
+        if prior is not None:
+            prior_replay, prior_epoch, prior_sequence = prior
+            if prior_epoch != receiver_epoch or prior_sequence != credit_sequence:
+                raise ValueError("reconnect idempotency identity was reused")
+            if self.events is not None:
+                await self.events.playback_reconciled(
+                    request_id,
+                    self.engine.generation,
+                    prior_replay,
+                    prior_epoch,
+                    prior_sequence,
+                    (
+                        protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING
+                        if prior_replay
+                        else protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_READY
+                    ),
+                )
+            return prior_replay
+
+        if receiver_epoch == self._receiver_epoch and credit_sequence <= self._credit_sequence:
+            raise ValueError("reconnect supplied stale receiver credit")
+
+        self._maximum_segment_duration_ms = min(max_segment_duration_ms, 30_000)
+        self._receiver_epoch = receiver_epoch
+        self._credit_sequence = credit_sequence
+        self._playback_ready.set()
+        await self.publisher.flush()
+        snapshots = {item.playback_id: item for item in latest_playback}
+        async with self._playback_lock:
+            outstanding = tuple(
+                item
+                for item in self._pending_playback.values()
+                if item.operation.session_id == session_id
+                and item.operation.generation == self.engine.generation
+                and item.terminal_status is None
+                and not item.superseded
+            )
+
+        replay_pending = False
+        for pending in outstanding:
+            snapshot = snapshots.get(pending.playback_id)
+            if snapshot is not None and snapshot.status in {
+                PlaybackStatus.COMPLETED,
+                PlaybackStatus.FLUSHED,
+                PlaybackStatus.FAILED,
+            }:
+                await self.playback_acknowledgement(snapshot, reconciled=True)
+                continue
+            async with self._playback_lock:
+                if pending.terminal_status is None and not pending.superseded:
+                    pending.superseded = True
+                    await self.store.update_playback_attempt(
+                        pending.playback_id,
+                        status="superseded",
+                        position_ms=pending.latest_position_ms,
+                    )
+                    self._emit_playback_bound(pending, "superseded")
+                    pending.retry.set()
+                    replay_pending = True
+
+        recovery = self._recovery_attempt
+        if recovery is not None and not outstanding:
+            snapshot = snapshots.get(recovery.playback_id)
+            recovered_pending = self._pending_from_record(recovery)
+            async with self._playback_lock:
+                self._pending_playback[recovery.playback_id] = recovered_pending
+            if snapshot is not None and snapshot.status in {
+                PlaybackStatus.COMPLETED,
+                PlaybackStatus.FLUSHED,
+                PlaybackStatus.FAILED,
+            }:
+                await self.playback_acknowledgement(snapshot, reconciled=True)
+                self._recovery_attempt = None
+            else:
+                recovered_pending.superseded = True
+                await self.store.update_playback_attempt(
+                    recovery.playback_id,
+                    status="superseded",
+                    position_ms=recovery.position_ms,
+                )
+                replay_pending = True
+
+        async with self._playback_lock:
+            self._reconnect_outcomes[reconnect_key] = (
+                replay_pending,
+                receiver_epoch,
+                credit_sequence,
+            )
+            while len(self._reconnect_outcomes) > 64:
+                self._reconnect_outcomes.pop(next(iter(self._reconnect_outcomes)))
+        if self.events is not None:
+            await self.events.playback_reconciled(
+                request_id,
+                self.engine.generation,
+                replay_pending,
+                receiver_epoch,
+                credit_sequence,
+                (
+                    protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING
+                    if replay_pending
+                    else protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_READY
+                ),
+            )
+        if (
+            replay_pending
+            and recovery is not None
+            and self._recovery_attempt is not None
+            and (self._recovery_task is None or self._recovery_task.done())
+        ):
+            self._recovery_task = asyncio.create_task(
+                self._recover_durable_playback(recovery),
+                name="radcliffe-playback-recovery",
+            )
+            self._recovery_task.add_done_callback(self._consume_background_task)
+        return replay_pending
+
+    def _pending_from_record(self, record: PlaybackAttemptRecord) -> _PendingPlayback:
+        source_envelope = (
+            MessageEnvelope.from_proto(
+                protocol_pb2.MessageEnvelope.FromString(record.source_envelope)
+            )
+            if record.source_envelope is not None
+            else None
+        )
+        pending = _PendingPlayback(
+            operation=Operation(
+                session_id=record.session_id,
+                generation=record.generation,
+                operation_id=record.operation_id,
+                cancellation_id=record.cancellation_id,
+                trace_id=record.trace_id,
+            ),
+            playback_id=record.playback_id,
+            segment_id=record.segment_id,
+            boundary_index=record.boundary_index,
+            duration_ms=record.duration_ms,
+            canonical_text=record.canonical_text,
+            source=SourceKind(record.source),
+            receiver_epoch=record.receiver_epoch,
+            credit_sequence=record.credit_sequence,
+            attempt_sequence=record.attempt_sequence,
+            source_envelope=source_envelope,
+            completes_source_boundary=record.completes_source_boundary,
+            started=record.status in {"started", "position"},
+            latest_position_ms=record.position_ms,
+        )
+        if record.status == "accepted":
+            pending.accepted.set()
+        return pending
+
+    async def _recover_durable_playback(self, record: PlaybackAttemptRecord) -> None:
+        if self.events is None:
+            raise RuntimeError("durable playback recovery requires an event sink")
+        operation = Operation(
+            session_id=record.session_id,
+            generation=self.engine.generation,
+            operation_id=str(uuid4()),
+            cancellation_id=str(uuid4()),
+            trace_id=f"trc_{uuid4().hex}",
+        )
+        while True:
+            playback_id = str(uuid4())
+            self._attempt_sequence += 1
+            pending = _PendingPlayback(
+                operation=operation,
+                playback_id=playback_id,
+                segment_id=record.segment_id,
+                boundary_index=record.boundary_index,
+                duration_ms=record.duration_ms,
+                canonical_text=record.canonical_text,
+                source=SourceKind(record.source),
+                receiver_epoch=self._receiver_epoch,
+                credit_sequence=self._credit_sequence,
+                attempt_sequence=self._attempt_sequence,
+                source_envelope=(
+                    MessageEnvelope.from_proto(
+                        protocol_pb2.MessageEnvelope.FromString(record.source_envelope)
+                    )
+                    if record.source_envelope is not None
+                    else None
+                ),
+                completes_source_boundary=record.completes_source_boundary,
+            )
+            await self.store.admit_playback_attempt(
+                PlaybackAttemptRecord(
+                    playback_id=playback_id,
+                    session_id=record.session_id,
+                    generation=operation.generation,
+                    operation_id=operation.operation_id,
+                    cancellation_id=operation.cancellation_id,
+                    trace_id=operation.trace_id,
+                    segment_id=record.segment_id,
+                    boundary_index=record.boundary_index,
+                    duration_ms=record.duration_ms,
+                    canonical_text=record.canonical_text,
+                    source=record.source,
+                    source_envelope=record.source_envelope,
+                    completes_source_boundary=record.completes_source_boundary,
+                    speech_rate_multiplier=record.speech_rate_multiplier,
+                    pcm_audio=record.pcm_audio,
+                    receiver_epoch=pending.receiver_epoch,
+                    credit_sequence=pending.credit_sequence,
+                    attempt_sequence=pending.attempt_sequence,
+                    status="announced",
+                    position_ms=0,
+                )
+            )
+            async with self._playback_lock:
+                self._pending_playback[playback_id] = pending
+            self._emit_playback_bound(pending, "recovered")
+            await self.events.playback_segment(
+                operation,
+                playback_id,
+                record.segment_id,
+                record.boundary_index,
+                record.duration_ms,
+                hashlib.sha256(record.canonical_text.encode()).digest(),
+                SourceKind(record.source),
+                record.speech_rate_multiplier,
+                pending.receiver_epoch,
+                pending.credit_sequence,
+                pending.attempt_sequence,
+            )
+            accepted_wait = asyncio.create_task(pending.accepted.wait())
+            retry_wait = asyncio.create_task(pending.retry.wait())
+            try:
+                await asyncio.wait(
+                    {accepted_wait, retry_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for waiter in (accepted_wait, retry_wait):
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(accepted_wait, retry_wait, return_exceptions=True)
+            if pending.retry.is_set():
+                continue
+            await self.publisher.publish(
+                record.segment_id,
+                record.pcm_audio,
+                wait_for_playback=False,
+            )
+            terminal_wait = asyncio.create_task(pending.terminal.wait())
+            retry_wait = asyncio.create_task(pending.retry.wait())
+            try:
+                await asyncio.wait(
+                    {terminal_wait, retry_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for waiter in (terminal_wait, retry_wait):
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(terminal_wait, retry_wait, return_exceptions=True)
+            if pending.retry.is_set():
+                continue
+            if pending.terminal_status is PlaybackStatus.COMPLETED:
+                await self._persist_heard_source(pending, PlaybackStatus.COMPLETED)
+            self._recovery_attempt = None
+            return
+
+    def _emit_playback_bound(
+        self,
+        pending: _PendingPlayback,
+        phase: str,
+        *,
+        retired: bool | None = None,
+    ) -> None:
+        terminal = (
+            pending.terminal_status is not None or pending.superseded
+            if retired is None
+            else retired
+        )
+        self.telemetry.emit(
+            component="media_worker",
+            event="playback_bound",
+            outcome=(
+                "cancelled"
+                if phase == "cancelled"
+                else "failed"
+                if phase == "failed"
+                else "completed"
+                if terminal
+                else "ready"
+            ),
+            session_id=self.engine.session_id,
+            generation=pending.operation.generation,
+            phase=phase,
+            operation=pending.operation,
+            queue_depth=0 if terminal else 1,
+            queued_duration_ms=(
+                0 if terminal else max(0, pending.duration_ms - pending.latest_position_ms)
+            ),
+        )
 
     async def _persist_heard_source(
         self,
@@ -1556,7 +2352,9 @@ class VoicePipeline:
             "radcliffe.playback.position_ms": str(pending.latest_position_ms),
             "radcliffe.playback.duration_ms": str(pending.duration_ms),
             "radcliffe.playback.status": status.value,
-            PLAYBACK_COMPLETE_METADATA: str(status is PlaybackStatus.COMPLETED).lower(),
+            PLAYBACK_COMPLETE_METADATA: str(
+                status is PlaybackStatus.COMPLETED and pending.completes_source_boundary
+            ).lower(),
         }
         async with self._append_lock:
             envelope = MessageEnvelope.text(
@@ -1619,6 +2417,7 @@ class VoicePipeline:
 
     async def _cancel_active(self, disposition: str, *, always_flush: bool = False) -> None:
         task: asyncio.Task[None] | None = None
+        recovery_task = self._recovery_task
         should_flush = always_flush
         operation: Operation | None = None
         async with self._coordinator:
@@ -1633,6 +2432,24 @@ class VoicePipeline:
                     task.cancel()
         if should_flush:
             await self.publisher.flush()
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+            await asyncio.gather(recovery_task, return_exceptions=True)
+            async with self._playback_lock:
+                recovering = tuple(
+                    item
+                    for item in self._pending_playback.values()
+                    if item.terminal_status is None and not item.superseded
+                )
+                for item in recovering:
+                    item.superseded = True
+                    await self.store.update_playback_attempt(
+                        item.playback_id,
+                        status="cancelled",
+                        position_ms=item.latest_position_ms,
+                    )
+                    self._emit_playback_bound(item, "cancelled")
+            self._recovery_attempt = None
         if operation is not None:
             await self._commit_source_high_water(operation)
         current = asyncio.current_task()
@@ -1650,6 +2467,7 @@ class VoicePipeline:
                 if item.operation == operation
                 and item.source is SourceKind.TEXT_SOURCE
                 and item.terminal_status is None
+                and not item.superseded
             )
         if pending:
             try:
@@ -1691,7 +2509,9 @@ class VoicePipeline:
             pending = tuple(
                 item
                 for item in self._pending_playback.values()
-                if item.operation == operation and item.terminal_status is None
+                if item.operation == operation
+                and item.terminal_status is None
+                and not item.superseded
             )
             remaining_ms = sum(
                 max(0, item.duration_ms - item.latest_position_ms) for item in pending
@@ -1959,6 +2779,10 @@ class VoicePipeline:
         await self._persist_session_transition(result, None)
         if self.engine.state is not ConversationState.IDLE:
             self.engine.end()
+            await self.store.record_voice_generation(
+                self.engine.session_id,
+                self.engine.generation,
+            )
         return True
 
     async def _persist_session_transition(
@@ -2004,6 +2828,10 @@ class VoicePipeline:
         await self._append_disposition(turn, "handed_off")
         self._paused_source = None
         self.engine.end()
+        await self.store.record_voice_generation(
+            self.engine.session_id,
+            self.engine.generation,
+        )
         self._active_turn = None
         self._emit_turn_outcome(turn, "completed")
 

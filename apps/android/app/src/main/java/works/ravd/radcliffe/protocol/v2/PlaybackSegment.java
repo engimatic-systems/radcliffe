@@ -18,6 +18,7 @@ public  final class PlaybackSegment extends
     segmentId_ = "";
     canonicalSha256_ = com.google.protobuf.ByteString.EMPTY;
     playbackId_ = "";
+    receiverEpoch_ = "";
   }
   private int bitField0_;
   public static final int OPERATION_FIELD_NUMBER = 1;
@@ -309,6 +310,132 @@ public  final class PlaybackSegment extends
   private void clearSpeechRateMultiplier() {
 
     speechRateMultiplier_ = 0D;
+  }
+
+  public static final int PLAYBACK_PROTOCOL_REVISION_FIELD_NUMBER = 9;
+  private int playbackProtocolRevision_;
+  /**
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @return The playbackProtocolRevision.
+   */
+  @java.lang.Override
+  public int getPlaybackProtocolRevision() {
+    return playbackProtocolRevision_;
+  }
+  /**
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @param value The playbackProtocolRevision to set.
+   */
+  private void setPlaybackProtocolRevision(int value) {
+
+    playbackProtocolRevision_ = value;
+  }
+  /**
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   */
+  private void clearPlaybackProtocolRevision() {
+
+    playbackProtocolRevision_ = 0;
+  }
+
+  public static final int RECEIVER_EPOCH_FIELD_NUMBER = 10;
+  private java.lang.String receiverEpoch_;
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  @java.lang.Override
+  public java.lang.String getReceiverEpoch() {
+    return receiverEpoch_;
+  }
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getReceiverEpochBytes() {
+    return com.google.protobuf.ByteString.copyFromUtf8(receiverEpoch_);
+  }
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The receiverEpoch to set.
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setReceiverEpoch(
+      java.lang.String value) {
+    value.getClass();  // minimal bytecode null check
+
+    receiverEpoch_ = value;
+  }
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   */
+  private void clearReceiverEpoch() {
+
+    receiverEpoch_ = getDefaultInstance().getReceiverEpoch();
+  }
+  /**
+   * <code>string receiver_epoch = 10;</code>
+   * @param value The bytes for receiverEpoch to set.
+   */
+  private void setReceiverEpochBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    receiverEpoch_ = value.toStringUtf8();
+
+  }
+
+  public static final int CREDIT_SEQUENCE_FIELD_NUMBER = 11;
+  private long creditSequence_;
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  @java.lang.Override
+  public long getCreditSequence() {
+    return creditSequence_;
+  }
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   * @param value The creditSequence to set.
+   */
+  private void setCreditSequence(long value) {
+
+    creditSequence_ = value;
+  }
+  /**
+   * <code>uint64 credit_sequence = 11;</code>
+   */
+  private void clearCreditSequence() {
+
+    creditSequence_ = 0L;
+  }
+
+  public static final int ATTEMPT_SEQUENCE_FIELD_NUMBER = 12;
+  private long attemptSequence_;
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @return The attemptSequence.
+   */
+  @java.lang.Override
+  public long getAttemptSequence() {
+    return attemptSequence_;
+  }
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   * @param value The attemptSequence to set.
+   */
+  private void setAttemptSequence(long value) {
+
+    attemptSequence_ = value;
+  }
+  /**
+   * <code>uint64 attempt_sequence = 12;</code>
+   */
+  private void clearAttemptSequence() {
+
+    attemptSequence_ = 0L;
   }
 
   public static works.ravd.radcliffe.protocol.v2.PlaybackSegment parseFrom(
@@ -711,6 +838,139 @@ public  final class PlaybackSegment extends
       return this;
     }
 
+    /**
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @return The playbackProtocolRevision.
+     */
+    @java.lang.Override
+    public int getPlaybackProtocolRevision() {
+      return instance.getPlaybackProtocolRevision();
+    }
+    /**
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @param value The playbackProtocolRevision to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPlaybackProtocolRevision(int value) {
+      copyOnWrite();
+      instance.setPlaybackProtocolRevision(value);
+      return this;
+    }
+    /**
+     * <code>uint32 playback_protocol_revision = 9;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPlaybackProtocolRevision() {
+      copyOnWrite();
+      instance.clearPlaybackProtocolRevision();
+      return this;
+    }
+
+    /**
+     * <code>string receiver_epoch = 10;</code>
+     * @return The receiverEpoch.
+     */
+    @java.lang.Override
+    public java.lang.String getReceiverEpoch() {
+      return instance.getReceiverEpoch();
+    }
+    /**
+     * <code>string receiver_epoch = 10;</code>
+     * @return The bytes for receiverEpoch.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getReceiverEpochBytes() {
+      return instance.getReceiverEpochBytes();
+    }
+    /**
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpoch(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.setReceiverEpoch(value);
+      return this;
+    }
+    /**
+     * <code>string receiver_epoch = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearReceiverEpoch() {
+      copyOnWrite();
+      instance.clearReceiverEpoch();
+      return this;
+    }
+    /**
+     * <code>string receiver_epoch = 10;</code>
+     * @param value The bytes for receiverEpoch to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReceiverEpochBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.setReceiverEpochBytes(value);
+      return this;
+    }
+
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return The creditSequence.
+     */
+    @java.lang.Override
+    public long getCreditSequence() {
+      return instance.getCreditSequence();
+    }
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @param value The creditSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setCreditSequence(long value) {
+      copyOnWrite();
+      instance.setCreditSequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 credit_sequence = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearCreditSequence() {
+      copyOnWrite();
+      instance.clearCreditSequence();
+      return this;
+    }
+
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @return The attemptSequence.
+     */
+    @java.lang.Override
+    public long getAttemptSequence() {
+      return instance.getAttemptSequence();
+    }
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @param value The attemptSequence to set.
+     * @return This builder for chaining.
+     */
+    public Builder setAttemptSequence(long value) {
+      copyOnWrite();
+      instance.setAttemptSequence(value);
+      return this;
+    }
+    /**
+     * <code>uint64 attempt_sequence = 12;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearAttemptSequence() {
+      copyOnWrite();
+      instance.clearAttemptSequence();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.PlaybackSegment)
   }
   @java.lang.Override
@@ -736,10 +996,15 @@ public  final class PlaybackSegment extends
             "source_",
             "playbackId_",
             "speechRateMultiplier_",
+            "playbackProtocolRevision_",
+            "receiverEpoch_",
+            "creditSequence_",
+            "attemptSequence_",
           };
           java.lang.String info =
-              "\u0000\b\u0000\u0001\u0001\b\b\u0000\u0000\u0000\u0001\u1009\u0000\u0002\u0208\u0003" +
-              "\u000b\u0004\u0003\u0005\n\u0006\f\u0007\u0208\b\u0000";
+              "\u0000\f\u0000\u0001\u0001\f\f\u0000\u0000\u0000\u0001\u1009\u0000\u0002\u0208\u0003" +
+              "\u000b\u0004\u0003\u0005\n\u0006\f\u0007\u0208\b\u0000\t\u000b\n\u0208\u000b\u0003" +
+              "\f\u0003";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

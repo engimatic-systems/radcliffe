@@ -1,4 +1,6 @@
-.PHONY: bootstrap check check-python check-node check-android check-conformance-local \
+.PHONY: bootstrap check check-python check-node check-android check-playback-model \
+	check-playback-conformance \
+	check-conformance-local \
 	check-session-local check-voice-local check-stt-rejection-local \
 	check-worker-dispatch-local check-device-auth-local check-operations-local \
 	check-background-jobs-local check-job-egress-local build-job-sandbox-local \
@@ -44,6 +46,12 @@ smoke-cloud-paid:
 
 check-android:
 	JAVA_HOME="$${JAVA_HOME:-$$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home}" ANDROID_HOME="$${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}" ./apps/android/gradlew -p apps/android testDebugUnitTest lint
+
+check-playback-model:
+	./scripts/check-playback-model.sh
+
+check-playback-conformance:
+	uv run python scripts/playback_conformance.py
 
 check-voice-local:
 	./scripts/run-local-conformance.sh

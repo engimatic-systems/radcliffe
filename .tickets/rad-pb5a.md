@@ -1,6 +1,6 @@
 ---
 id: rad-pb5a
-status: open
+status: closed
 deps: [rad-pm6h]
 links: []
 created: 2026-07-28T21:37:55Z
@@ -21,3 +21,13 @@ Extend Protocol v2 only with fields and messages justified by the approved forma
 ## Acceptance Criteria
 
 The protobuf schema and generated Kotlin/Python bindings represent every modeled transition without overloaded sentinel values. Decode and validation tests reject malformed bounds, identity mismatches, backwards counters, impossible terminal transitions, and unsupported negotiation. Duplicate messages are idempotent and stale generations are representable as explicit non-mutating outcomes. Compatibility tests cover old-client/new-worker and new-client/old-worker behavior, and the protocol documentation maps every field to its authority and invariant.
+
+## Notes
+
+**2026-07-29T01:07:50Z**
+
+First additive wire slice implemented: Reconnect now carries max_inflight_attempts and max_segment_duration_ms; PlaybackReconciled supplies an explicit reconnect barrier. Full formal-model capability negotiation/restart compatibility remains open.
+
+**2026-07-29T04:22:34Z**
+
+Completed on epic/rad-0tmq-complete-protocol. Protocol v2 now carries revision, receiver epoch, credit sequence, attempt sequence, explicit metadata ACCEPTED, and reconciliation outcomes in regenerated Python/Kotlin bindings. Decode/transition tests fail closed on missing capability or identity, stale counters/generations and impossible lifecycle transitions are non-mutating, and docs specify old/new compatibility with no unbounded fallback.

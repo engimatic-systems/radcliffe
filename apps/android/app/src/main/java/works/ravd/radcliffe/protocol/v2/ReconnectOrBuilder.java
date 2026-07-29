@@ -71,4 +71,65 @@ public interface ReconnectOrBuilder extends
    */
   com.google.protobuf.ByteString
       getIdempotencyKeyBytes();
+
+  /**
+   * <pre>
+   * The receiver's maximum number of admitted, nonterminal attempts. The
+   * bounded reconnect slice supports exactly one.
+   * </pre>
+   *
+   * <code>uint32 max_inflight_attempts = 7;</code>
+   * @return The maxInflightAttempts.
+   */
+  int getMaxInflightAttempts();
+
+  /**
+   * <pre>
+   * The largest single attempt the receiver is willing to admit.
+   * </pre>
+   *
+   * <code>uint64 max_segment_duration_ms = 8;</code>
+   * @return The maxSegmentDurationMs.
+   */
+  long getMaxSegmentDurationMs();
+
+  /**
+   * <pre>
+   * Revision 1 requires metadata acceptance before realtime media publication.
+   * </pre>
+   *
+   * <code>uint32 playback_protocol_revision = 9;</code>
+   * @return The playbackProtocolRevision.
+   */
+  int getPlaybackProtocolRevision();
+
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The receiverEpoch.
+   */
+  java.lang.String getReceiverEpoch();
+  /**
+   * <pre>
+   * A fresh random value for each Android receiver process.
+   * </pre>
+   *
+   * <code>string receiver_epoch = 10;</code>
+   * @return The bytes for receiverEpoch.
+   */
+  com.google.protobuf.ByteString
+      getReceiverEpochBytes();
+
+  /**
+   * <pre>
+   * Monotonic within receiver_epoch. A delayed lower grant is stale.
+   * </pre>
+   *
+   * <code>uint64 credit_sequence = 11;</code>
+   * @return The creditSequence.
+   */
+  long getCreditSequence();
 }

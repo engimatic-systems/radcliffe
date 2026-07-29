@@ -32,6 +32,8 @@ DATA_TABLES = (
     "envelopes",
     "tool_calls",
     "playback_acknowledgements",
+    "playback_attempts",
+    "voice_generations",
     "devices",
     "device_auth_audit",
     "configuration_values",

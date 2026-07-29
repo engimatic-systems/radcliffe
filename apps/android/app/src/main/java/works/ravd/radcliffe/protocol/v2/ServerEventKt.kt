@@ -285,6 +285,30 @@ public object ServerEventKt {
     public fun hasJobEvent(): kotlin.Boolean {
       return _builder.hasJobEvent()
     }
+
+    /**
+     * `.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;`
+     */
+    public var playbackReconciled: works.ravd.radcliffe.protocol.v2.PlaybackReconciled
+      @kotlin.jvm.JvmName("getPlaybackReconciled")
+        get() = _builder.playbackReconciled
+      @kotlin.jvm.JvmName("setPlaybackReconciled")
+        set(value) {
+        _builder.playbackReconciled = value
+      }
+    /**
+     * `.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;`
+     */
+    public fun clearPlaybackReconciled() {
+      _builder.clearPlaybackReconciled()
+    }
+    /**
+     * `.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;`
+     * @return Whether the playbackReconciled field is set.
+     */
+    public fun hasPlaybackReconciled(): kotlin.Boolean {
+      return _builder.hasPlaybackReconciled()
+    }
     public val payloadCase: works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase
     @kotlin.jvm.JvmName("getPayloadCase")
       get() = _builder.payloadCase
@@ -326,3 +350,6 @@ public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.agentControlRes
 
 public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.jobEventOrNull: works.ravd.radcliffe.protocol.v2.JobEvent?
   get() = if (hasJobEvent()) getJobEvent() else null
+
+public val works.ravd.radcliffe.protocol.v2.ServerEventOrBuilder.playbackReconciledOrNull: works.ravd.radcliffe.protocol.v2.PlaybackReconciled?
+  get() = if (hasPlaybackReconciled()) getPlaybackReconciled() else null

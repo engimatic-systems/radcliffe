@@ -1,6 +1,6 @@
 ---
 id: rad-pm6h
-status: open
+status: closed
 deps: [rad-fnho]
 links: []
 created: 2026-07-28T21:37:39Z
@@ -21,3 +21,9 @@ Write a human-readable protocol RFC and a machine-checkable state model, prefera
 ## Acceptance Criteria
 
 The RFC contains a complete ownership table, message grammar, state diagrams, transition table, credit conservation rule, timeout semantics, reconnect handshake, restart recovery, and failure matrix. The model checker explores configured bounds with no invariant violation or deadlock. Proved safety properties include bounded admitted-unheard audio, one current epoch, ordered single acceptance of attempts, no heard-boundary advancement without valid Android evidence, no stale resurrection, cancellation dominance, and idempotent replay. Conditional liveness states its fairness assumptions and proves that a connected progressing sink eventually completes, flushes, or explicitly fails every admitted attempt. A written inductive proof explains why initial state and every transition preserve the invariants, and documents what cannot be guaranteed during a network partition.
+
+## Notes
+
+**2026-07-29T04:22:34Z**
+
+Completed on epic/rad-0tmq-complete-protocol. formal/playback/BoundedPlayback.tla plus the RFC model W=1 credit, metadata acceptance before media, reconnect, both process crashes/restarts, cancellation, reissue, and stale-generation reconciliation. Pinned TLC 1.7.4 exhaustively checks 1,194 distinct states / 3,994 generated states with no invariant violation or deadlock; the RFC contains ownership, transition/failure tables, refinement mapping, inductive safety argument, and conditional-liveness assumptions.

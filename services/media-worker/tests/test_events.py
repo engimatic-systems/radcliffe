@@ -46,6 +46,17 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
         b"a" * 32,
         SourceKind.TEXT_SOURCE,
         1.25,
+        "receiver-1",
+        3,
+        7,
+    )
+    await sink.playback_reconciled(
+        "reconnect-1",
+        4,
+        True,
+        "receiver-1",
+        3,
+        protocol_pb2.PLAYBACK_RECONCILIATION_OUTCOME_REPLAY_PENDING,
     )
     await sink.job_event(
         JobEventRecord(
@@ -68,7 +79,8 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     ready = protocol_pb2.ServerEvent.FromString(transport.packets[1])
     message = protocol_pb2.ServerEvent.FromString(transport.packets[2])
     playback = protocol_pb2.ServerEvent.FromString(transport.packets[3])
-    job = protocol_pb2.ServerEvent.FromString(transport.packets[4])
+    reconciled = protocol_pb2.ServerEvent.FromString(transport.packets[4])
+    job = protocol_pb2.ServerEvent.FromString(transport.packets[5])
     assert state.state_changed.current == protocol_pb2.CONVERSATION_STATE_THINKING
     assert state.state_changed.reason == "transcription complete"
     assert ready.session_ready.session_id == "s1"
@@ -80,6 +92,14 @@ async def test_livekit_event_sink_sends_binary_state_and_message_events() -> Non
     assert playback.playback_segment.source == protocol_pb2.SOURCE_KIND_TEXT_SOURCE
     assert playback.playback_segment.speech_rate_multiplier == 1.25
     assert playback.playback_segment.operation.trace_id == "trc_" + "a" * 32
+    assert playback.playback_segment.playback_protocol_revision == 1
+    assert playback.playback_segment.receiver_epoch == "receiver-1"
+    assert playback.playback_segment.credit_sequence == 3
+    assert playback.playback_segment.attempt_sequence == 7
+    assert reconciled.playback_reconciled.request_id == "reconnect-1"
+    assert reconciled.playback_reconciled.generation == 4
+    assert reconciled.playback_reconciled.replay_pending
+    assert reconciled.playback_reconciled.receiver_epoch == "receiver-1"
     assert job.job_event.event_id == "job-event:job-1:3"
     assert job.job_event.delivery_sequence == 9
     assert job.job_event.job.session_id == "s1"

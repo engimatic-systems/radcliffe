@@ -73,6 +73,15 @@ visibility after reconnect or restart.
 - Each published audio segment has a unique playback-attempt ID. The client
   acknowledges decoded audio against that ID; retries or resumed segments get a
   new ID so stale acknowledgements cannot advance the durable cursor.
+- Bounded playback revision 1 fails closed until Android grants one attempt of
+  capacity with a process-local receiver epoch and monotonic credit sequence.
+  The worker durably announces one attempt, waits for the matching
+  `PLAYBACK_STATUS_ACCEPTED`, and only then publishes realtime media. Terminal
+  decoded-PCM evidence returns credit. Delayed epochs, credit sequences, attempt
+  sequences, generations, and duplicate terminal packets are non-mutating.
+- A new worker does not fall back for an old Android client, and a new Android
+  client stays muted for an old worker. The full state machine, compatibility
+  matrix, and refinement argument are in `docs/bounded-playback-protocol.md`.
 
 The compatibility test serializes fixtures with one binding and parses them
 with the other. Generated files are reviewed only as compiler output; contract

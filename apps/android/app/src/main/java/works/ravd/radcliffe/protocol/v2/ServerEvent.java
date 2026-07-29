@@ -30,6 +30,7 @@ public  final class ServerEvent extends
     AGENT_CONTROL_REQUEST(9),
     AGENT_CONTROL_RESULT(10),
     JOB_EVENT(11),
+    PLAYBACK_RECONCILED(12),
     PAYLOAD_NOT_SET(0);
     private final int value;
     private PayloadCase(int value) {
@@ -55,6 +56,7 @@ public  final class ServerEvent extends
         case 9: return AGENT_CONTROL_REQUEST;
         case 10: return AGENT_CONTROL_RESULT;
         case 11: return JOB_EVENT;
+        case 12: return PLAYBACK_RECONCILED;
         case 0: return PAYLOAD_NOT_SET;
         default: return null;
       }
@@ -617,6 +619,58 @@ public  final class ServerEvent extends
    */
   private void clearJobEvent() {
     if (payloadCase_ == 11) {
+      payloadCase_ = 0;
+      payload_ = null;
+    }
+  }
+
+  public static final int PLAYBACK_RECONCILED_FIELD_NUMBER = 12;
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   */
+  @java.lang.Override
+  public boolean hasPlaybackReconciled() {
+    return payloadCase_ == 12;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   */
+  @java.lang.Override
+  public works.ravd.radcliffe.protocol.v2.PlaybackReconciled getPlaybackReconciled() {
+    if (payloadCase_ == 12) {
+       return (works.ravd.radcliffe.protocol.v2.PlaybackReconciled) payload_;
+    }
+    return works.ravd.radcliffe.protocol.v2.PlaybackReconciled.getDefaultInstance();
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void setPlaybackReconciled(works.ravd.radcliffe.protocol.v2.PlaybackReconciled value) {
+    value.getClass();  // minimal bytecode null check
+    payload_ = value;
+    payloadCase_ = 12;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   */
+  @java.lang.SuppressWarnings("ReturnValueIgnored")
+  private void mergePlaybackReconciled(works.ravd.radcliffe.protocol.v2.PlaybackReconciled value) {
+    value.getClass();  // minimal bytecode null check
+    if (payloadCase_ == 12 &&
+        payload_ != works.ravd.radcliffe.protocol.v2.PlaybackReconciled.getDefaultInstance()) {
+      payload_ = works.ravd.radcliffe.protocol.v2.PlaybackReconciled.newBuilder((works.ravd.radcliffe.protocol.v2.PlaybackReconciled) payload_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      payload_ = value;
+    }
+    payloadCase_ = 12;
+  }
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   */
+  private void clearPlaybackReconciled() {
+    if (payloadCase_ == 12) {
       payloadCase_ = 0;
       payload_ = null;
     }
@@ -1239,6 +1293,54 @@ public  final class ServerEvent extends
       return this;
     }
 
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    @java.lang.Override
+    public boolean hasPlaybackReconciled() {
+      return instance.hasPlaybackReconciled();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    @java.lang.Override
+    public works.ravd.radcliffe.protocol.v2.PlaybackReconciled getPlaybackReconciled() {
+      return instance.getPlaybackReconciled();
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    public Builder setPlaybackReconciled(works.ravd.radcliffe.protocol.v2.PlaybackReconciled value) {
+      copyOnWrite();
+      instance.setPlaybackReconciled(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    public Builder setPlaybackReconciled(
+        works.ravd.radcliffe.protocol.v2.PlaybackReconciled.Builder builderForValue) {
+      copyOnWrite();
+      instance.setPlaybackReconciled(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    public Builder mergePlaybackReconciled(works.ravd.radcliffe.protocol.v2.PlaybackReconciled value) {
+      copyOnWrite();
+      instance.mergePlaybackReconciled(value);
+      return this;
+    }
+    /**
+     * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+     */
+    public Builder clearPlaybackReconciled() {
+      copyOnWrite();
+      instance.clearPlaybackReconciled();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.ServerEvent)
   }
   @java.lang.Override
@@ -1268,11 +1370,12 @@ public  final class ServerEvent extends
             works.ravd.radcliffe.protocol.v2.AgentControlActionRequest.class,
             works.ravd.radcliffe.protocol.v2.AgentControlActionResult.class,
             works.ravd.radcliffe.protocol.v2.JobEvent.class,
+            works.ravd.radcliffe.protocol.v2.PlaybackReconciled.class,
           };
           java.lang.String info =
-              "\u0000\u000b\u0001\u0000\u0001\u000b\u000b\u0000\u0000\u0000\u0001\u000b\u0002<\u0000" +
-              "\u0003<\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000" +
-              "\n<\u0000\u000b<\u0000";
+              "\u0000\f\u0001\u0000\u0001\f\f\u0000\u0000\u0000\u0001\u000b\u0002<\u0000\u0003<" +
+              "\u0000\u0004<\u0000\u0005<\u0000\u0006<\u0000\u0007<\u0000\b<\u0000\t<\u0000\n<\u0000" +
+              "\u000b<\u0000\f<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

@@ -752,6 +752,35 @@ class EndpointProcessor(FrameProcessor):
             raise RuntimeError("voice pipeline is not ready")
         await self.voice.playback_acknowledgement(acknowledgement)
 
+    async def reconnect(
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        generation: int,
+        latest_playback: tuple[PlaybackAcknowledgement, ...],
+        max_inflight_attempts: int,
+        max_segment_duration_ms: int,
+        playback_protocol_revision: int,
+        receiver_epoch: str,
+        credit_sequence: int,
+        idempotency_key: str,
+    ) -> None:
+        if self.voice is None:
+            raise RuntimeError("voice pipeline is not ready")
+        await self.voice.reconnect(
+            request_id=request_id,
+            session_id=session_id,
+            generation=generation,
+            latest_playback=latest_playback,
+            max_inflight_attempts=max_inflight_attempts,
+            max_segment_duration_ms=max_segment_duration_ms,
+            playback_protocol_revision=playback_protocol_revision,
+            receiver_epoch=receiver_epoch,
+            credit_sequence=credit_sequence,
+            idempotency_key=idempotency_key,
+        )
+
     async def agent_control_confirmation(
         self,
         confirmation: protocol_pb2.AgentControlConfirmation,
@@ -888,7 +917,7 @@ async def run() -> None:
         model_chunk_chars=int(os.environ.get("RADCLIFFE_MODEL_CHUNK_CHARS", "240")),
         client_playback_acknowledgements=True,
         playback_ack_timeout_seconds=float(
-            os.environ.get("RADCLIFFE_PLAYBACK_ACK_TIMEOUT_SECONDS", "2")
+            os.environ.get("RADCLIFFE_PLAYBACK_ACK_TIMEOUT_SECONDS", "120")
         ),
         defer_readiness_until_input=True,
         configuration_registry=ConfigurationRegistry(database_path),

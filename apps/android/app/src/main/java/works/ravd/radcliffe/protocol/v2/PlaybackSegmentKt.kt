@@ -181,6 +181,74 @@ public object PlaybackSegmentKt {
     public fun clearSpeechRateMultiplier() {
       _builder.clearSpeechRateMultiplier()
     }
+
+    /**
+     * `uint32 playback_protocol_revision = 9;`
+     */
+    public var playbackProtocolRevision: kotlin.Int
+      @kotlin.jvm.JvmName("getPlaybackProtocolRevision")
+        get() = _builder.playbackProtocolRevision
+      @kotlin.jvm.JvmName("setPlaybackProtocolRevision")
+        set(value) {
+        _builder.playbackProtocolRevision = value
+      }
+    /**
+     * `uint32 playback_protocol_revision = 9;`
+     */
+    public fun clearPlaybackProtocolRevision() {
+      _builder.clearPlaybackProtocolRevision()
+    }
+
+    /**
+     * `string receiver_epoch = 10;`
+     */
+    public var receiverEpoch: kotlin.String
+      @kotlin.jvm.JvmName("getReceiverEpoch")
+        get() = _builder.receiverEpoch
+      @kotlin.jvm.JvmName("setReceiverEpoch")
+        set(value) {
+        _builder.receiverEpoch = value
+      }
+    /**
+     * `string receiver_epoch = 10;`
+     */
+    public fun clearReceiverEpoch() {
+      _builder.clearReceiverEpoch()
+    }
+
+    /**
+     * `uint64 credit_sequence = 11;`
+     */
+    public var creditSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getCreditSequence")
+        get() = _builder.creditSequence
+      @kotlin.jvm.JvmName("setCreditSequence")
+        set(value) {
+        _builder.creditSequence = value
+      }
+    /**
+     * `uint64 credit_sequence = 11;`
+     */
+    public fun clearCreditSequence() {
+      _builder.clearCreditSequence()
+    }
+
+    /**
+     * `uint64 attempt_sequence = 12;`
+     */
+    public var attemptSequence: kotlin.Long
+      @kotlin.jvm.JvmName("getAttemptSequence")
+        get() = _builder.attemptSequence
+      @kotlin.jvm.JvmName("setAttemptSequence")
+        set(value) {
+        _builder.attemptSequence = value
+      }
+    /**
+     * `uint64 attempt_sequence = 12;`
+     */
+    public fun clearAttemptSequence() {
+      _builder.clearAttemptSequence()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.PlaybackSegment.copy(block: `works.ravd.radcliffe.protocol.v2`.PlaybackSegmentKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.PlaybackSegment =

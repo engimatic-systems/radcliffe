@@ -46,6 +46,8 @@ class TelemetryEvent:
     operation: str
     phase: str
     duration_ms: float | None
+    queue_depth: int | None = None
+    queued_duration_ms: float | None = None
 
 
 def validate_event(event: TelemetryEvent) -> None:
@@ -67,6 +69,10 @@ def validate_event(event: TelemetryEvent) -> None:
         raise ValueError("telemetry operation is too long")
     if event.duration_ms is not None and not 0 <= event.duration_ms <= 86_400_000:
         raise ValueError("telemetry duration is invalid")
+    if event.queue_depth is not None and not 0 <= event.queue_depth <= 1024:
+        raise ValueError("telemetry queue depth is invalid")
+    if event.queued_duration_ms is not None and not 0 <= event.queued_duration_ms <= 86_400_000:
+        raise ValueError("telemetry queued duration is invalid")
 
 
 class TelemetrySink:
@@ -90,6 +96,8 @@ class TelemetrySink:
         phase: str,
         operation: Operation | None = None,
         duration_ms: float | None = None,
+        queue_depth: int | None = None,
+        queued_duration_ms: float | None = None,
     ) -> TelemetryEvent:
         record = TelemetryEvent(
             schema=TELEMETRY_SCHEMA,
@@ -103,6 +111,10 @@ class TelemetrySink:
             operation=operation.operation_id if operation is not None else "",
             phase=phase,
             duration_ms=round(duration_ms, 3) if duration_ms is not None else None,
+            queue_depth=queue_depth,
+            queued_duration_ms=(
+                round(queued_duration_ms, 3) if queued_duration_ms is not None else None
+            ),
         )
         validate_event(record)
         if self.path is None:

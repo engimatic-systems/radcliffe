@@ -14,6 +14,7 @@ class FakeControlTarget:
     def __init__(self) -> None:
         self.actions: list[str] = []
         self.acknowledgements = []
+        self.reconnects = []
         self.confirmations = []
 
     async def interrupt(self) -> None:
@@ -30,6 +31,9 @@ class FakeControlTarget:
 
     async def playback_acknowledgement(self, acknowledgement) -> None:
         self.acknowledgements.append(acknowledgement)
+
+    async def reconnect(self, **reconnect) -> None:
+        self.reconnects.append(reconnect)
 
     async def agent_control_confirmation(self, confirmation, participant_identity) -> None:
         self.confirmations.append((confirmation, participant_identity))
@@ -82,6 +86,9 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
             position_ms=1200,
             boundary_index=2,
             occurred_at=occurred_at,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
+            attempt_sequence=1,
         ),
     )
 
@@ -98,6 +105,67 @@ async def test_protocol_v2_playback_acknowledgement_is_dispatched() -> None:
     legacy.playback_acknowledgement.operation.trace_id = ""
     assert await handler.handle(legacy.SerializeToString(deterministic=True))
     assert target.acknowledgements[1].operation.trace_id == trace_id_for_operation("operation-1")
+
+    legacy.playback_acknowledgement.acknowledgement_id = "ack-missing-credit"
+    legacy.playback_acknowledgement.receiver_epoch = ""
+    assert not await handler.handle(legacy.SerializeToString(deterministic=True))
+    assert len(target.acknowledgements) == 2
+
+
+@pytest.mark.asyncio
+async def test_protocol_v2_reconnect_snapshot_and_capacity_are_dispatched() -> None:
+    target = FakeControlTarget()
+    handler = ClientControlHandler(target)
+    occurred_at = Timestamp()
+    occurred_at.FromDatetime(datetime.now(UTC))
+    snapshot = protocol_pb2.PlaybackAcknowledgement(
+        acknowledgement_id="ack-position",
+        playback_id="playback-1",
+        operation=protocol_pb2.OperationRef(
+            session_id="s1",
+            generation=2,
+            operation_id="operation-1",
+            cancellation_id="cancel-1",
+            trace_id="trc_" + "c" * 32,
+        ),
+        segment_id="segment-1",
+        status=protocol_pb2.PLAYBACK_STATUS_POSITION,
+        position_ms=600,
+        boundary_index=1,
+        occurred_at=occurred_at,
+        receiver_epoch="receiver-1",
+        credit_sequence=1,
+        attempt_sequence=1,
+    )
+    event = protocol_pb2.ClientEvent(
+        protocol_version=2,
+        reconnect=protocol_pb2.Reconnect(
+            request_id="reconnect-1",
+            session_id="s1",
+            generation=2,
+            latest_playback=[snapshot],
+            idempotency_key="reconnect-1",
+            max_inflight_attempts=1,
+            max_segment_duration_ms=30_000,
+            playback_protocol_revision=1,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
+        ),
+    )
+
+    assert await handler.handle(event.SerializeToString(deterministic=True))
+    reconnect = target.reconnects[0]
+    assert reconnect["request_id"] == "reconnect-1"
+    assert reconnect["max_inflight_attempts"] == 1
+    assert reconnect["max_segment_duration_ms"] == 30_000
+    assert reconnect["playback_protocol_revision"] == 1
+    assert reconnect["receiver_epoch"] == "receiver-1"
+    assert reconnect["credit_sequence"] == 1
+    assert reconnect["latest_playback"][0].position_ms == 600
+
+    event.reconnect.max_inflight_attempts = 2
+    assert not await handler.handle(event.SerializeToString(deterministic=True))
+    assert len(target.reconnects) == 1
 
 
 @pytest.mark.asyncio
@@ -123,6 +191,9 @@ async def test_protocol_v2_rejects_malformed_trace_identity() -> None:
             position_ms=1,
             boundary_index=1,
             occurred_at=occurred_at,
+            receiver_epoch="receiver-1",
+            credit_sequence=1,
+            attempt_sequence=1,
         ),
     )
 
