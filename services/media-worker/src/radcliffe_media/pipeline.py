@@ -231,10 +231,12 @@ class _PendingPlayback:
     source: SourceKind
     source_envelope: MessageEnvelope | None = None
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
+    retry: asyncio.Event = field(default_factory=asyncio.Event)
     started: bool = False
     latest_position_ms: int = 0
     terminal_status: PlaybackStatus | None = None
     heard_character_count: int = 0
+    superseded: bool = False
 
 
 class Orchestrator(Protocol):
@@ -285,6 +287,13 @@ class VoiceEventSink(Protocol):
         canonical_sha256: bytes,
         source: SourceKind,
         speech_rate_multiplier: float,
+    ) -> None: ...
+
+    async def playback_reconciled(
+        self,
+        request_id: str,
+        generation: int,
+        replay_pending: bool,
     ) -> None: ...
 
     async def agent_control_request(
@@ -344,6 +353,8 @@ class VoicePipeline:
         self._paused_source: _PausedSource | None = None
         self._pending_playback: dict[str, _PendingPlayback] = {}
         self._playback_lock = asyncio.Lock()
+        self._maximum_segment_duration_ms = 30_000
+        self._reconnect_outcomes: dict[str, bool] = {}
 
     async def start(self) -> None:
         previous = self.engine.state
@@ -1088,6 +1099,7 @@ class VoicePipeline:
             operation,
             turn,
             source=SourceKind.MODEL,
+            wait_for_playback=self.client_playback_acknowledgements,
         )
         turn.rendered_model_text += canonical_text
         if not self.client_playback_acknowledgements:
@@ -1296,108 +1308,132 @@ class VoicePipeline:
             )
             audio = await self._synthesize(canonical_text, delivery)
         duration = self.publisher.duration_ms(audio)
-        playback_id = str(uuid4())
         self._log_phase(turn, "synthesis", monotonic() - synth_started)
         self._assert_owner(turn, operation)
-        pending = _PendingPlayback(
-            operation,
-            playback_id,
-            segment_id,
-            boundary_index,
-            duration,
-            canonical_text,
-            source,
-            source_envelope,
-        )
-        if self.client_playback_acknowledgements:
-            if self.events is None:
-                raise RuntimeError("client playback authority requires an event sink")
-            async with self._playback_lock:
-                self._pending_playback[playback_id] = pending
-            await self.events.playback_segment(
+        if self.client_playback_acknowledgements and (
+            duration <= 0 or duration > self._maximum_segment_duration_ms
+        ):
+            raise RuntimeError(f"playback segment {segment_id} exceeds receiver duration capacity")
+
+        while True:
+            playback_id = str(uuid4())
+            pending = _PendingPlayback(
                 operation,
                 playback_id,
                 segment_id,
                 boundary_index,
                 duration,
-                hashlib.sha256(canonical_text.encode()).digest(),
+                canonical_text,
                 source,
-                delivery.multiplier,
+                source_envelope,
             )
-        else:
-            await self.engine.acknowledge(
-                PlaybackAcknowledgement(
-                    acknowledgement_id=str(uuid4()),
-                    operation=operation,
-                    segment_id=segment_id,
-                    status=PlaybackStatus.STARTED,
-                    position_ms=0,
-                    boundary_index=boundary_index,
-                    occurred_at=datetime.now(UTC),
-                    playback_id=playback_id,
+            if self.client_playback_acknowledgements:
+                if self.events is None:
+                    raise RuntimeError("client playback authority requires an event sink")
+                async with self._playback_lock:
+                    outstanding = tuple(
+                        item
+                        for item in self._pending_playback.values()
+                        if item.operation == operation
+                        and item.terminal_status is None
+                        and not item.superseded
+                    )
+                    if outstanding:
+                        raise RuntimeError("receiver playback window is exhausted")
+                    self._pending_playback[playback_id] = pending
+                await self.events.playback_segment(
+                    operation,
+                    playback_id,
+                    segment_id,
+                    boundary_index,
+                    duration,
+                    hashlib.sha256(canonical_text.encode()).digest(),
+                    source,
+                    delivery.multiplier,
                 )
-            )
-        self._assert_owner(turn, operation)
-        publish_started = monotonic()
-        if turn.first_audio_at is None:
-            turn.first_audio_at = publish_started
-            self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
-        try:
-            published_duration = await self.publisher.publish(
-                segment_id,
-                audio,
-                wait_for_playback=wait_for_playback,
-            )
-        except asyncio.CancelledError:
-            if not self.client_playback_acknowledgements:
+            else:
                 await self.engine.acknowledge(
                     PlaybackAcknowledgement(
                         acknowledgement_id=str(uuid4()),
                         operation=operation,
                         segment_id=segment_id,
-                        status=PlaybackStatus.FLUSHED,
+                        status=PlaybackStatus.STARTED,
                         position_ms=0,
                         boundary_index=boundary_index,
                         occurred_at=datetime.now(UTC),
-                        detail="playback cancelled before boundary completion",
                         playback_id=playback_id,
                     )
                 )
-            raise
-        except Exception as error:
-            if not self.client_playback_acknowledgements:
-                await self.engine.acknowledge(
-                    PlaybackAcknowledgement(
-                        acknowledgement_id=str(uuid4()),
-                        operation=operation,
-                        segment_id=segment_id,
-                        status=PlaybackStatus.FAILED,
-                        position_ms=0,
-                        boundary_index=boundary_index,
-                        occurred_at=datetime.now(UTC),
-                        detail=type(error).__name__,
-                        playback_id=playback_id,
-                    )
+            self._assert_owner(turn, operation)
+            publish_started = monotonic()
+            if turn.first_audio_at is None:
+                turn.first_audio_at = publish_started
+                self._log_phase(turn, "first_audio", turn.first_audio_at - turn.started_at)
+            try:
+                published_duration = await self.publisher.publish(
+                    segment_id,
+                    audio,
+                    wait_for_playback=(
+                        False if self.client_playback_acknowledgements else wait_for_playback
+                    ),
                 )
-            raise
-        self._log_phase(turn, "publish", monotonic() - publish_started)
-        self._assert_owner(turn, operation)
-        if published_duration != duration:
-            raise RuntimeError("published audio duration changed after playback announcement")
-        if self.client_playback_acknowledgements:
-            if wait_for_playback:
+            except asyncio.CancelledError:
+                if not self.client_playback_acknowledgements:
+                    await self.engine.acknowledge(
+                        PlaybackAcknowledgement(
+                            acknowledgement_id=str(uuid4()),
+                            operation=operation,
+                            segment_id=segment_id,
+                            status=PlaybackStatus.FLUSHED,
+                            position_ms=0,
+                            boundary_index=boundary_index,
+                            occurred_at=datetime.now(UTC),
+                            detail="playback cancelled before boundary completion",
+                            playback_id=playback_id,
+                        )
+                    )
+                raise
+            except Exception as error:
+                if not self.client_playback_acknowledgements:
+                    await self.engine.acknowledge(
+                        PlaybackAcknowledgement(
+                            acknowledgement_id=str(uuid4()),
+                            operation=operation,
+                            segment_id=segment_id,
+                            status=PlaybackStatus.FAILED,
+                            position_ms=0,
+                            boundary_index=boundary_index,
+                            occurred_at=datetime.now(UTC),
+                            detail=type(error).__name__,
+                            playback_id=playback_id,
+                        )
+                    )
+                raise
+            self._log_phase(turn, "publish", monotonic() - publish_started)
+            self._assert_owner(turn, operation)
+            if published_duration != duration:
+                raise RuntimeError("published audio duration changed after playback announcement")
+            if self.client_playback_acknowledgements:
+                if not wait_for_playback:
+                    return
+                terminal_wait = asyncio.create_task(pending.terminal.wait())
+                retry_wait = asyncio.create_task(pending.retry.wait())
                 try:
-                    await asyncio.wait_for(
-                        pending.terminal.wait(),
-                        timeout=self.playback_ack_timeout_seconds,
+                    await asyncio.wait(
+                        {terminal_wait, retry_wait},
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
-                except TimeoutError as error:
-                    raise RuntimeError(
-                        f"client did not acknowledge playback segment {segment_id}"
-                    ) from error
+                finally:
+                    for waiter in (terminal_wait, retry_wait):
+                        if not waiter.done():
+                            waiter.cancel()
+                    await asyncio.gather(terminal_wait, retry_wait, return_exceptions=True)
+                if pending.retry.is_set():
+                    self._assert_owner(turn, operation)
+                    continue
                 if pending.terminal_status is not PlaybackStatus.COMPLETED:
                     raise asyncio.CancelledError
-        else:
+                return
             await self.engine.acknowledge(
                 PlaybackAcknowledgement(
                     acknowledgement_id=str(uuid4()),
@@ -1414,8 +1450,14 @@ class VoicePipeline:
             pending.latest_position_ms = duration
             pending.terminal_status = PlaybackStatus.COMPLETED
             await self._persist_heard_source(pending, PlaybackStatus.COMPLETED)
+            return
 
-    async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> bool:
+    async def playback_acknowledgement(
+        self,
+        acknowledgement: PlaybackAcknowledgement,
+        *,
+        reconciled: bool = False,
+    ) -> bool:
         async with self._playback_lock:
             if not acknowledgement.playback_id:
                 raise ValueError("playback acknowledgement omitted the playback attempt")
@@ -1426,6 +1468,8 @@ class VoicePipeline:
                 raise ValueError("playback acknowledgement refers to another segment")
             if acknowledgement.operation != pending.operation:
                 raise ValueError("playback acknowledgement belongs to another operation")
+            if pending.superseded:
+                return False
             terminal_status = acknowledgement.status in {
                 PlaybackStatus.COMPLETED,
                 PlaybackStatus.FLUSHED,
@@ -1462,10 +1506,11 @@ class VoicePipeline:
                 if not pending.started:
                     raise ValueError("playback position arrived before playback started")
             elif acknowledgement.status is PlaybackStatus.COMPLETED:
-                if not pending.started:
+                if not pending.started and not reconciled:
                     raise ValueError("playback completion arrived before playback started")
                 if acknowledgement.position_ms < pending.duration_ms:
                     raise ValueError("playback completed before the announced duration")
+                pending.started = True
                 pending.terminal_status = acknowledgement.status
             elif acknowledgement.status in {PlaybackStatus.FLUSHED, PlaybackStatus.FAILED}:
                 pending.terminal_status = acknowledgement.status
@@ -1525,6 +1570,81 @@ class VoicePipeline:
             if pending.terminal_status is not None:
                 pending.terminal.set()
             return persisted
+
+    async def reconnect(
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        generation: int,
+        latest_playback: tuple[PlaybackAcknowledgement, ...],
+        max_inflight_attempts: int,
+        max_segment_duration_ms: int,
+        idempotency_key: str,
+    ) -> bool:
+        if session_id != self.engine.session_id:
+            raise ValueError("reconnect belongs to another session")
+        if generation > self.engine.generation:
+            raise StaleOperationError("reconnect generation is ahead of the worker")
+        if max_inflight_attempts != 1:
+            raise ValueError("bounded reconnect requires exactly one receiver attempt")
+        if max_segment_duration_ms <= 0:
+            raise ValueError("reconnect omitted the receiver duration capacity")
+        reconnect_key = idempotency_key or request_id
+        if not reconnect_key:
+            raise ValueError("reconnect omitted its idempotency identity")
+
+        async with self._playback_lock:
+            prior = self._reconnect_outcomes.get(reconnect_key)
+        if prior is not None:
+            if self.events is not None:
+                await self.events.playback_reconciled(
+                    request_id,
+                    self.engine.generation,
+                    prior,
+                )
+            return prior
+
+        self._maximum_segment_duration_ms = min(max_segment_duration_ms, 30_000)
+        await self.publisher.flush()
+        snapshots = {item.playback_id: item for item in latest_playback}
+        async with self._playback_lock:
+            outstanding = tuple(
+                item
+                for item in self._pending_playback.values()
+                if item.operation.session_id == session_id
+                and item.operation.generation == self.engine.generation
+                and item.terminal_status is None
+                and not item.superseded
+            )
+
+        replay_pending = False
+        for pending in outstanding:
+            snapshot = snapshots.get(pending.playback_id)
+            if snapshot is not None and snapshot.status in {
+                PlaybackStatus.COMPLETED,
+                PlaybackStatus.FLUSHED,
+                PlaybackStatus.FAILED,
+            }:
+                await self.playback_acknowledgement(snapshot, reconciled=True)
+                continue
+            async with self._playback_lock:
+                if pending.terminal_status is None and not pending.superseded:
+                    pending.superseded = True
+                    pending.retry.set()
+                    replay_pending = True
+
+        async with self._playback_lock:
+            self._reconnect_outcomes[reconnect_key] = replay_pending
+            while len(self._reconnect_outcomes) > 64:
+                self._reconnect_outcomes.pop(next(iter(self._reconnect_outcomes)))
+        if self.events is not None:
+            await self.events.playback_reconciled(
+                request_id,
+                self.engine.generation,
+                replay_pending,
+            )
+        return replay_pending
 
     async def _persist_heard_source(
         self,
@@ -1650,6 +1770,7 @@ class VoicePipeline:
                 if item.operation == operation
                 and item.source is SourceKind.TEXT_SOURCE
                 and item.terminal_status is None
+                and not item.superseded
             )
         if pending:
             try:
@@ -1691,7 +1812,9 @@ class VoicePipeline:
             pending = tuple(
                 item
                 for item in self._pending_playback.values()
-                if item.operation == operation and item.terminal_status is None
+                if item.operation == operation
+                and item.terminal_status is None
+                and not item.superseded
             )
             remaining_ms = sum(
                 max(0, item.duration_ms - item.latest_position_ms) for item in pending

@@ -71,4 +71,25 @@ public interface ReconnectOrBuilder extends
    */
   com.google.protobuf.ByteString
       getIdempotencyKeyBytes();
+
+  /**
+   * <pre>
+   * The receiver's maximum number of admitted, nonterminal attempts. The
+   * bounded reconnect slice supports exactly one.
+   * </pre>
+   *
+   * <code>uint32 max_inflight_attempts = 7;</code>
+   * @return The maxInflightAttempts.
+   */
+  int getMaxInflightAttempts();
+
+  /**
+   * <pre>
+   * The largest single attempt the receiver is willing to admit.
+   * </pre>
+   *
+   * <code>uint64 max_segment_duration_ms = 8;</code>
+   * @return The maxSegmentDurationMs.
+   */
+  long getMaxSegmentDurationMs();
 }

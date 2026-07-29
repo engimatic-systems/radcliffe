@@ -184,6 +184,58 @@ public object ReconnectKt {
     public fun clearIdempotencyKey() {
       _builder.clearIdempotencyKey()
     }
+
+    /**
+     * ```
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * ```
+     *
+     * `uint32 max_inflight_attempts = 7;`
+     */
+    public var maxInflightAttempts: kotlin.Int
+      @kotlin.jvm.JvmName("getMaxInflightAttempts")
+        get() = _builder.maxInflightAttempts
+      @kotlin.jvm.JvmName("setMaxInflightAttempts")
+        set(value) {
+        _builder.maxInflightAttempts = value
+      }
+    /**
+     * ```
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * ```
+     *
+     * `uint32 max_inflight_attempts = 7;`
+     */
+    public fun clearMaxInflightAttempts() {
+      _builder.clearMaxInflightAttempts()
+    }
+
+    /**
+     * ```
+     * The largest single attempt the receiver is willing to admit.
+     * ```
+     *
+     * `uint64 max_segment_duration_ms = 8;`
+     */
+    public var maxSegmentDurationMs: kotlin.Long
+      @kotlin.jvm.JvmName("getMaxSegmentDurationMs")
+        get() = _builder.maxSegmentDurationMs
+      @kotlin.jvm.JvmName("setMaxSegmentDurationMs")
+        set(value) {
+        _builder.maxSegmentDurationMs = value
+      }
+    /**
+     * ```
+     * The largest single attempt the receiver is willing to admit.
+     * ```
+     *
+     * `uint64 max_segment_duration_ms = 8;`
+     */
+    public fun clearMaxSegmentDurationMs() {
+      _builder.clearMaxSegmentDurationMs()
+    }
   }
 }
 public inline fun works.ravd.radcliffe.protocol.v2.Reconnect.copy(block: `works.ravd.radcliffe.protocol.v2`.ReconnectKt.Dsl.() -> kotlin.Unit): works.ravd.radcliffe.protocol.v2.Reconnect =

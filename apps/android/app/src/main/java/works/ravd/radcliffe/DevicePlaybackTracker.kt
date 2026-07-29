@@ -22,6 +22,7 @@ class DevicePlaybackTracker(
 
     private val pending = ArrayDeque<Pending>()
     private val knownPlaybackIds = mutableSetOf<String>()
+    private val latestByPlaybackId = linkedMapOf<String, PlaybackAcknowledgement>()
     private val invalidatedGenerationBySession = mutableMapOf<String, Long>()
 
     @Synchronized
@@ -132,6 +133,15 @@ class DevicePlaybackTracker(
         finishPending(PlaybackStatus.PLAYBACK_STATUS_FAILED, detail, nowMs)
 
     @Synchronized
+    fun suspendForReconnect() {
+        pending.clear()
+    }
+
+    @Synchronized
+    fun reconnectSnapshot(): List<PlaybackAcknowledgement> =
+        latestByPlaybackId.values.toList()
+
+    @Synchronized
     fun pendingCount(): Int = pending.size
 
     private fun finishPending(
@@ -166,21 +176,29 @@ class DevicePlaybackTracker(
         boundaryIndex: Int,
         nowMs: Long,
         detail: String = "",
-    ): PlaybackAcknowledgement = PlaybackAcknowledgement.newBuilder()
-        .setAcknowledgementId(acknowledgementId())
-        .setPlaybackId(segment.playbackId)
-        .setOperation(segment.operation)
-        .setSegmentId(segment.segmentId)
-        .setStatus(status)
-        .setPositionMs(positionMs)
-        .setBoundaryIndex(boundaryIndex)
-        .setOccurredAt(nowMs.timestamp())
-        .setDetail(detail)
-        .build()
+    ): PlaybackAcknowledgement {
+        val acknowledgement = PlaybackAcknowledgement.newBuilder()
+            .setAcknowledgementId(acknowledgementId())
+            .setPlaybackId(segment.playbackId)
+            .setOperation(segment.operation)
+            .setSegmentId(segment.segmentId)
+            .setStatus(status)
+            .setPositionMs(positionMs)
+            .setBoundaryIndex(boundaryIndex)
+            .setOccurredAt(nowMs.timestamp())
+            .setDetail(detail)
+            .build()
+        latestByPlaybackId[segment.playbackId] = acknowledgement
+        while (latestByPlaybackId.size > MAX_RECONNECT_SNAPSHOTS) {
+            latestByPlaybackId.remove(latestByPlaybackId.keys.first())
+        }
+        return acknowledgement
+    }
 
     companion object {
         private const val POSITION_INTERVAL_MS = 250L
         private const val AUDIBLE_PCM16_PEAK = 96
+        private const val MAX_RECONNECT_SNAPSHOTS = 64
 
         fun isAudible(buffer: ByteBuffer, bitsPerSample: Int): Boolean {
             if (bitsPerSample != 16) return buffer.hasRemaining()

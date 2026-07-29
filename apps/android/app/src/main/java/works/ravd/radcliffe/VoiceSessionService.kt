@@ -34,6 +34,7 @@ import works.ravd.radcliffe.protocol.v2.ControlCommand
 import works.ravd.radcliffe.protocol.v2.ConversationState
 import works.ravd.radcliffe.protocol.v2.OperationRef
 import works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement
+import works.ravd.radcliffe.protocol.v2.Reconnect
 import works.ravd.radcliffe.protocol.v2.ServerEvent
 import works.ravd.radcliffe.protocol.v2.SourceKind
 import livekit.org.webrtc.AudioTrackSink
@@ -51,6 +52,11 @@ class VoiceSessionService : MediaSessionService() {
     private val handledTransitions = mutableSetOf<String>()
     private var playbackPaused = false
     private var playbackSuppressedForInterruption = false
+    private var playbackReconciling = false
+    private var pendingReconnectRequestId: String? = null
+    private var serverGeneration = 0L
+    private var roomTransportConnected = false
+    private var playbackTrackReady = false
     private var roomWasConnected = false
     private var disconnectEarconPlayed = false
 
@@ -113,6 +119,11 @@ class VoiceSessionService : MediaSessionService() {
         sessionId = destinationSessionId
         roomWasConnected = false
         disconnectEarconPlayed = false
+        serverGeneration = 0L
+        playbackReconciling = false
+        pendingReconnectRequestId = null
+        roomTransportConnected = false
+        playbackTrackReady = false
         observe(connected)
         connected.connect(url, token)
         connected.localParticipant.setMicrophoneEnabled(true)
@@ -205,12 +216,37 @@ class VoiceSessionService : MediaSessionService() {
             activeRoom.events.events.collect { event ->
                 if (room !== activeRoom) return@collect
                 when (event) {
-                    is RoomEvent.Connected -> roomWasConnected = true
-                    is RoomEvent.Disconnected -> playDisconnectEarcon()
-                    is RoomEvent.Reconnecting -> SessionModel.state(VoiceState.RECONNECTING)
-                    is RoomEvent.Reconnected -> SessionModel.state(VoiceState.CONNECTING)
-                    is RoomEvent.TrackSubscribed -> attachPlaybackSink(event.track)
-                    is RoomEvent.TrackUnsubscribed -> detachPlaybackSink(event.track)
+                    is RoomEvent.Connected -> {
+                        roomWasConnected = true
+                        roomTransportConnected = true
+                        maybePublishReconnect(activeRoom)
+                    }
+                    is RoomEvent.Disconnected -> {
+                        roomTransportConnected = false
+                        playDisconnectEarcon()
+                    }
+                    is RoomEvent.Reconnecting -> {
+                        roomTransportConnected = false
+                        beginPlaybackReconciliation()
+                    }
+                    is RoomEvent.Reconnected -> {
+                        roomTransportConnected = true
+                        SessionModel.state(VoiceState.CONNECTING)
+                        maybePublishReconnect(activeRoom)
+                    }
+                    is RoomEvent.TrackSubscribed -> {
+                        if (event.track is RemoteAudioTrack) {
+                            attachPlaybackSink(event.track)
+                            playbackTrackReady = playbackSinks.isNotEmpty()
+                            maybePublishReconnect(activeRoom)
+                        }
+                    }
+                    is RoomEvent.TrackUnsubscribed -> {
+                        if (event.track is RemoteAudioTrack) {
+                            detachPlaybackSink(event.track)
+                            playbackTrackReady = playbackSinks.isNotEmpty()
+                        }
+                    }
                     is RoomEvent.DataReceived -> runCatching { ServerEvent.parseFrom(event.data) }
                         .onSuccess(::handleServerEvent)
                     else -> Unit
@@ -222,10 +258,32 @@ class VoiceSessionService : MediaSessionService() {
     private fun handleServerEvent(event: ServerEvent) {
         if (event.protocolVersion != 2) return
         if (event.hasPlaybackSegment()) {
+            serverGeneration = maxOf(serverGeneration, event.playbackSegment.operation.generation)
             val accepted = playbackTracker.announce(event.playbackSegment)
-            if (accepted && playbackSuppressedForInterruption && !playbackPaused) {
+            if (
+                accepted &&
+                (playbackSuppressedForInterruption || playbackReconciling) &&
+                !playbackPaused
+            ) {
                 room?.setSpeakerMute(false)
                 playbackSuppressedForInterruption = false
+                playbackReconciling = false
+                pendingReconnectRequestId = null
+            }
+        }
+        if (event.hasPlaybackReconciled()) {
+            val reconciled = event.playbackReconciled
+            serverGeneration = maxOf(serverGeneration, reconciled.generation)
+            if (
+                reconciled.sessionId == sessionId &&
+                reconciled.requestId == pendingReconnectRequestId &&
+                !reconciled.replayPending
+            ) {
+                playbackReconciling = false
+                pendingReconnectRequestId = null
+                if (!playbackPaused && !playbackSuppressedForInterruption) {
+                    room?.setSpeakerMute(false)
+                }
             }
         }
         if (event.hasJobEvent()) {
@@ -236,6 +294,7 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasSessionReady()) {
+            serverGeneration = maxOf(serverGeneration, event.sessionReady.generation)
             val current = SessionModel.state.value
             val ready = stateAfterSessionReady(sessionId, event.sessionReady.sessionId, current)
             if (ready != current) {
@@ -244,6 +303,7 @@ class VoiceSessionService : MediaSessionService() {
             }
         }
         if (event.hasStateChanged()) {
+            serverGeneration = maxOf(serverGeneration, event.stateChanged.operation.generation)
             if (event.stateChanged.reason == "interrupted") {
                 suppressInterruptedPlayback(event.stateChanged.operation)
             }
@@ -541,13 +601,43 @@ class VoiceSessionService : MediaSessionService() {
     private fun detachPlaybackSink(track: io.livekit.android.room.track.Track) {
         val audioTrack = track as? RemoteAudioTrack ?: return
         playbackSinks.remove(audioTrack)?.let(audioTrack::removeSink)
-        val activeRoom = room ?: return
-        val failed = playbackTracker.fail("remote audio track unsubscribed")
-        if (failed.isNotEmpty()) {
-            scope.launch {
-                failed.forEach { publishPlaybackAcknowledgement(activeRoom, it) }
-            }
-        }
+        beginPlaybackReconciliation()
+    }
+
+    private fun beginPlaybackReconciliation() {
+        room?.setSpeakerMute(true)
+        playbackReconciling = true
+        pendingReconnectRequestId = null
+        playbackTracker.suspendForReconnect()
+        SessionModel.state(VoiceState.RECONNECTING)
+    }
+
+    private suspend fun maybePublishReconnect(activeRoom: Room) {
+        if (!roomTransportConnected || !playbackTrackReady) return
+        publishReconnect(activeRoom)
+    }
+
+    private suspend fun publishReconnect(activeRoom: Room) {
+        val requestId = java.util.UUID.randomUUID().toString()
+        pendingReconnectRequestId = requestId
+        val reconnect = Reconnect.newBuilder()
+            .setRequestId(requestId)
+            .setSessionId(sessionId)
+            .setGeneration(serverGeneration)
+            .setLastAcknowledgedSequence(0)
+            .addAllLatestPlayback(playbackTracker.reconnectSnapshot())
+            .setIdempotencyKey(requestId)
+            .setMaxInflightAttempts(MAX_INFLIGHT_PLAYBACK_ATTEMPTS)
+            .setMaxSegmentDurationMs(MAX_PLAYBACK_SEGMENT_DURATION_MS)
+            .build()
+        val event = ClientEvent.newBuilder()
+            .setProtocolVersion(2)
+            .setReconnect(reconnect)
+            .build()
+        activeRoom.localParticipant.publishData(
+            event.toByteArray(),
+            DataPublishReliability.RELIABLE,
+        )
     }
 
     private suspend fun publishPlaybackAcknowledgement(
@@ -571,6 +661,10 @@ class VoiceSessionService : MediaSessionService() {
         room = null
         playbackPaused = false
         playbackSuppressedForInterruption = false
+        playbackReconciling = false
+        pendingReconnectRequestId = null
+        roomTransportConnected = false
+        playbackTrackReady = false
         if (resetState) SessionModel.state(VoiceState.IDLE)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -636,5 +730,7 @@ class VoiceSessionService : MediaSessionService() {
         const val EXTRA_AGENT_CONTROL_REQUEST_ID = "agent_control_request_id"
         private const val CHANNEL_ID = "voice-session"
         private const val NOTIFICATION_ID = 1001
+        private const val MAX_INFLIGHT_PLAYBACK_ATTEMPTS = 1
+        private const val MAX_PLAYBACK_SEGMENT_DURATION_MS = 30_000L
     }
 }

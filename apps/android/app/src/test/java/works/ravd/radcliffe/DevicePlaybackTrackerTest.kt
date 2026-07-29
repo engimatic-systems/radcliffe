@@ -144,6 +144,35 @@ class DevicePlaybackTrackerTest {
         )
     }
 
+    @Test
+    fun reconnectSuspendsUncertainAttemptAndRetainsLatestPhysicalEvidence() {
+        var id = 0
+        val tracker = DevicePlaybackTracker(acknowledgementId = { "reconnect-${++id}" })
+        assertTrue(tracker.announce(segment(durationMs = 1000, playbackId = "old-attempt")))
+        tracker.onAudioFrame(48_000, 480, audible = true, nowMs = 10)
+        repeat(25) { frame ->
+            tracker.onAudioFrame(48_000, 480, audible = true, nowMs = 20L + frame * 10)
+        }
+
+        tracker.suspendForReconnect()
+
+        assertEquals(0, tracker.pendingCount())
+        val snapshot = tracker.reconnectSnapshot().single()
+        assertEquals("old-attempt", snapshot.playbackId)
+        assertEquals(PlaybackStatus.PLAYBACK_STATUS_POSITION, snapshot.status)
+        assertEquals(250L, snapshot.positionMs)
+        assertTrue(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "replacement-attempt"),
+            ),
+        )
+        assertFalse(
+            tracker.announce(
+                segment(durationMs = 1000, playbackId = "old-attempt"),
+            ),
+        )
+    }
+
     private fun operation(generation: Long = 1) = OperationRef.newBuilder()
         .setSessionId("session-1")
         .setGeneration(generation)

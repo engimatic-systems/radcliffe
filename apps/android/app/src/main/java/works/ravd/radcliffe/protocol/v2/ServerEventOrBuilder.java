@@ -126,5 +126,16 @@ public interface ServerEventOrBuilder extends
    */
   works.ravd.radcliffe.protocol.v2.JobEvent getJobEvent();
 
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   * @return Whether the playbackReconciled field is set.
+   */
+  boolean hasPlaybackReconciled();
+  /**
+   * <code>.radcliffe.v2.PlaybackReconciled playback_reconciled = 12;</code>
+   * @return The playbackReconciled.
+   */
+  works.ravd.radcliffe.protocol.v2.PlaybackReconciled getPlaybackReconciled();
+
   public works.ravd.radcliffe.protocol.v2.ServerEvent.PayloadCase getPayloadCase();
 }

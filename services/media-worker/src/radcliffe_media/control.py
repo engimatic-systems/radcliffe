@@ -33,6 +33,18 @@ class VoiceControlTarget(Protocol):
 
     async def playback_acknowledgement(self, acknowledgement: PlaybackAcknowledgement) -> None: ...
 
+    async def reconnect(
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        generation: int,
+        latest_playback: tuple[PlaybackAcknowledgement, ...],
+        max_inflight_attempts: int,
+        max_segment_duration_ms: int,
+        idempotency_key: str,
+    ) -> None: ...
+
     async def agent_control_confirmation(
         self,
         confirmation: protocol_pb2.AgentControlConfirmation,
@@ -54,32 +66,34 @@ class ClientControlHandler:
             return False
         payload = event.WhichOneof("payload")
         if payload == "playback_acknowledgement":
-            acknowledgement = event.playback_acknowledgement
-            status = _PLAYBACK_STATUS.get(acknowledgement.status)
-            if status is None or not acknowledgement.HasField("occurred_at"):
+            acknowledgement = _decode_playback_acknowledgement(event.playback_acknowledgement)
+            if acknowledgement is None:
                 return False
-            operation = acknowledgement.operation
-            trace_id = operation.trace_id or trace_id_for_operation(operation.operation_id)
-            if not valid_trace_id(trace_id):
+            await self.target.playback_acknowledgement(acknowledgement)
+            return True
+        if payload == "reconnect":
+            reconnect = event.reconnect
+            latest: list[PlaybackAcknowledgement] = []
+            for item in reconnect.latest_playback:
+                acknowledgement = _decode_playback_acknowledgement(item)
+                if acknowledgement is None:
+                    return False
+                latest.append(acknowledgement)
+            if (
+                not reconnect.request_id
+                or not reconnect.session_id
+                or reconnect.max_inflight_attempts != 1
+                or reconnect.max_segment_duration_ms <= 0
+            ):
                 return False
-            await self.target.playback_acknowledgement(
-                PlaybackAcknowledgement(
-                    acknowledgement_id=acknowledgement.acknowledgement_id,
-                    operation=Operation(
-                        session_id=operation.session_id,
-                        generation=operation.generation,
-                        operation_id=operation.operation_id,
-                        cancellation_id=operation.cancellation_id,
-                        trace_id=trace_id,
-                    ),
-                    segment_id=acknowledgement.segment_id,
-                    status=status,
-                    position_ms=acknowledgement.position_ms,
-                    boundary_index=acknowledgement.boundary_index,
-                    occurred_at=acknowledgement.occurred_at.ToDatetime(tzinfo=UTC),
-                    detail=acknowledgement.detail,
-                    playback_id=acknowledgement.playback_id,
-                )
+            await self.target.reconnect(
+                request_id=reconnect.request_id,
+                session_id=reconnect.session_id,
+                generation=reconnect.generation,
+                latest_playback=tuple(latest),
+                max_inflight_attempts=reconnect.max_inflight_attempts,
+                max_segment_duration_ms=reconnect.max_segment_duration_ms,
+                idempotency_key=reconnect.idempotency_key,
             )
             return True
         if payload == "agent_control_confirmation":
@@ -107,3 +121,32 @@ class ClientControlHandler:
         else:
             return False
         return True
+
+
+def _decode_playback_acknowledgement(
+    acknowledgement: protocol_pb2.PlaybackAcknowledgement,
+) -> PlaybackAcknowledgement | None:
+    status = _PLAYBACK_STATUS.get(acknowledgement.status)
+    if status is None or not acknowledgement.HasField("occurred_at"):
+        return None
+    operation = acknowledgement.operation
+    trace_id = operation.trace_id or trace_id_for_operation(operation.operation_id)
+    if not valid_trace_id(trace_id):
+        return None
+    return PlaybackAcknowledgement(
+        acknowledgement_id=acknowledgement.acknowledgement_id,
+        operation=Operation(
+            session_id=operation.session_id,
+            generation=operation.generation,
+            operation_id=operation.operation_id,
+            cancellation_id=operation.cancellation_id,
+            trace_id=trace_id,
+        ),
+        segment_id=acknowledgement.segment_id,
+        status=status,
+        position_ms=acknowledgement.position_ms,
+        boundary_index=acknowledgement.boundary_index,
+        occurred_at=acknowledgement.occurred_at.ToDatetime(tzinfo=UTC),
+        detail=acknowledgement.detail,
+        playback_id=acknowledgement.playback_id,
+    )

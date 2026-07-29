@@ -145,6 +145,23 @@ class LiveKitEventSink:
         )
         await self._send(event)
 
+    async def playback_reconciled(
+        self,
+        request_id: str,
+        generation: int,
+        replay_pending: bool,
+    ) -> None:
+        event = protocol_pb2.ServerEvent(
+            protocol_version=2,
+            playback_reconciled=protocol_pb2.PlaybackReconciled(
+                request_id=request_id,
+                session_id=self.session_id,
+                generation=generation,
+                replay_pending=replay_pending,
+            ),
+        )
+        await self._send(event)
+
     async def agent_control_request(
         self,
         request: protocol_pb2.AgentControlActionRequest,

@@ -21,3 +21,9 @@ Keep one serialized receiver actor inside VoiceSessionService. It owns the local
 ## Acceptance Criteria
 
 Android never accepts more admitted-unheard audio than its advertised bound and never emits acknowledgements for unconsumed PCM. Each accepted attempt has one legal monotonic lifecycle and one terminal outcome; duplicates and stale epochs are harmless. Local interruption or route loss stops audible old-generation output within the existing latency gate and reports the modeled flush or failure. After network or process recovery, the reconnect snapshot converges with the server or explicitly discards uncertain audio rather than replaying a backlog. Coroutine and instrumented tests cover every receiver transition, and implementation traces refine the machine-checked model.
+
+## Notes
+
+**2026-07-29T01:07:50Z**
+
+First receiver slice implemented: Android retains bounded latest physical acknowledgements, suspends uncertain local playback on reconnect, waits for room plus playback-track readiness, sends the snapshot/capacity handshake, and remains muted until replay admission or no-replay reconciliation. Route/process-death coverage remains open.

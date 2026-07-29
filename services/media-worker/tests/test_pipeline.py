@@ -206,6 +206,7 @@ class FakeEvents:
         self.model_persisted = asyncio.Event()
         self.playback_segments = []
         self.playback_announced = asyncio.Event()
+        self.playback_reconciliations = []
         self.agent_control_requests = []
 
     async def message(self, envelope) -> None:
@@ -242,6 +243,9 @@ class FakeEvents:
             )
         )
         self.playback_announced.set()
+
+    async def playback_reconciled(self, request_id, generation, replay_pending) -> None:
+        self.playback_reconciliations.append((request_id, generation, replay_pending))
 
     async def agent_control_request(self, request) -> None:
         self.agent_control_requests.append(request)
@@ -1072,11 +1076,7 @@ async def test_device_playback_boundary_selects_raw_display_pair_after_barge_in(
 
     turn = asyncio.create_task(pipeline.handle_transcript("Queue two split-channel details"))
     await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
-    for _ in range(100):
-        if len(events.playback_segments) == 2:
-            break
-        await asyncio.sleep(0)
-    assert len(events.playback_segments) == 2
+    assert len(events.playback_segments) == 1
     first = events.playback_segments[0]
     operation, playback_id, segment_id, boundary_index, duration_ms, *_ = first
     for suffix, status, position_ms, boundary in (
@@ -1095,6 +1095,11 @@ async def test_device_playback_boundary_selects_raw_display_pair_after_barge_in(
                 playback_id=playback_id,
             )
         )
+    for _ in range(100):
+        if len(events.playback_segments) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 2
     second = events.playback_segments[1]
     operation, playback_id, segment_id, boundary_index, _duration_ms, *_ = second
     assert await pipeline.playback_acknowledgement(
@@ -2543,11 +2548,7 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
         pipeline.handle_transcript("Leave playback awaiting acknowledgement")
     )
     await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
-    for _ in range(100):
-        if len(events.playback_segments) == 2:
-            break
-        await asyncio.sleep(0)
-    assert len(events.playback_segments) == 2
+    assert len(events.playback_segments) == 1
     await asyncio.sleep(0)
 
     assert not turn.done()
@@ -2557,7 +2558,13 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
     assert pipeline.foreground_turn_active()
     assert not pipeline.notification_foreground_available()
 
-    for index, segment in enumerate(events.playback_segments):
+    for index in range(2):
+        for _ in range(100):
+            if len(events.playback_segments) > index:
+                break
+            await asyncio.sleep(0)
+        assert len(events.playback_segments) > index
+        segment = events.playback_segments[index]
         operation, playback_id, segment_id, boundary_index, duration_ms, *_ = segment
         for suffix, status, position_ms, boundary in (
             ("started", PlaybackStatus.STARTED, 0, boundary_index),
@@ -2581,6 +2588,145 @@ async def test_unacknowledged_current_generation_audio_blocks_job_announcement(t
     assert pipeline.engine.state is ConversationState.LISTENING
     assert not pipeline.foreground_turn_active()
     assert pipeline.notification_foreground_available()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_replays_only_the_unfinished_model_segment_before_later_speech(
+    tmp_path,
+) -> None:
+    store = EventStore(tmp_path / "events.sqlite3")
+    await store.migrate()
+    events = FakeEvents()
+    publisher = FakePublisher()
+    pipeline = VoicePipeline(
+        "s1",
+        store,
+        AnswerOrchestrator(),
+        FakeSynthesizer(),
+        publisher,
+        events,
+        client_playback_acknowledgements=True,
+    )
+    await pipeline.start()
+
+    turn = asyncio.create_task(pipeline.handle_transcript("Count without skipping"))
+    await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
+    first = events.playback_segments[0]
+    operation, first_playback_id, first_segment_id, boundary_index, duration_ms, *_ = first
+    started = PlaybackAcknowledgement(
+        acknowledgement_id="first-started",
+        operation=operation,
+        segment_id=first_segment_id,
+        status=PlaybackStatus.STARTED,
+        position_ms=0,
+        boundary_index=boundary_index,
+        occurred_at=datetime.now(UTC),
+        playback_id=first_playback_id,
+    )
+    partial = replace(
+        started,
+        acknowledgement_id="first-position",
+        status=PlaybackStatus.POSITION,
+        position_ms=duration_ms // 2,
+    )
+    assert await pipeline.playback_acknowledgement(started)
+    assert await pipeline.playback_acknowledgement(partial)
+
+    assert await pipeline.reconnect(
+        request_id="reconnect-1",
+        session_id="s1",
+        generation=operation.generation,
+        latest_playback=(partial,),
+        max_inflight_attempts=1,
+        max_segment_duration_ms=30_000,
+        idempotency_key="reconnect-1",
+    )
+    for _ in range(100):
+        if len(events.playback_segments) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 2
+    retry = events.playback_segments[1]
+    (
+        retry_operation,
+        retry_playback_id,
+        retry_segment_id,
+        retry_boundary,
+        retry_duration,
+        *_,
+    ) = retry
+    assert retry_operation == operation
+    assert retry_segment_id == first_segment_id
+    assert retry_boundary == boundary_index
+    assert retry_playback_id != first_playback_id
+    assert publisher.flushed
+    assert events.playback_reconciliations == [("reconnect-1", operation.generation, True)]
+    assert not await pipeline.playback_acknowledgement(
+        replace(
+            partial,
+            acknowledgement_id="late-old-completion",
+            status=PlaybackStatus.COMPLETED,
+            position_ms=duration_ms,
+            boundary_index=boundary_index + 1,
+        )
+    )
+
+    for acknowledgement in (
+        PlaybackAcknowledgement(
+            acknowledgement_id="retry-started",
+            operation=retry_operation,
+            segment_id=retry_segment_id,
+            status=PlaybackStatus.STARTED,
+            position_ms=0,
+            boundary_index=retry_boundary,
+            occurred_at=datetime.now(UTC),
+            playback_id=retry_playback_id,
+        ),
+        PlaybackAcknowledgement(
+            acknowledgement_id="retry-completed",
+            operation=retry_operation,
+            segment_id=retry_segment_id,
+            status=PlaybackStatus.COMPLETED,
+            position_ms=retry_duration,
+            boundary_index=retry_boundary + 1,
+            occurred_at=datetime.now(UTC),
+            playback_id=retry_playback_id,
+        ),
+    ):
+        assert await pipeline.playback_acknowledgement(acknowledgement)
+
+    for _ in range(100):
+        if len(events.playback_segments) == 3:
+            break
+        await asyncio.sleep(0)
+    assert len(events.playback_segments) == 3
+    second = events.playback_segments[2]
+    operation, playback_id, segment_id, boundary_index, duration_ms, *_ = second
+    assert segment_id != first_segment_id
+    for acknowledgement in (
+        PlaybackAcknowledgement(
+            acknowledgement_id="second-started",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.STARTED,
+            position_ms=0,
+            boundary_index=boundary_index,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        ),
+        PlaybackAcknowledgement(
+            acknowledgement_id="second-completed",
+            operation=operation,
+            segment_id=segment_id,
+            status=PlaybackStatus.COMPLETED,
+            position_ms=duration_ms,
+            boundary_index=boundary_index + 1,
+            occurred_at=datetime.now(UTC),
+            playback_id=playback_id,
+        ),
+    ):
+        assert await pipeline.playback_acknowledgement(acknowledgement)
+    await asyncio.wait_for(turn, timeout=1)
 
 
 @pytest.mark.asyncio
@@ -2608,11 +2754,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
         pipeline.handle_transcript("Queue a response that the phone has not finished")
     )
     await asyncio.wait_for(events.playback_announced.wait(), timeout=1)
-    for _ in range(100):
-        if len(events.playback_segments) == 2:
-            break
-        await asyncio.sleep(0)
-    assert len(events.playback_segments) == 2
+    assert len(events.playback_segments) == 1
     await asyncio.sleep(0)
     old_generation = events.playback_segments[0][0].generation
 
@@ -2670,7 +2812,7 @@ async def test_post_model_queued_playback_can_be_interrupted_before_device_compl
                 "SELECT status FROM playback_acknowledgements ORDER BY rowid"
             )
         ]
-    assert statuses == ["flushed", "flushed"]
+    assert statuses == ["flushed"]
     assert all(item.source is not SourceKind.MODEL for item in await store.replay("s1"))
     telemetry = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
     correlated = [item for item in telemetry if item["operation"] == operation.operation_id]

@@ -313,6 +313,85 @@ public  final class Reconnect extends
 
   }
 
+  public static final int MAX_INFLIGHT_ATTEMPTS_FIELD_NUMBER = 7;
+  private int maxInflightAttempts_;
+  /**
+   * <pre>
+   * The receiver's maximum number of admitted, nonterminal attempts. The
+   * bounded reconnect slice supports exactly one.
+   * </pre>
+   *
+   * <code>uint32 max_inflight_attempts = 7;</code>
+   * @return The maxInflightAttempts.
+   */
+  @java.lang.Override
+  public int getMaxInflightAttempts() {
+    return maxInflightAttempts_;
+  }
+  /**
+   * <pre>
+   * The receiver's maximum number of admitted, nonterminal attempts. The
+   * bounded reconnect slice supports exactly one.
+   * </pre>
+   *
+   * <code>uint32 max_inflight_attempts = 7;</code>
+   * @param value The maxInflightAttempts to set.
+   */
+  private void setMaxInflightAttempts(int value) {
+
+    maxInflightAttempts_ = value;
+  }
+  /**
+   * <pre>
+   * The receiver's maximum number of admitted, nonterminal attempts. The
+   * bounded reconnect slice supports exactly one.
+   * </pre>
+   *
+   * <code>uint32 max_inflight_attempts = 7;</code>
+   */
+  private void clearMaxInflightAttempts() {
+
+    maxInflightAttempts_ = 0;
+  }
+
+  public static final int MAX_SEGMENT_DURATION_MS_FIELD_NUMBER = 8;
+  private long maxSegmentDurationMs_;
+  /**
+   * <pre>
+   * The largest single attempt the receiver is willing to admit.
+   * </pre>
+   *
+   * <code>uint64 max_segment_duration_ms = 8;</code>
+   * @return The maxSegmentDurationMs.
+   */
+  @java.lang.Override
+  public long getMaxSegmentDurationMs() {
+    return maxSegmentDurationMs_;
+  }
+  /**
+   * <pre>
+   * The largest single attempt the receiver is willing to admit.
+   * </pre>
+   *
+   * <code>uint64 max_segment_duration_ms = 8;</code>
+   * @param value The maxSegmentDurationMs to set.
+   */
+  private void setMaxSegmentDurationMs(long value) {
+
+    maxSegmentDurationMs_ = value;
+  }
+  /**
+   * <pre>
+   * The largest single attempt the receiver is willing to admit.
+   * </pre>
+   *
+   * <code>uint64 max_segment_duration_ms = 8;</code>
+   */
+  private void clearMaxSegmentDurationMs() {
+
+    maxSegmentDurationMs_ = 0L;
+  }
+
   public static works.ravd.radcliffe.protocol.v2.Reconnect parseFrom(
       java.nio.ByteBuffer data)
       throws com.google.protobuf.InvalidProtocolBufferException {
@@ -715,6 +794,89 @@ public  final class Reconnect extends
       return this;
     }
 
+    /**
+     * <pre>
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * </pre>
+     *
+     * <code>uint32 max_inflight_attempts = 7;</code>
+     * @return The maxInflightAttempts.
+     */
+    @java.lang.Override
+    public int getMaxInflightAttempts() {
+      return instance.getMaxInflightAttempts();
+    }
+    /**
+     * <pre>
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * </pre>
+     *
+     * <code>uint32 max_inflight_attempts = 7;</code>
+     * @param value The maxInflightAttempts to set.
+     * @return This builder for chaining.
+     */
+    public Builder setMaxInflightAttempts(int value) {
+      copyOnWrite();
+      instance.setMaxInflightAttempts(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * The receiver's maximum number of admitted, nonterminal attempts. The
+     * bounded reconnect slice supports exactly one.
+     * </pre>
+     *
+     * <code>uint32 max_inflight_attempts = 7;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearMaxInflightAttempts() {
+      copyOnWrite();
+      instance.clearMaxInflightAttempts();
+      return this;
+    }
+
+    /**
+     * <pre>
+     * The largest single attempt the receiver is willing to admit.
+     * </pre>
+     *
+     * <code>uint64 max_segment_duration_ms = 8;</code>
+     * @return The maxSegmentDurationMs.
+     */
+    @java.lang.Override
+    public long getMaxSegmentDurationMs() {
+      return instance.getMaxSegmentDurationMs();
+    }
+    /**
+     * <pre>
+     * The largest single attempt the receiver is willing to admit.
+     * </pre>
+     *
+     * <code>uint64 max_segment_duration_ms = 8;</code>
+     * @param value The maxSegmentDurationMs to set.
+     * @return This builder for chaining.
+     */
+    public Builder setMaxSegmentDurationMs(long value) {
+      copyOnWrite();
+      instance.setMaxSegmentDurationMs(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * The largest single attempt the receiver is willing to admit.
+     * </pre>
+     *
+     * <code>uint64 max_segment_duration_ms = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearMaxSegmentDurationMs() {
+      copyOnWrite();
+      instance.clearMaxSegmentDurationMs();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:radcliffe.v2.Reconnect)
   }
   @java.lang.Override
@@ -738,10 +900,12 @@ public  final class Reconnect extends
             "latestPlayback_",
             works.ravd.radcliffe.protocol.v2.PlaybackAcknowledgement.class,
             "idempotencyKey_",
+            "maxInflightAttempts_",
+            "maxSegmentDurationMs_",
           };
           java.lang.String info =
-              "\u0000\u0006\u0000\u0000\u0001\u0006\u0006\u0000\u0001\u0000\u0001\u0208\u0002\u0208" +
-              "\u0003\u0003\u0004\u0003\u0005\u001b\u0006\u0208";
+              "\u0000\b\u0000\u0000\u0001\b\b\u0000\u0001\u0000\u0001\u0208\u0002\u0208\u0003\u0003" +
+              "\u0004\u0003\u0005\u001b\u0006\u0208\u0007\u000b\b\u0003";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

@@ -759,20 +759,36 @@ class JobEvent(_message.Message):
     def __init__(self, schema_version: _Optional[int] = ..., event_id: _Optional[str] = ..., job: _Optional[_Union[JobRef, _Mapping]] = ..., kind: _Optional[_Union[JobEventKind, str]] = ..., notification_policy: _Optional[_Union[JobNotificationPolicy, str]] = ..., priority: _Optional[int] = ..., detail_code: _Optional[str] = ..., entity_ids: _Optional[_Iterable[str]] = ..., artifact_ids: _Optional[_Iterable[str]] = ..., occurred_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., delivery_sequence: _Optional[int] = ...) -> None: ...
 
 class Reconnect(_message.Message):
-    __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key")
+    __slots__ = ("request_id", "session_id", "generation", "last_acknowledged_sequence", "latest_playback", "idempotency_key", "max_inflight_attempts", "max_segment_duration_ms")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     LAST_ACKNOWLEDGED_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     LATEST_PLAYBACK_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    MAX_INFLIGHT_ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
+    MAX_SEGMENT_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     session_id: str
     generation: int
     last_acknowledged_sequence: int
     latest_playback: _containers.RepeatedCompositeFieldContainer[PlaybackAcknowledgement]
     idempotency_key: str
-    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., last_acknowledged_sequence: _Optional[int] = ..., latest_playback: _Optional[_Iterable[_Union[PlaybackAcknowledgement, _Mapping]]] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
+    max_inflight_attempts: int
+    max_segment_duration_ms: int
+    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., last_acknowledged_sequence: _Optional[int] = ..., latest_playback: _Optional[_Iterable[_Union[PlaybackAcknowledgement, _Mapping]]] = ..., idempotency_key: _Optional[str] = ..., max_inflight_attempts: _Optional[int] = ..., max_segment_duration_ms: _Optional[int] = ...) -> None: ...
+
+class PlaybackReconciled(_message.Message):
+    __slots__ = ("request_id", "session_id", "generation", "replay_pending")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    REPLAY_PENDING_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    session_id: str
+    generation: int
+    replay_pending: bool
+    def __init__(self, request_id: _Optional[str] = ..., session_id: _Optional[str] = ..., generation: _Optional[int] = ..., replay_pending: _Optional[bool] = ...) -> None: ...
 
 class ControlCommand(_message.Message):
     __slots__ = ("command_id", "kind", "operation", "idempotency_key")
@@ -833,7 +849,7 @@ class ClientEvent(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., session_start: _Optional[_Union[SessionStart, _Mapping]] = ..., reconnect: _Optional[_Union[Reconnect, _Mapping]] = ..., playback_acknowledgement: _Optional[_Union[PlaybackAcknowledgement, _Mapping]] = ..., control_command: _Optional[_Union[ControlCommand, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., agent_control_confirmation: _Optional[_Union[AgentControlConfirmation, _Mapping]] = ..., agent_control_cancellation: _Optional[_Union[AgentControlCancellation, _Mapping]] = ..., job_command: _Optional[_Union[JobCommand, _Mapping]] = ...) -> None: ...
 
 class ServerEvent(_message.Message):
-    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error", "playback_segment", "agent_control_request", "agent_control_result", "job_event")
+    __slots__ = ("protocol_version", "session_ready", "state_changed", "message", "tool_progress", "tool_result", "error", "playback_segment", "agent_control_request", "agent_control_result", "job_event", "playback_reconciled")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     SESSION_READY_FIELD_NUMBER: _ClassVar[int]
     STATE_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -845,6 +861,7 @@ class ServerEvent(_message.Message):
     AGENT_CONTROL_REQUEST_FIELD_NUMBER: _ClassVar[int]
     AGENT_CONTROL_RESULT_FIELD_NUMBER: _ClassVar[int]
     JOB_EVENT_FIELD_NUMBER: _ClassVar[int]
+    PLAYBACK_RECONCILED_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     session_ready: SessionReady
     state_changed: StateChanged
@@ -856,4 +873,5 @@ class ServerEvent(_message.Message):
     agent_control_request: AgentControlActionRequest
     agent_control_result: AgentControlActionResult
     job_event: JobEvent
-    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ..., playback_segment: _Optional[_Union[PlaybackSegment, _Mapping]] = ..., agent_control_request: _Optional[_Union[AgentControlActionRequest, _Mapping]] = ..., agent_control_result: _Optional[_Union[AgentControlActionResult, _Mapping]] = ..., job_event: _Optional[_Union[JobEvent, _Mapping]] = ...) -> None: ...
+    playback_reconciled: PlaybackReconciled
+    def __init__(self, protocol_version: _Optional[int] = ..., session_ready: _Optional[_Union[SessionReady, _Mapping]] = ..., state_changed: _Optional[_Union[StateChanged, _Mapping]] = ..., message: _Optional[_Union[MessageEnvelope, _Mapping]] = ..., tool_progress: _Optional[_Union[ToolProgress, _Mapping]] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., error: _Optional[_Union[ProtocolError, _Mapping]] = ..., playback_segment: _Optional[_Union[PlaybackSegment, _Mapping]] = ..., agent_control_request: _Optional[_Union[AgentControlActionRequest, _Mapping]] = ..., agent_control_result: _Optional[_Union[AgentControlActionResult, _Mapping]] = ..., job_event: _Optional[_Union[JobEvent, _Mapping]] = ..., playback_reconciled: _Optional[_Union[PlaybackReconciled, _Mapping]] = ...) -> None: ...

@@ -21,3 +21,9 @@ Implement one serialized playback actor per session generation. It owns canonica
 ## Acceptance Criteria
 
 At all observable points, outstanding admitted audio satisfies the protocol bound and the implementation exposes a content-free gauge proving it. A fast model or synthesizer cannot create an unbounded LiveKit/device backlog. A delayed start does not time out merely because prior admitted audio is still playing; missing progress follows the specified failure transition. Cancellation prevents any further old-generation admission and safely reconciles terminal residue. Restart and reconnect tests restore or explicitly flush outstanding attempts without duplicate heard-boundary advancement. Unit tests and a trace-refinement test show worker transitions correspond to the machine-checked model.
+
+## Notes
+
+**2026-07-29T01:07:50Z**
+
+First sender slice implemented: model/source/job speech share a one-attempt admission window, model speech waits for Android terminal evidence, reconnect supersedes only the uncertain transport attempt and retries the stable segment before later speech. Durable restart recovery remains open.

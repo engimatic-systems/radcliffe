@@ -447,6 +447,20 @@ message Reconnect {
   uint64 last_acknowledged_sequence = 4;
   repeated PlaybackAcknowledgement latest_playback = 5;
   string idempotency_key = 6;
+  // The receiver's maximum number of admitted, nonterminal attempts. The
+  // bounded reconnect slice supports exactly one.
+  uint32 max_inflight_attempts = 7;
+  // The largest single attempt the receiver is willing to admit.
+  uint64 max_segment_duration_ms = 8;
+}
+
+message PlaybackReconciled {
+  string request_id = 1;
+  string session_id = 2;
+  uint64 generation = 3;
+  // True when the sender retained an unfinished segment and will issue a new
+  // playback attempt before later canonical speech.
+  bool replay_pending = 4;
 }
 
 message ControlCommand {
@@ -498,5 +512,6 @@ message ServerEvent {
     AgentControlActionRequest agent_control_request = 9;
     AgentControlActionResult agent_control_result = 10;
     JobEvent job_event = 11;
+    PlaybackReconciled playback_reconciled = 12;
   }
 }

@@ -21,3 +21,9 @@ Extend Protocol v2 only with fields and messages justified by the approved forma
 ## Acceptance Criteria
 
 The protobuf schema and generated Kotlin/Python bindings represent every modeled transition without overloaded sentinel values. Decode and validation tests reject malformed bounds, identity mismatches, backwards counters, impossible terminal transitions, and unsupported negotiation. Duplicate messages are idempotent and stale generations are representable as explicit non-mutating outcomes. Compatibility tests cover old-client/new-worker and new-client/old-worker behavior, and the protocol documentation maps every field to its authority and invariant.
+
+## Notes
+
+**2026-07-29T01:07:50Z**
+
+First additive wire slice implemented: Reconnect now carries max_inflight_attempts and max_segment_duration_ms; PlaybackReconciled supplies an explicit reconnect barrier. Full formal-model capability negotiation/restart compatibility remains open.
